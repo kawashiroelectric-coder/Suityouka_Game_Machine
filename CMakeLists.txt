@@ -1,0 +1,152 @@
+# ============================================
+# Raspberry Pi Pico 2W ゲーム機プロジェクト
+# ============================================
+
+cmake_minimum_required(VERSION 3.13)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# == DO NOT EDIT THE FOLLOWING LINES for the Raspberry Pi Pico VS Code Extension to work ==
+if(WIN32)
+    set(USERHOME $ENV{USERPROFILE})
+else()
+    set(USERHOME $ENV{HOME})
+endif()
+set(sdkVersion 2.2.0)
+set(toolchainVersion 14_2_Rel1)
+set(picotoolVersion 2.2.0-a4)
+set(picoVscode ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
+if (EXISTS ${picoVscode})
+    include(${picoVscode})
+endif()
+# ====================================================================================
+
+set(PICO_BOARD pico2_w CACHE STRING "Board type")
+
+# Pull in Raspberry Pi Pico SDK (must be before project)
+include(pico_sdk_import.cmake)
+
+project(Suityouka_Game_Machine C CXX ASM)
+
+# Initialise the Raspberry Pi Pico SDK
+pico_sdk_init()
+
+# ============================================
+# ソースファイル
+# ============================================
+add_executable(Suityouka_Game_Machine 
+    # メインループ
+    game_machine_main.cpp
+    
+    # ボタン入力管理
+    button_input.cpp
+    
+    # 音声出力管理
+    audio_output.cpp
+    
+    # ゲームローダー（SDカード読み込み）
+    game_loader.cpp
+    
+    # LCD表示制御
+    lib/ST7789/st7789_lcd.cpp
+    
+    # ハードウェア設定
+    hw_config.c
+)
+
+# プロジェクト情報
+pico_set_program_name(Suityouka_Game_Machine "Suityouka_Game_Machine")
+pico_set_program_version(Suityouka_Game_Machine "0.1")
+
+# PIOヘッダー生成（blink.pioが存在する場合）
+if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/blink.pio)
+    pico_generate_pio_header(Suityouka_Game_Machine ${CMAKE_CURRENT_LIST_DIR}/blink.pio)
+endif()
+
+# ============================================
+# 標準入出力設定
+# ============================================
+# UART: 無効
+# USB: 有効（シリアル通信用）
+pico_enable_stdio_uart(Suityouka_Game_Machine 0)
+pico_enable_stdio_usb(Suityouka_Game_Machine 1)
+
+# ============================================
+# インクルードディレクトリ
+# ============================================
+target_include_directories(Suityouka_Game_Machine PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}                    # プロジェクトルート（config.hpp等）
+    ${CMAKE_CURRENT_LIST_DIR}/lib/src             # Cライブラリのヘッダー
+    ${CMAKE_CURRENT_LIST_DIR}/lib/src/include     # FatFS関連ヘッダー
+    ${CMAKE_CURRENT_LIST_DIR}/lib/src/ff15/source # FatFS本体
+    ${CMAKE_CURRENT_LIST_DIR}/lib/ST7789         # ST7789 LCD ドライバヘッダー
+    # Lua headers will be provided by FetchContent-built library
+)
+
+# ============================================
+# Lua runtime via FetchContent
+# ============================================
+include(FetchContent)
+FetchContent_Declare(
+    lua
+    GIT_REPOSITORY https://github.com/lua/lua.git
+    GIT_TAG v5.4.6
+)
+FetchContent_MakeAvailable(lua)
+
+# If luaconf.h exists in the fetched lua source, enable 32-bit mode for embedded build
+if (EXISTS ${lua_SOURCE_DIR}/luaconf.h)
+    file(READ ${lua_SOURCE_DIR}/luaconf.h LUACONF_CONTENT)
+    string(REGEX REPLACE "#define[ \t]+LUA_32BITS[ \t]+0" "#define LUA_32BITS 1" LUACONF_CONTENT "${LUACONF_CONTENT}")
+    file(WRITE ${lua_SOURCE_DIR}/luaconf.h "${LUACONF_CONTENT}")
+endif()
+
+# Build a static Lua library from upstream sources
+file(GLOB LUA_SRC "${lua_SOURCE_DIR}/*.c")
+list(REMOVE_ITEM LUA_SRC
+    "${lua_SOURCE_DIR}/lua.c"
+    "${lua_SOURCE_DIR}/onelua.c"
+    "${lua_SOURCE_DIR}/ltests.c"
+)
+if (LUA_SRC)
+    add_library(lua_static STATIC ${LUA_SRC})
+    target_include_directories(lua_static PUBLIC ${lua_SOURCE_DIR})
+    target_compile_definitions(lua_static PUBLIC LUA_32BITS)
+else()
+    message(FATAL_ERROR "Lua sources not found in ${lua_SOURCE_DIR}; FetchContent may have failed.")
+endif()
+target_include_directories(lua_static PUBLIC ${lua_SOURCE_DIR}/src)
+
+
+# ============================================
+# サブディレクトリ（SDカードライブラリ）
+# ============================================
+add_subdirectory(lib/src)
+
+# ============================================
+# リンクライブラリ
+# ============================================
+target_link_libraries(Suityouka_Game_Machine 
+    # Pico SDK基本ライブラリ
+    pico_stdlib 
+    
+    # ハードウェア抽象化レイヤー
+    hardware_spi      # SPI通信（LCD、SDカード用）
+    hardware_i2c      # I2C通信（ボタン入力用）
+    hardware_dma      # DMA転送（LCD、音声出力用）
+    hardware_pio      # PIO（必要に応じて）
+    hardware_gpio     # GPIO制御
+    hardware_adc      # ADC（バッテリーモニター用）
+    hardware_pwm      # PWM（音声出力用）
+
+    # SDカード/FatFSライブラリ
+    no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
+    lua_static
+)
+
+# ============================================
+# 出力ファイル生成（.uf2, .hex, .bin等）
+# ============================================
+pico_add_extra_outputs(Suityouka_Game_Machine)
