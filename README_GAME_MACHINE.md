@@ -96,3 +96,13 @@ make
 ## ライセンス
 
 プロジェクト固有のライセンスに従います。
+
+ビルド時用のコマンド
+# buildフォルダ内のキャッシュのみ削除
+Remove-Item -Path "build/CMakeCache.txt" -Force
+Remove-Item -Path "build/CMakeCache-*.txt" -Force
+Remove-Item -Path "build/CMakeFiles" -Recurse -Force
+
+# その後ビルド
+cd build
+& "C:\Users\adsad\.pico-sdk\cmake\v3.31.5\bin\cmake.exe" --regenerate-during-build .
