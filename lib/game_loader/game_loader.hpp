@@ -7,7 +7,6 @@
 #define GAME_LOADER_HPP
 
 #include "pico/stdlib.h"
-#include "ff.h"
 #include "st7789_lcd.hpp"
 #include <cstdint>
 #include <cstring>

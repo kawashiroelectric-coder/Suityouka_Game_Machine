@@ -47,13 +47,11 @@ add_executable(Suityouka_Game_Machine
     lib/audio_output/audio_output.cpp
     
     # ゲームローダー（SDカード読み込み）
-    lib/game_loader/game_loader.cpp
+    #lib/game_loader/game_loader.cpp
     
     # LCD表示制御
     lib/ST7789/st7789_lcd.cpp
-    
-    # ハードウェア設定
-    hw_config.c
+
 )
 
 # プロジェクト情報
@@ -80,7 +78,7 @@ target_include_directories(Suityouka_Game_Machine PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}                    # プロジェクトルート（config.hpp等）
     ${CMAKE_CURRENT_LIST_DIR}/lib/button_input   # ボタン入力ライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/audio_output   # 音声出力ライブラリのヘッダー
-    ${CMAKE_CURRENT_LIST_DIR}/lib/game_loader    # ゲームローダーライブラリのヘッダー
+    #${CMAKE_CURRENT_LIST_DIR}/lib/game_loader    # ゲームローダーライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/ST7789         # ST7789 LCD ドライバヘッダー
     # SDカード/FatFS のヘッダーは pico_sd_card の INTERFACE include で伝播される
     # Lua headers will be provided by FetchContent-built library
@@ -124,7 +122,7 @@ target_include_directories(lua_static PUBLIC ${lua_SOURCE_DIR}/src)
 # ============================================
 # サブディレクトリ（SDカードライブラリ）
 # ============================================
-add_subdirectory(lib/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico)
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lib/pico-jxglib)
 
 # ============================================
 # リンクライブラリ
@@ -143,9 +141,10 @@ target_link_libraries(Suityouka_Game_Machine
     hardware_pwm      # PWM（音声出力用）
 
     # SDカード/FatFSライブラリ
-    pico_sd_card    # no-OS-FatFSが提供するターゲット
+    jxglib_Common
     lua_static
 )
+
 
 # ============================================
 # 出力ファイル生成（.uf2, .hex, .bin等）

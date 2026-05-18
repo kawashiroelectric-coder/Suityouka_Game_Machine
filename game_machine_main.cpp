@@ -15,10 +15,7 @@
 #include "config.hpp"
 #include "button_input.hpp"
 #include "audio_output.hpp"
-#include "game_loader.hpp"
-#include "ff.h"
-#include "sd_card.h"
-#include "hw_config.h"
+//#include "game_loader.hpp"
 
 #include <string>
 #include <cstring>
@@ -42,7 +39,7 @@ static uint16_t framebuffer[GameConfig::SCREEN_WIDTH * GameConfig::SCREEN_HEIGHT
 static ST7789_LCD* lcd = nullptr;
 static ButtonInput* buttons = nullptr;
 static AudioOutput* audio = nullptr;
-static GameLoader* loader = nullptr;
+//static GameLoader* loader = nullptr;
 static int dma_channel = -1;
 static uint8_t dma_buffer[16384];
 
@@ -105,80 +102,6 @@ void waitForAnyButton() {
 }
 
 
-// SDカードマウントパス（FatFS）
-static const char* getSdMountPath() {
-    return (GameConfig::SD_ROOT[0] != '\0') ? GameConfig::SD_ROOT : "0:";
-}
-
-// SDカード挿入検出（no-OS-FatFS の GPIO カード検出）
-static bool isSdCardInserted() {
-    sd_card_t* sd = sd_get_by_num(0);
-    if (!sd) return false;
-    return sd_card_detect(sd);
-}
-
-// SDカード状態とルート直下のフォルダ名を液晶に表示
-static void updateSdCardDisplay() {
-    if (!lcd) return;
-
-    clearScreen(Color::BLACK);
-
-    if (!isSdCardInserted()) {
-        drawTextBg(10, 100, "SD: Not inserted", Color::RED, Color::BLACK);
-        printf("SD card: not inserted\n");
-        return;
-    }
-
-    drawTextBg(10, 10, "SD: Inserted", Color::GREEN, Color::BLACK);
-
-    if (!loader) {
-        drawTextBg(10, 40, "Loader not ready", Color::RED, Color::BLACK);
-        return;
-    }
-
-    if (!loader->isMounted() && !loader->init()) {
-        drawTextBg(10, 40, "Mount failed", Color::RED, Color::BLACK);
-        printf("SD card: mount failed\n");
-        return;
-    }
-
-    DIR dir;
-    FILINFO fno;
-    const char* root = getSdMountPath();
-    FRESULT fr = f_opendir(&dir, root);
-    if (fr != FR_OK) {
-        char msg[48];
-        snprintf(msg, sizeof(msg), "Open root err: %d", fr);
-        drawTextBg(10, 40, msg, Color::RED, Color::BLACK);
-        printf("SD card: f_opendir(%s) failed (%d)\n", root, fr);
-        return;
-    }
-
-    drawTextBg(10, 30, "Root folders:", Color::CYAN, Color::BLACK);
-
-    int y = 50;
-    int count = 0;
-    constexpr int kMaxFolderLines = 8;
-
-    while (count < kMaxFolderLines) {
-        fr = f_readdir(&dir, &fno);
-        if (fr != FR_OK || fno.fname[0] == 0) break;
-        if (strcmp(fno.fname, ".") == 0 || strcmp(fno.fname, "..") == 0) continue;
-        if (!(fno.fattrib & AM_DIR)) continue;
-
-        drawText(10, y, fno.fname, Color::WHITE);
-        printf("SD root folder: %s\n", fno.fname);
-        y += 18;
-        count++;
-    }
-
-    f_closedir(&dir);
-
-    if (count == 0) {
-        drawTextBg(10, 50, "(no folders)", Color::YELLOW, Color::BLACK);
-    }
-}
-
 // DMA初期化
 void initDMA(ST7789_LCD& lcd_obj) {
     dma_channel = dma_claim_unused_channel(true);
@@ -235,11 +158,14 @@ int main() {
     gpio_put(SDConfig::PIN_SD_POWER, 1);
     sleep_ms(100);
 
+
+    /*
     // SDドライバ初期化（カード検出GPIO・SPI）
     printf("SDドライバ初期化中...\n");
-    if (!sd_init_driver()) {
+    if (SD_init()) {
         printf("SDドライバ初期化失敗\n");
     }
+    */
 
     // ボタン入力初期化
     printf("ボタン入力初期化中...\n");
@@ -261,12 +187,14 @@ int main() {
                            AudioConfig::PIN_AUDIO_SD, AudioConfig::PIN_ABD);
     audio->init();
     
+    /*
     // ゲームローダー初期化
     printf("ゲームローダー初期化中...\n");
     loader = new GameLoader();
     if (!loader->init()) {
         printf("ゲームローダー初期化失敗（SDカード未挿入の可能性）\n");
     }
+    */
     
     // 起動画面
     // Display embedded GameLogo centered
@@ -280,15 +208,9 @@ int main() {
     */
     printf("=== 初期化完了 ===\n");
 
-    // 起動時: SD挿入状態とルートフォルダを液晶表示
-    updateSdCardDisplay();
-    sleep_ms(2000);
 
     // メインループ
     while (true) {
-        // SD挿入確認 → 挿入時はルート直下フォルダ名を液晶表示
-        updateSdCardDisplay();
-        sleep_ms(1500);
     /*
     int logo_x = 0;
     int logo_y = 0;
