@@ -37,9 +37,14 @@ static sd_spi_if_t spi_if = {
 };
 
 /* Configuration of the SD Card socket object */
-static sd_card_t sd_card = {   
+static sd_card_t sd_card = {
     .type = SD_IF_SPI,
-    .spi_if_p = &spi_if  // Pointer to the SPI interface driving this card
+    .spi_if_p = &spi_if,  // Pointer to the SPI interface driving this card
+    .use_card_detect = true,
+    .card_detect_gpio = 0,       // SDConfig::PIN_INSERT
+    .card_detected_true = 0,     // 挿入時に LOW（ソケット仕様に合わせて要調整）
+    .card_detect_use_pull = true,
+    .card_detect_pull_hi = true
 };
 
 /* ********************************************************************** */

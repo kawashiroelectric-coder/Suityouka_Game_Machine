@@ -103,7 +103,7 @@ namespace BatteryConfig {
 // ゲーム機設定
 // ============================================
 namespace GameConfig {
-    constexpr const char* SD_ROOT = "0:";           // SDカードのルートパス
+    constexpr const char* SD_ROOT = "";           // SDカードのルートパス
     constexpr const char* GAMES_DIR = "/games";      // ゲームプログラムのディレクトリ
     constexpr const char* IMAGES_DIR = "/images";   // 画像ファイルのディレクトリ
     constexpr const char* AUDIO_DIR = "/audio";     // 音声ファイルのディレクトリ

@@ -21,6 +21,7 @@
 #include "hw_config.h"
 
 #include <string>
+#include <cstring>
 
 extern "C" {
 #include "lua.h"
@@ -64,166 +65,117 @@ void drawText(int x, int y, const char* text, uint16_t color) {
     lcd->drawText(x, y, text);
 }
 
-// ゲーム選択画面
-int showGameMenu() {
-    if (!loader || !lcd) return -1;
-    
-    clearScreen(Color::BLACK);
-    
-    // ゲーム一覧取得
-    const int MAX_GAMES = 10;
-    GameInfo games[MAX_GAMES];
-    int game_count = loader->getGameList(games, MAX_GAMES);
-    
-    if (game_count == 0) {
-        drawText(10, 100, "No games found", Color::WHITE);
-        drawText(10, 120, "Insert SD card", Color::YELLOW);
-        return -1;
-    }
-    
-    int selected = 0;
-    bool menu_active = true;
-    
-    while (menu_active) {
-        clearScreen(Color::BLACK);
-        
-        // タイトル
-        drawText(10, 10, "Game Select", Color::CYAN);
-        
-        // ゲーム一覧表示
-        for (int i = 0; i < game_count; i++) {
-            uint16_t text_color = (i == selected) ? Color::YELLOW : Color::WHITE;
-            char line[80];
-            snprintf(line, sizeof(line), "%d. %s", i + 1, games[i].name);
-            drawText(10, 40 + i * 20, line, text_color);
-        }
-        
-        // 操作説明
-        drawText(10, 280, "UP/DOWN: Select", Color::GRAY);
-        drawText(10, 300, "OP_RIGHT: Start", Color::GRAY);
-        
-        // LCD更新
-        lcd->drawRawImageDMA(0, 0, GameConfig::SCREEN_WIDTH, GameConfig::SCREEN_HEIGHT,
-                           framebuffer, dma_channel, dma_buffer, sizeof(dma_buffer));
-        
-        // ボタン入力処理
-        if (buttons) {
-            buttons->update();
-            
-            if (buttons->wasPressed(Button::UP)) {
-                selected = (selected > 0) ? selected - 1 : game_count - 1;
-            }
-            if (buttons->wasPressed(Button::DOWN)) {
-                selected = (selected < game_count - 1) ? selected + 1 : 0;
-            }
-            if (buttons->wasPressed(Button::OP_RIGHT)) {
-                menu_active = false;
-            }
-        }
-        
-        sleep_ms(100);
-    }
-    
-    return selected;
+void drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bgColor) {
+    if (!lcd) return;
+    lcd->drawTextBg(x, y, text, color, bgColor);
 }
 
-// ゲーム実行（簡易版）
-void runGame(const GameInfo& game) {
-    if (!loader || !lcd) return;
-    
-    clearScreen(Color::BLACK);
-    drawText(10, 100, "Loading game...", Color::WHITE);
-    lcd->drawRawImageDMA(0, 0, GameConfig::SCREEN_WIDTH, GameConfig::SCREEN_HEIGHT,
-                       framebuffer, dma_channel, dma_buffer, sizeof(dma_buffer));
-    
-    // ゲームアイコン読み込み
-    ImageData icon = loader->loadImage(game.image_path);
-    if (icon.valid) {
-        // アイコン表示（簡易実装：全画面表示）
-        clearScreen(Color::BLACK);
-        lcd->drawRawImageDMA(0, 0, icon.width, icon.height,
-                           icon.pixels, dma_channel, dma_buffer, sizeof(dma_buffer));
-        sleep_ms(2000);
+bool isAnyButtonPressed() {
+    if (!buttons) return false;
+    for (int i = 0; i < 8; i++) {
+        if (buttons->isPressed(static_cast<Button>(i))) {
+            return true;
+        }
     }
-    
-    // プログラム読み込み
-    uint8_t* program_data = nullptr;
-    size_t program_size = 0;
-    if (loader->loadProgram(game.program_path, &program_data, &program_size)) {
-        // LuaスクリプトならLuaで実行する
-        const char* prog_path = game.program_path ? game.program_path : "";
-        size_t len = strlen(prog_path);
-        bool is_lua = (len > 4 && strcmp(prog_path + len - 4, ".lua") == 0);
+    return false;
+}
 
-        if (is_lua) {
-            // Lua実行ヘルパ
-            lua_State* L = luaL_newstate();
-            if (L) {
-                luaL_openlibs(L);
-                int load_status = luaL_loadbuffer(L, (const char*)program_data, program_size, prog_path);
-                if (load_status == 0) {
-                    int pcall_status = lua_pcall(L, 0, LUA_MULTRET, 0);
-                    if (pcall_status != 0) {
-                        const char* err = lua_tostring(L, -1);
-                        clearScreen(Color::BLACK);
-                        drawText(10, 100, "Lua runtime error:", Color::RED);
-                        if (err) drawText(10, 120, err, Color::YELLOW);
-                        lcd->drawRawImageDMA(0, 0, GameConfig::SCREEN_WIDTH, GameConfig::SCREEN_HEIGHT,
-                                           framebuffer, dma_channel, dma_buffer, sizeof(dma_buffer));
-                    }
-                } else {
-                    const char* err = lua_tostring(L, -1);
-                    clearScreen(Color::BLACK);
-                    drawText(10, 100, "Lua load error:", Color::RED);
-                    if (err) drawText(10, 120, err, Color::YELLOW);
-                    lcd->drawRawImageDMA(0, 0, GameConfig::SCREEN_WIDTH, GameConfig::SCREEN_HEIGHT,
-                                       framebuffer, dma_channel, dma_buffer, sizeof(dma_buffer));
-                }
-                lua_close(L);
-            }
-            free(program_data);
-        } else {
-            // プログラム実行（簡易実装：バイナリデータを表示）
-            clearScreen(Color::BLACK);
-            char msg[64];
-            snprintf(msg, sizeof(msg), "Program: %zu bytes", program_size);
-            drawText(10, 100, msg, Color::GREEN);
-            drawText(10, 120, "Press OP_LEFT to exit", Color::YELLOW);
-            lcd->drawRawImageDMA(0, 0, GameConfig::SCREEN_WIDTH, GameConfig::SCREEN_HEIGHT,
-                               framebuffer, dma_channel, dma_buffer, sizeof(dma_buffer));
+void waitForButtonRelease() {
+    if (!buttons) return;
+    while (true) {
+        buttons->update();
+        if (!isAnyButtonPressed()) break;
+        sleep_ms(50);
+    }
+}
 
-            // ゲームループ（簡易版）
-            bool game_running = true;
-            while (game_running && buttons) {
-                buttons->update();
-
-                if (buttons->wasPressed(Button::OP_LEFT)) {
-                    game_running = false;
-                }
-
-                // ここで実際のゲームロジックを実行
-                // 現在は簡易実装のため、ボタン入力のみ処理
-
-                sleep_ms(16);  // 約60FPS
-            }
-
-            free(program_data);
+void waitForAnyButton() {
+    if (!buttons) {
+        sleep_ms(1000);
+        return;
+    }
+    while (true) {
+        buttons->update();
+        if (isAnyButtonPressed()) {
+            waitForButtonRelease();
+            break;
         }
-    } else {
-        clearScreen(Color::BLACK);
-        drawText(10, 100, "Failed to load", Color::RED);
-        drawText(10, 120, "Press any button", Color::YELLOW);
-        lcd->drawRawImageDMA(0, 0, GameConfig::SCREEN_WIDTH, GameConfig::SCREEN_HEIGHT,
-                           framebuffer, dma_channel, dma_buffer, sizeof(dma_buffer));
-        
-        // ボタン待ち
-        if (buttons) {
-            while (true) {
-                buttons->update();
-                if (buttons->getAllButtons() != 0xFF) break;  // 何かボタンが押された
-                sleep_ms(100);
-            }
-        }
+        sleep_ms(50);
+    }
+}
+
+
+// SDカードマウントパス（FatFS）
+static const char* getSdMountPath() {
+    return (GameConfig::SD_ROOT[0] != '\0') ? GameConfig::SD_ROOT : "0:";
+}
+
+// SDカード挿入検出（no-OS-FatFS の GPIO カード検出）
+static bool isSdCardInserted() {
+    sd_card_t* sd = sd_get_by_num(0);
+    if (!sd) return false;
+    return sd_card_detect(sd);
+}
+
+// SDカード状態とルート直下のフォルダ名を液晶に表示
+static void updateSdCardDisplay() {
+    if (!lcd) return;
+
+    clearScreen(Color::BLACK);
+
+    if (!isSdCardInserted()) {
+        drawTextBg(10, 100, "SD: Not inserted", Color::RED, Color::BLACK);
+        printf("SD card: not inserted\n");
+        return;
+    }
+
+    drawTextBg(10, 10, "SD: Inserted", Color::GREEN, Color::BLACK);
+
+    if (!loader) {
+        drawTextBg(10, 40, "Loader not ready", Color::RED, Color::BLACK);
+        return;
+    }
+
+    if (!loader->isMounted() && !loader->init()) {
+        drawTextBg(10, 40, "Mount failed", Color::RED, Color::BLACK);
+        printf("SD card: mount failed\n");
+        return;
+    }
+
+    DIR dir;
+    FILINFO fno;
+    const char* root = getSdMountPath();
+    FRESULT fr = f_opendir(&dir, root);
+    if (fr != FR_OK) {
+        char msg[48];
+        snprintf(msg, sizeof(msg), "Open root err: %d", fr);
+        drawTextBg(10, 40, msg, Color::RED, Color::BLACK);
+        printf("SD card: f_opendir(%s) failed (%d)\n", root, fr);
+        return;
+    }
+
+    drawTextBg(10, 30, "Root folders:", Color::CYAN, Color::BLACK);
+
+    int y = 50;
+    int count = 0;
+    constexpr int kMaxFolderLines = 8;
+
+    while (count < kMaxFolderLines) {
+        fr = f_readdir(&dir, &fno);
+        if (fr != FR_OK || fno.fname[0] == 0) break;
+        if (strcmp(fno.fname, ".") == 0 || strcmp(fno.fname, "..") == 0) continue;
+        if (!(fno.fattrib & AM_DIR)) continue;
+
+        drawText(10, y, fno.fname, Color::WHITE);
+        printf("SD root folder: %s\n", fno.fname);
+        y += 18;
+        count++;
+    }
+
+    f_closedir(&dir);
+
+    if (count == 0) {
+        drawTextBg(10, 50, "(no folders)", Color::YELLOW, Color::BLACK);
     }
 }
 
@@ -244,6 +196,8 @@ void initDMA(ST7789_LCD& lcd_obj) {
 }
 
 int main() {
+
+    
     stdio_init_all();
     
     printf("=== ゲーム機初期化開始 ===\n");
@@ -273,7 +227,20 @@ int main() {
     gpio_set_function(I2CConfig::SCL, GPIO_FUNC_I2C);
     gpio_pull_up(I2CConfig::SDA);
     gpio_pull_up(I2CConfig::SCL);
-    
+
+    // SDカード電源ON
+    printf("SDカード電源ON\n");
+    gpio_init(SDConfig::PIN_SD_POWER);
+    gpio_set_dir(SDConfig::PIN_SD_POWER, GPIO_OUT);
+    gpio_put(SDConfig::PIN_SD_POWER, 1);
+    sleep_ms(100);
+
+    // SDドライバ初期化（カード検出GPIO・SPI）
+    printf("SDドライバ初期化中...\n");
+    if (!sd_init_driver()) {
+        printf("SDドライバ初期化失敗\n");
+    }
+
     // ボタン入力初期化
     printf("ボタン入力初期化中...\n");
     buttons = new ButtonInput(I2CConfig::PORT, I2CConfig::PCA9539_ADDR);
@@ -312,10 +279,17 @@ int main() {
     sleep_ms(2000);
     */
     printf("=== 初期化完了 ===\n");
-    clearScreen(Color::WHITE);
+
+    // 起動時: SD挿入状態とルートフォルダを液晶表示
+    updateSdCardDisplay();
+    sleep_ms(2000);
+
     // メインループ
     while (true) {
-    
+        // SD挿入確認 → 挿入時はルート直下フォルダ名を液晶表示
+        updateSdCardDisplay();
+        sleep_ms(1500);
+    /*
     int logo_x = 0;
     int logo_y = 0;
     lcd->drawRawImageDMA(logo_x, logo_y, 320, 240,
@@ -330,6 +304,7 @@ int main() {
     lcd->drawRawImageDMA(logo_x, logo_y, 320, 240,
                        (uint16_t*)nitorih4_pixels, dma_channel, dma_buffer, sizeof(dma_buffer));
     sleep_ms(2000);
+    */
         /*
         // ゲーム選択
         int selected = showGameMenu();
@@ -341,23 +316,15 @@ int main() {
             if (selected < count) {
                 runGame(games[selected]);
             }
-        } else {
-            // SDカード未挿入またはエラー
+        } else if (!loader->isMounted()) {
+            // SDカード未挿入またはマウントエラー
             clearScreen(Color::BLACK);
-            drawText(10, 100, "SD Card Error", Color::RED);
-            drawText(10, 120, "Press any button", Color::YELLOW);
-            lcd->drawRawImageDMA(0, 0, GameConfig::SCREEN_WIDTH, GameConfig::SCREEN_HEIGHT,
-                               framebuffer, dma_channel, dma_buffer, sizeof(dma_buffer));
-            
-            if (buttons) {
-                while (true) {
-                    buttons->update();
-                    if (buttons->getAllButtons() != 0xFF) break;
-                    sleep_ms(100);
-                }
-            }
+            drawTextBg(10, 100, "SD Card Error", Color::RED, Color::BLACK);
+            drawTextBg(10, 120, "Press any button", Color::YELLOW, Color::BLACK);
+            waitForAnyButton();
         }
         */
+        
     }
     
     // クリーンアップ（通常は到達しない）
