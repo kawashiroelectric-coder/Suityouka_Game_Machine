@@ -40,11 +40,18 @@ add_executable(Suityouka_Game_Machine
     # メインループ
     game_machine_main.cpp
     
+    # SDカード (carlk3/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico)
+    lib/sd_card_hw/hw_config.c
+    lib/sd_card_hw/sd_debug.c
+    
     # ボタン入力管理
     lib/button_input/button_input.cpp
     
     # 音声出力管理
     lib/audio_output/audio_output.cpp
+
+    # SD上 Lua スクリプト実行
+    lib/lua_interpreter/lua_interpreter.cpp
     
     # ゲームローダー（SDカード読み込み）
     #lib/game_loader/game_loader.cpp
@@ -78,9 +85,10 @@ target_include_directories(Suityouka_Game_Machine PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}                    # プロジェクトルート（config.hpp等）
     ${CMAKE_CURRENT_LIST_DIR}/lib/button_input   # ボタン入力ライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/audio_output   # 音声出力ライブラリのヘッダー
+    ${CMAKE_CURRENT_LIST_DIR}/lib/lua_interpreter # Lua インタプリタ
     #${CMAKE_CURRENT_LIST_DIR}/lib/game_loader    # ゲームローダーライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/ST7789         # ST7789 LCD ドライバヘッダー
-    # SDカード/FatFS のヘッダーは pico_sd_card の INTERFACE include で伝播される
+    ${CMAKE_CURRENT_LIST_DIR}/lib/sd_card_hw     # SD ピン定義 (sd_pins.h)
     # Lua headers will be provided by FetchContent-built library
 )
 
@@ -120,13 +128,21 @@ target_include_directories(lua_static PUBLIC ${lua_SOURCE_DIR}/src)
 
 
 # ============================================
-# サブディレクトリ（SDカードライブラリ）
+# SDカード / FatFS (no-OS-FatFS-SD-SDIO-SPI-RPi-Pico)
 # ============================================
-add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lib/pico-jxglib)
+add_subdirectory(
+    ${CMAKE_CURRENT_LIST_DIR}/lib/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico/src
+    build_fatfs_sd
+)
 
 # ============================================
 # リンクライブラリ
 # ============================================
+target_compile_definitions(Suityouka_Game_Machine PRIVATE
+    USE_PRINTF
+    USE_DBG_PRINTF
+)
+
 target_link_libraries(Suityouka_Game_Machine 
     # Pico SDK基本ライブラリ
     pico_stdlib 
@@ -141,10 +157,9 @@ target_link_libraries(Suityouka_Game_Machine
     hardware_pwm      # PWM（音声出力用）
 
     # SDカード/FatFSライブラリ
-    jxglib_Common
+    no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
     lua_static
 )
-
 
 # ============================================
 # 出力ファイル生成（.uf2, .hex, .bin等）

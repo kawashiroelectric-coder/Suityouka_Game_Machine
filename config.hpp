@@ -44,7 +44,7 @@ namespace SDConfig {
     constexpr uint8_t PIN_MISO = 12;
     constexpr uint8_t PIN_CS = 13;
     constexpr uint8_t PIN_INSERT = 0;  // SDカード検出ピン
-    constexpr uint8_t PIN_SD_POWER = 15; //SDカードを電源制御するピン（HIGHで電源ON、LOWで電源OFF）
+    constexpr uint8_t PIN_SD_POWER = 15; // SD電源(Pch FET): LOW=ON, HIGH=OFF（回路図参照）
 }
 
 // ============================================
