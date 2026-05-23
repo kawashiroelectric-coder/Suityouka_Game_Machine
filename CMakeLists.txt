@@ -52,6 +52,9 @@ add_executable(Suityouka_Game_Machine
 
     # SD上 Lua スクリプト実行
     lib/lua_interpreter/lua_interpreter.cpp
+
+    # ゲーム描画 (RGB565 framebuffer)
+    lib/game_display/game_display.cpp
     
     # ゲームローダー（SDカード読み込み）
     #lib/game_loader/game_loader.cpp
@@ -85,7 +88,8 @@ target_include_directories(Suityouka_Game_Machine PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}                    # プロジェクトルート（config.hpp等）
     ${CMAKE_CURRENT_LIST_DIR}/lib/button_input   # ボタン入力ライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/audio_output   # 音声出力ライブラリのヘッダー
-    ${CMAKE_CURRENT_LIST_DIR}/lib/lua_interpreter # Lua インタプリタ
+    ${CMAKE_CURRENT_LIST_DIR}/lib/lua_interpreter  # Lua インタプリタ
+    ${CMAKE_CURRENT_LIST_DIR}/lib/game_display    # ゲーム描画
     #${CMAKE_CURRENT_LIST_DIR}/lib/game_loader    # ゲームローダーライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/ST7789         # ST7789 LCD ドライバヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/sd_card_hw     # SD ピン定義 (sd_pins.h)

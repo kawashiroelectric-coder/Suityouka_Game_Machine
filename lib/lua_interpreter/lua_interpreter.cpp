@@ -12,6 +12,7 @@
 
 #include "pico/stdlib.h"
 #include "st7789_lcd.hpp"
+#include "game_display.hpp"
 
 extern "C" {
 #include "lua.h"
@@ -25,15 +26,39 @@ namespace {
 
 LuaInterpreter* g_active_interpreter = nullptr;
 
+uint16_t parseColor(lua_State* L, int idx) {
+    int n = lua_gettop(L);
+    if (n >= idx + 2 && lua_isnumber(L, idx) && lua_isnumber(L, idx + 1) &&
+        lua_isnumber(L, idx + 2)) {
+        int r = (int)luaL_checkinteger(L, idx);
+        int g = (int)luaL_checkinteger(L, idx + 1);
+        int b = (int)luaL_checkinteger(L, idx + 2);
+        if (r < 0) r = 0;
+        if (r > 255) r = 255;
+        if (g < 0) g = 0;
+        if (g > 255) g = 255;
+        if (b < 0) b = 0;
+        if (b > 255) b = 255;
+        return GameDisplay::rgb((uint8_t)r, (uint8_t)g, (uint8_t)b);
+    }
+    return (uint16_t)luaL_checkinteger(L, idx);
+}
+
+GameDisplay* activeDisplay() {
+    if (!g_active_interpreter) return nullptr;
+    return g_active_interpreter->hostHooks().display;
+}
+
 int luaHostPrint(lua_State* L) {
     int n = lua_gettop(L);
     for (int i = 1; i <= n; i++) {
-        if (i > 1) putchar('\t');
+        if (i > 1) printf("\t");
         const char* s = luaL_tolstring(L, i, nullptr);
         if (s) printf("%s", s);
         lua_pop(L, 1);
     }
-    putchar('\n');
+    printf("\n");
+    fflush(stdout);
     return 0;
 }
 
@@ -47,12 +72,20 @@ int luaHostSleepMs(lua_State* L) {
 int luaHostLcdText(lua_State* L) {
     if (!g_active_interpreter) return 0;
     const LuaHostHooks& hooks = g_active_interpreter->hostHooks();
-    if (!hooks.draw_text_bg) return 0;
 
     lua_Integer x = luaL_checkinteger(L, 1);
     lua_Integer y = luaL_checkinteger(L, 2);
     const char* text = luaL_checkstring(L, 3);
-    hooks.draw_text_bg(hooks.user_data, (int)x, (int)y, text, Color::WHITE, Color::GRAY);
+    uint16_t fg = (lua_gettop(L) >= 4) ? parseColor(L, 4) : Color::WHITE;
+    uint16_t bg = (lua_gettop(L) >= 5) ? parseColor(L, 5) : Color::BLACK;
+
+    if (hooks.display) {
+        hooks.display->drawTextBg((int)x, (int)y, text, fg, bg);
+        return 0;
+    }
+    if (hooks.draw_text_bg) {
+        hooks.draw_text_bg(hooks.user_data, (int)x, (int)y, text, fg, bg);
+    }
     return 0;
 }
 
@@ -71,24 +104,127 @@ int luaHostButtonPressed(lua_State* L) {
     return 1;
 }
 
-void registerLuaHostApi(lua_State* L) {
+int luaHostJumpPressed(lua_State* L) {
+    (void)L;
+    if (!g_active_interpreter) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const LuaHostHooks& hooks = g_active_interpreter->hostHooks();
+    bool pressed = false;
+    if (hooks.is_button_pressed) {
+        static const int kJumpButtons[] = {1, 5, 0, 3, 7};
+        for (int btn : kJumpButtons) {
+            if (hooks.is_button_pressed(hooks.user_data, btn)) {
+                pressed = true;
+                break;
+            }
+        }
+    }
+    lua_pushboolean(L, pressed);
+    return 1;
+}
+
+int luaHostClear(lua_State* L) {
+    GameDisplay* disp = activeDisplay();
+    if (!disp) return 0;
+    disp->clear(parseColor(L, 1));
+    return 0;
+}
+
+int luaHostFillRect(lua_State* L) {
+    GameDisplay* disp = activeDisplay();
+    if (!disp) return 0;
+    int x = (int)luaL_checkinteger(L, 1);
+    int y = (int)luaL_checkinteger(L, 2);
+    int w = (int)luaL_checkinteger(L, 3);
+    int h = (int)luaL_checkinteger(L, 4);
+    uint16_t color = parseColor(L, 5);
+    disp->fillRect(x, y, w, h, color);
+    return 0;
+}
+
+int luaHostPresent(lua_State* L) {
+    (void)L;
+    GameDisplay* disp = activeDisplay();
+    if (disp) disp->present();
+    return 0;
+}
+
+int luaHostWidth(lua_State* L) {
+    GameDisplay* disp = activeDisplay();
+    lua_pushinteger(L, disp ? disp->width() : 0);
+    return 1;
+}
+
+int luaHostHeight(lua_State* L) {
+    GameDisplay* disp = activeDisplay();
+    lua_pushinteger(L, disp ? disp->height() : 0);
+    return 1;
+}
+
+int luaHostTimeMs(lua_State* L) {
+    (void)L;
+    lua_pushinteger(L, (lua_Integer)to_ms_since_boot(get_absolute_time()));
+    return 1;
+}
+
+int luaHostRgb(lua_State* L) {
+    int r = (int)luaL_checkinteger(L, 1);
+    int g = (int)luaL_checkinteger(L, 2);
+    int b = (int)luaL_checkinteger(L, 3);
+    lua_pushinteger(L, GameDisplay::rgb((uint8_t)r, (uint8_t)g, (uint8_t)b));
+    return 1;
+}
+
+}  // namespace
+
+void LuaInterpreter::registerLuaHostApi(lua_State* L) {
     lua_pushcfunction(L, luaHostPrint);
     lua_setglobal(L, "print");
     lua_pushcfunction(L, luaHostSleepMs);
     lua_setglobal(L, "sleep_ms");
+
     lua_newtable(L);
     lua_pushcfunction(L, luaHostLcdText);
     lua_setfield(L, -2, "text");
     lua_pushcfunction(L, luaHostButtonPressed);
     lua_setfield(L, -2, "pressed");
+    lua_pushcfunction(L, luaHostJumpPressed);
+    lua_setfield(L, -2, "jump_pressed");
+    lua_pushcfunction(L, luaHostClear);
+    lua_setfield(L, -2, "clear");
+    lua_pushcfunction(L, luaHostFillRect);
+    lua_setfield(L, -2, "fill_rect");
+    lua_pushcfunction(L, luaHostPresent);
+    lua_setfield(L, -2, "present");
+    lua_pushcfunction(L, luaHostWidth);
+    lua_setfield(L, -2, "width");
+    lua_pushcfunction(L, luaHostHeight);
+    lua_setfield(L, -2, "height");
+    lua_pushcfunction(L, luaHostTimeMs);
+    lua_setfield(L, -2, "time_ms");
+    lua_pushcfunction(L, luaHostRgb);
+    lua_setfield(L, -2, "rgb");
     lua_setglobal(L, "machine");
 }
 
-}  // namespace
-
 LuaInterpreter::LuaInterpreter()
-    : hooks_(), sd_mounted_(false), max_script_bytes_(kDefaultMaxScriptBytes) {
+    : hooks_(),
+      sd_mounted_(false),
+      max_script_bytes_(kDefaultMaxScriptBytes),
+      game_lua_(nullptr) {
     lcd_line_[0] = '\0';
+}
+
+LuaInterpreter::~LuaInterpreter() { closeGameState(); }
+
+void LuaInterpreter::closeGameState() {
+    if (game_lua_) {
+        g_active_interpreter = nullptr;
+        lua_close(game_lua_);
+        game_lua_ = nullptr;
+    }
 }
 
 void LuaInterpreter::setHostHooks(const LuaHostHooks& hooks) { hooks_ = hooks; }
@@ -103,16 +239,14 @@ bool LuaInterpreter::sdFileExists(const char* path) const {
     return !(fno.fattrib & AM_DIR);
 }
 
-void LuaInterpreter::showStatus(const char* line1, const char* line2, uint16_t color,
-                                uint16_t bg) {
+void LuaInterpreter::showStatus(const char* line1, const char* line2, uint16_t color, uint16_t bg) {
     if (hooks_.draw_text_bg) {
         if (line1) hooks_.draw_text_bg(hooks_.user_data, 10, 80, line1, color, bg);
         if (line2) hooks_.draw_text_bg(hooks_.user_data, 10, 90, line2, color, bg);
     }
 }
 
-bool LuaInterpreter::readSdFileToBuffer(const char* path, char** out_buf,
-                                        size_t* out_len) const {
+bool LuaInterpreter::readSdFileToBuffer(const char* path, char** out_buf, size_t* out_len) const {
     *out_buf = nullptr;
     *out_len = 0;
     if (!sd_mounted_) return false;
@@ -126,8 +260,8 @@ bool LuaInterpreter::readSdFileToBuffer(const char* path, char** out_buf,
 
     FSIZE_t fsize = f_size(&file);
     if (fsize == 0 || fsize > max_script_bytes_) {
-        printf("Lua: invalid size %s (%lu bytes, max %u)\n", path,
-               (unsigned long)fsize, (unsigned)max_script_bytes_);
+        printf("Lua: invalid size %s (%lu bytes, max %u)\n", path, (unsigned long)fsize,
+               (unsigned)max_script_bytes_);
         f_close(&file);
         return false;
     }
@@ -150,6 +284,23 @@ bool LuaInterpreter::readSdFileToBuffer(const char* path, char** out_buf,
     buf[fsize] = '\0';
     *out_buf = buf;
     *out_len = (size_t)fsize;
+    return true;
+}
+
+bool LuaInterpreter::loadScriptIntoState(lua_State* L, const char* path, const char* source,
+                                          size_t len) {
+    int load_stat = luaL_loadbuffer(L, source, len, path);
+    if (load_stat != LUA_OK) {
+        const char* err = lua_tostring(L, -1);
+        printf("Lua load error [%s]: %s\n", path, err ? err : "unknown");
+        return false;
+    }
+    int call_stat = lua_pcall(L, 0, LUA_MULTRET, 0);
+    if (call_stat != LUA_OK) {
+        const char* err = lua_tostring(L, -1);
+        printf("Lua runtime error [%s]: %s\n", path, err ? err : "unknown");
+        return false;
+    }
     return true;
 }
 
@@ -183,38 +334,115 @@ bool LuaInterpreter::runScriptFromSd(const char* path) {
     luaL_openlibs(L);
     registerLuaHostApi(L);
 
-    int load_stat = luaL_loadbuffer(L, source, len, path);
-    if (load_stat != LUA_OK) {
-        const char* err = lua_tostring(L, -1);
-        printf("Lua load error [%s]: %s\n", path, err ? err : "unknown");
+    bool ok = loadScriptIntoState(L, path, source, len);
+    if (!ok) {
         showStatus("Lua load err", nullptr, Color::RED, Color::GRAY);
-        g_active_interpreter = nullptr;
-        lua_close(L);
-        free(source);
-        return false;
+    } else {
+        printf("Lua: finished %s\n", path);
+        showStatus("Lua OK", nullptr, Color::GREEN, Color::GRAY);
     }
 
-    int call_stat = lua_pcall(L, 0, LUA_MULTRET, 0);
-    if (call_stat != LUA_OK) {
-        const char* err = lua_tostring(L, -1);
-        printf("Lua runtime error [%s]: %s\n", path, err ? err : "unknown");
-        if (err) {
-            snprintf(lcd_line_, sizeof(lcd_line_), "%.28s", err);
-            showStatus("Lua run err", lcd_line_, Color::RED, Color::GRAY);
-        } else {
-            showStatus("Lua run err", nullptr, Color::RED, Color::GRAY);
-        }
-        g_active_interpreter = nullptr;
-        lua_close(L);
-        free(source);
-        return false;
-    }
-
-    printf("Lua: finished %s\n", path);
-    showStatus("Lua OK", nullptr, Color::GREEN, Color::GRAY);
     g_active_interpreter = nullptr;
     lua_close(L);
     free(source);
+    return ok;
+}
+
+bool LuaInterpreter::runGameLoopFromSd(const char* path) {
+    if (!sd_mounted_) {
+        printf("Lua: SD not mounted\n");
+        return false;
+    }
+    if (!hooks_.display) {
+        printf("Lua: GameDisplay not set\n");
+        return false;
+    }
+
+    char* source = nullptr;
+    size_t len = 0;
+    if (!readSdFileToBuffer(path, &source, &len)) {
+        return false;
+    }
+
+    closeGameState();
+    game_lua_ = luaL_newstate();
+    if (!game_lua_) {
+        free(source);
+        return false;
+    }
+
+    printf("Lua game: %s (%u bytes)\n", path, (unsigned)len);
+    g_active_interpreter = this;
+    luaL_openlibs(game_lua_);
+    registerLuaHostApi(game_lua_);
+
+    if (!loadScriptIntoState(game_lua_, path, source, len)) {
+        showStatus("Game load err", nullptr, Color::RED, Color::BLACK);
+        closeGameState();
+        free(source);
+        return false;
+    }
+    free(source);
+
+    lua_getglobal(game_lua_, "game_init");
+    if (lua_isfunction(game_lua_, -1)) {
+        if (lua_pcall(game_lua_, 0, 0, 0) != LUA_OK) {
+            const char* err = lua_tostring(game_lua_, -1);
+            printf("game_init error: %s\n", err ? err : "?");
+            lua_pop(game_lua_, 1);
+            closeGameState();
+            return false;
+        }
+    } else {
+        lua_pop(game_lua_, 1);
+    }
+
+    uint32_t last_ms = to_ms_since_boot(get_absolute_time());
+    bool running = true;
+
+    while (running) {
+        uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+        lua_Integer dt = (lua_Integer)(now_ms - last_ms);
+        last_ms = now_ms;
+        if (dt < 0) dt = 0;
+        if (dt > 100) dt = 100;
+
+        lua_getglobal(game_lua_, "game_update");
+        if (!lua_isfunction(game_lua_, -1)) {
+            lua_pop(game_lua_, 1);
+            break;
+        }
+        lua_pushinteger(game_lua_, dt);
+        if (lua_pcall(game_lua_, 1, 1, 0) != LUA_OK) {
+            const char* err = lua_tostring(game_lua_, -1);
+            printf("game_update error: %s\n", err ? err : "?");
+            lua_pop(game_lua_, 1);
+            break;
+        }
+        if (lua_toboolean(game_lua_, -1)) {
+            lua_pop(game_lua_, 1);
+            break;
+        }
+        lua_pop(game_lua_, 1);
+
+        lua_getglobal(game_lua_, "game_draw");
+        if (lua_isfunction(game_lua_, -1)) {
+            if (lua_pcall(game_lua_, 0, 0, 0) != LUA_OK) {
+                const char* err = lua_tostring(game_lua_, -1);
+                printf("game_draw error: %s\n", err ? err : "?");
+                lua_pop(game_lua_, 1);
+                break;
+            }
+        } else {
+            lua_pop(game_lua_, 1);
+        }
+
+        hooks_.display->present();
+        sleep_ms(16);
+    }
+
+    printf("Lua game ended: %s\n", path);
+    closeGameState();
     return true;
 }
 

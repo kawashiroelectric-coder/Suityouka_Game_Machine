@@ -16,6 +16,7 @@
 #include "button_input.hpp"
 #include "audio_output.hpp"
 #include "lua_interpreter.hpp"
+#include "game_display.hpp"
 //#include "game_loader.hpp"
 
 #include <string>
@@ -49,6 +50,7 @@ static uint8_t dma_buffer[16384];
 static FATFS sd_fs;
 static bool sd_mounted = false;
 static LuaInterpreter g_luaInterpreter;
+static GameDisplay g_gameDisplay;
 
 struct MainLuaHostContext {
     ButtonInput* buttons = nullptr;
@@ -75,12 +77,32 @@ static bool luaHostButtonPressed(void* user_data, int button_index) {
 
 static void setupLuaInterpreter() {
     g_luaHostCtx.buttons = buttons;
+    g_gameDisplay.bind(framebuffer, GameConfig::SCREEN_WIDTH, GameConfig::SCREEN_HEIGHT, lcd,
+                       dma_channel, dma_buffer, sizeof(dma_buffer));
     LuaHostHooks hooks = {};
     hooks.user_data = &g_luaHostCtx;
     hooks.draw_text_bg = luaHostDrawText;
     hooks.is_button_pressed = luaHostButtonPressed;
+    hooks.display = &g_gameDisplay;
     g_luaInterpreter.setHostHooks(hooks);
     g_luaInterpreter.setSdMounted(sd_mounted);
+}
+
+static bool tryStartLuaGame() {
+    if (!sd_mounted) return false;
+    static const char* kGameScripts[] = {"dino.lua", "game.lua"};
+    char line[64];
+    for (const char* script : kGameScripts) {
+        if (g_luaInterpreter.sdFileExists(script)) {
+            printf("Starting Lua game: %s\n", script);
+            drawTextBg(10, 100, "Lua game", Color::WHITE, Color::BLACK);
+            snprintf(line, sizeof(line), "%s", script);
+            drawTextBg(10, 112, line, Color::WHITE, Color::BLACK);
+            sleep_ms(500);
+            return g_luaInterpreter.runGameLoopFromSd(script);
+        }
+    }
+    return false;
 }
 
 static void syncLuaSdMountState() { g_luaInterpreter.setSdMounted(sd_mounted); }
@@ -304,7 +326,9 @@ int main() {
 
     bool lua_executed_for_mount = false;
     if (sd_mounted) {
-        g_luaInterpreter.executeOnSdRoot();
+        if (!tryStartLuaGame()) {
+            g_luaInterpreter.executeOnSdRoot();
+        }
         lua_executed_for_mount = true;
     }
 
@@ -358,7 +382,9 @@ int main() {
              f_closedir(&dir);
             }
             if (!lua_executed_for_mount) {
-                g_luaInterpreter.executeOnSdRoot();
+                if (!tryStartLuaGame()) {
+                    g_luaInterpreter.executeOnSdRoot();
+                }
                 lua_executed_for_mount = true;
             }
         }

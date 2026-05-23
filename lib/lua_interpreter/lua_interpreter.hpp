@@ -9,31 +9,39 @@
 #include <cstddef>
 #include <cstdint>
 
-/** LCD / ボタンなどホスト機能へのコールバック */
+class GameDisplay;
+
+/** LCD / ボタン / フレームバッファへのコールバック */
 struct LuaHostHooks {
     void* user_data = nullptr;
-    void (*draw_text_bg)(void* user_data, int x, int y, const char* text,
-                         uint16_t color, uint16_t bg_color) = nullptr;
+    void (*draw_text_bg)(void* user_data, int x, int y, const char* text, uint16_t color,
+                         uint16_t bg_color) = nullptr;
     bool (*is_button_pressed)(void* user_data, int button_index) = nullptr;
+    GameDisplay* display = nullptr;
 };
+
+struct lua_State;
 
 class LuaInterpreter {
 public:
     static constexpr size_t kDefaultMaxScriptBytes = 48 * 1024;
 
     LuaInterpreter();
+    ~LuaInterpreter();
 
     void setHostHooks(const LuaHostHooks& hooks);
     void setSdMounted(bool mounted);
     void setMaxScriptBytes(size_t max_bytes);
 
-    /** SD ルートの main.lua / game.lua / boot.lua、無ければ最初の .lua */
+    /** SD ルートの main.lua / game.lua / boot.lua、無ければ最初の .lua（1回実行） */
     bool executeOnSdRoot();
 
-    /** 指定パスの .lua を読み込んで実行 */
+    /** game_update / game_draw ループ付きゲーム実行 */
+    bool runGameLoopFromSd(const char* path);
+
+    /** 指定パスの .lua を読み込んで1回実行 */
     bool runScriptFromSd(const char* path);
 
-    /** FatFS 上にファイルが存在するか */
     bool sdFileExists(const char* path) const;
 
     const LuaHostHooks& hostHooks() const { return hooks_; }
@@ -43,10 +51,14 @@ private:
     bool sd_mounted_;
     size_t max_script_bytes_;
     char lcd_line_[64];
+    lua_State* game_lua_;
 
     bool readSdFileToBuffer(const char* path, char** out_buf, size_t* out_len) const;
     bool endsWithLuaExt(const char* name) const;
     void showStatus(const char* line1, const char* line2, uint16_t color, uint16_t bg);
+    bool loadScriptIntoState(lua_State* L, const char* path, const char* source, size_t len);
+    void registerLuaHostApi(lua_State* L);
+    void closeGameState();
 };
 
 #endif // LUA_INTERPRETER_HPP

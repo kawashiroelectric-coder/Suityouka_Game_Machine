@@ -41,15 +41,15 @@ bool ButtonInput::init() {
         return false;
     }
     
-    // Polarityはport0のみ反転（アクティブローなので）
-    writeRegister(REG_POLARITY_PORT0, 0xFF);
+    // 極性反転は使わない（isPressed がアクティブローを処理する）
+    writeRegister(REG_POLARITY_PORT0, 0x00);
     writeRegister(REG_POLARITY_PORT1, 0x00);
-    
+
     // 初期状態を読み取る
     update();
     last_state = current_state;
-    
-    printf("ButtonInput: 初期化完了\n");
+
+    printf("ButtonInput: 初期化完了 port0=0x%02X (1=未押下)\n", current_state);
     return true;
 }
 
@@ -59,6 +59,7 @@ void ButtonInput::update() {
         last_state = current_state;
         current_state = port0_value;
     }
+    // 読み取り失敗時は current_state を維持（誤検出を避ける）
 }
 
 bool ButtonInput::isPressed(Button button) const {
