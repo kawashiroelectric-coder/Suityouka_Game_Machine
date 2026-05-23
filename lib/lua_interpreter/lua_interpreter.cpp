@@ -26,6 +26,51 @@ namespace {
 
 LuaInterpreter* g_active_interpreter = nullptr;
 
+#ifdef GAME_MACHINE_DEBUG
+class FpsOverlay {
+public:
+    void reset() {
+        last_ms_ = 0;
+        accum_ms_ = 0;
+        frames_ = 0;
+        displayed_fps_ = 0;
+    }
+
+    void tick(uint32_t now_ms) {
+        if (last_ms_ == 0) {
+            last_ms_ = now_ms;
+            return;
+        }
+        const uint32_t dt = now_ms - last_ms_;
+        last_ms_ = now_ms;
+        accum_ms_ += dt;
+        frames_++;
+        if (accum_ms_ >= 250) {
+            displayed_fps_ = static_cast<uint16_t>((frames_ * 1000u + accum_ms_ / 2) / accum_ms_);
+            accum_ms_ = 0;
+            frames_ = 0;
+        }
+    }
+
+    void draw(GameDisplay* disp) const {
+        if (!disp) return;
+        char buf[16];
+        snprintf(buf, sizeof(buf), "FPS:%u", static_cast<unsigned>(displayed_fps_));
+        const int text_w = static_cast<int>(strlen(buf)) * 8;
+        const int x = static_cast<int>(disp->width()) - text_w;
+        disp->drawTextBg(x, 0, buf, Color::WHITE, Color::BLACK);
+    }
+
+private:
+    uint32_t last_ms_ = 0;
+    uint32_t accum_ms_ = 0;
+    uint32_t frames_ = 0;
+    uint16_t displayed_fps_ = 0;
+};
+
+FpsOverlay g_fps_overlay;
+#endif  // GAME_MACHINE_DEBUG
+
 uint16_t parseColor(lua_State* L, int idx) {
     int n = lua_gettop(L);
     if (n >= idx + 2 && lua_isnumber(L, idx) && lua_isnumber(L, idx + 1) &&
@@ -144,10 +189,99 @@ int luaHostFillRect(lua_State* L) {
     return 0;
 }
 
-int luaHostPresent(lua_State* L) {
-    (void)L;
+int luaHostFillRects(lua_State* L) {
     GameDisplay* disp = activeDisplay();
-    if (disp) disp->present();
+    if (!disp) return 0;
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const int n = (int)lua_rawlen(L, 1);
+    if (n <= 0) return 0;
+
+    static constexpr int kMaxBatch = 64;
+    GameDisplay::FillRect rects[kMaxBatch];
+
+    int processed = 0;
+    while (processed < n) {
+        int count = 0;
+        const int chunk_end = (processed + kMaxBatch < n) ? (processed + kMaxBatch) : n;
+
+        for (int i = processed + 1; i <= chunk_end; i++) {
+            lua_rawgeti(L, 1, i);
+            if (!lua_istable(L, -1)) {
+                lua_pop(L, 1);
+                continue;
+            }
+
+            const int t = lua_gettop(L);
+            auto read_i = [&](int idx) -> int {
+                lua_rawgeti(L, t, idx);
+                int v = (int)luaL_checkinteger(L, -1);
+                lua_pop(L, 1);
+                return v;
+            };
+
+            GameDisplay::FillRect r;
+            r.x = read_i(1);
+            r.y = read_i(2);
+            r.w = read_i(3);
+            r.h = read_i(4);
+            lua_rawgeti(L, t, 5);
+            r.color = (uint16_t)luaL_checkinteger(L, -1);
+            lua_pop(L, 1);
+
+            rects[count++] = r;
+            lua_pop(L, 1);
+        }
+
+        if (count > 0) {
+            disp->fillRects(rects, static_cast<size_t>(count));
+        }
+        processed = chunk_end;
+    }
+    return 0;
+}
+
+static bool parsePresentModeString(const char* mode, GameDisplay::PresentMode* out) {
+    if (!mode || !out) return false;
+    if (strcmp(mode, "partial") == 0 || strcmp(mode, "dirty") == 0) {
+        *out = GameDisplay::PresentMode::Partial;
+        return true;
+    }
+    if (strcmp(mode, "full") == 0) {
+        *out = GameDisplay::PresentMode::Full;
+        return true;
+    }
+    return false;
+}
+
+int luaHostSetPresentMode(lua_State* L) {
+    GameDisplay* disp = activeDisplay();
+    if (!disp) return 0;
+    const char* mode = luaL_checkstring(L, 1);
+    GameDisplay::PresentMode parsed;
+    if (!parsePresentModeString(mode, &parsed)) {
+        return luaL_error(L, "set_present_mode: use \"full\" or \"partial\"");
+    }
+    disp->setPresentMode(parsed);
+    return 0;
+}
+
+int luaHostPresent(lua_State* L) {
+    GameDisplay* disp = activeDisplay();
+    if (!disp) return 0;
+    if (lua_gettop(L) >= 1) {
+        const char* mode = luaL_checkstring(L, 1);
+        GameDisplay::PresentMode parsed;
+        if (!parsePresentModeString(mode, &parsed)) {
+            return luaL_error(L, "present: use \"full\" or \"partial\"");
+        }
+        if (parsed == GameDisplay::PresentMode::Partial) {
+            disp->presentPartial();
+        } else {
+            disp->presentFull();
+        }
+        return 0;
+    }
+    disp->present();
     return 0;
 }
 
@@ -196,6 +330,10 @@ void LuaInterpreter::registerLuaHostApi(lua_State* L) {
     lua_setfield(L, -2, "clear");
     lua_pushcfunction(L, luaHostFillRect);
     lua_setfield(L, -2, "fill_rect");
+    lua_pushcfunction(L, luaHostFillRects);
+    lua_setfield(L, -2, "fill_rects");
+    lua_pushcfunction(L, luaHostSetPresentMode);
+    lua_setfield(L, -2, "set_present_mode");
     lua_pushcfunction(L, luaHostPresent);
     lua_setfield(L, -2, "present");
     lua_pushcfunction(L, luaHostWidth);
@@ -399,9 +537,15 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
 
     uint32_t last_ms = to_ms_since_boot(get_absolute_time());
     bool running = true;
+#ifdef GAME_MACHINE_DEBUG
+    g_fps_overlay.reset();
+#endif
 
     while (running) {
         uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+#ifdef GAME_MACHINE_DEBUG
+        g_fps_overlay.tick(now_ms);
+#endif
         lua_Integer dt = (lua_Integer)(now_ms - last_ms);
         last_ms = now_ms;
         if (dt < 0) dt = 0;
@@ -437,8 +581,11 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
             lua_pop(game_lua_, 1);
         }
 
+#ifdef GAME_MACHINE_DEBUG
+        g_fps_overlay.draw(hooks_.display);
+#endif
         hooks_.display->present();
-        sleep_ms(16);
+        //sleep_ms(16);
     }
 
     printf("Lua game ended: %s\n", path);

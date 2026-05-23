@@ -145,6 +145,7 @@ add_subdirectory(
 target_compile_definitions(Suityouka_Game_Machine PRIVATE
     USE_PRINTF
     USE_DBG_PRINTF
+    $<$<CONFIG:Debug>:GAME_MACHINE_DEBUG>
 )
 
 target_link_libraries(Suityouka_Game_Machine 
@@ -163,6 +164,9 @@ target_link_libraries(Suityouka_Game_Machine
     # SDカード/FatFSライブラリ
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
     lua_static
+)
+target_compile_definitions(Suityouka_Game_Machine PRIVATE
+  GAME_MACHINE_DEBUG   # 常に有効
 )
 
 # ============================================

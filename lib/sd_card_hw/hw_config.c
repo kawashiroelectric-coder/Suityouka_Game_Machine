@@ -9,7 +9,7 @@ static spi_t spi = {
     .sck_gpio = SD_PIN_CLK,
     .mosi_gpio = SD_PIN_MOSI,
     .miso_gpio = SD_PIN_MISO,
-    .baud_rate = 10 * 1000 * 1000,
+    .baud_rate = 60 * 1000 * 1000,
     .spi_mode = 3,
 };
 

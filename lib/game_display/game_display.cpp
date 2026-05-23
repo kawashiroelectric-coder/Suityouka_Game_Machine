@@ -133,7 +133,13 @@ GameDisplay::GameDisplay()
       lcd_(nullptr),
       dma_channel_(-1),
       dma_buffer_(nullptr),
-      dma_buffer_size_(0) {}
+      dma_buffer_size_(0),
+      present_mode_(PresentMode::Full),
+      dirty_(false),
+      dirty_x0_(0),
+      dirty_y0_(0),
+      dirty_x1_(0),
+      dirty_y1_(0) {}
 
 void GameDisplay::bind(uint16_t* framebuffer, uint16_t width, uint16_t height, ST7789_LCD* lcd,
                        int dma_channel, uint8_t* dma_buffer, size_t dma_buffer_size) {
@@ -144,6 +150,34 @@ void GameDisplay::bind(uint16_t* framebuffer, uint16_t width, uint16_t height, S
     dma_channel_ = dma_channel;
     dma_buffer_ = dma_buffer;
     dma_buffer_size_ = dma_buffer_size;
+    dirty_ = false;
+}
+
+void GameDisplay::markDirtyRect(int x0, int y0, int x1, int y1) {
+    if (!framebuffer_ || width_ == 0 || height_ == 0) return;
+    static constexpr int kDirtyPad = 3;
+    x0 -= kDirtyPad;
+    y0 -= kDirtyPad;
+    x1 += kDirtyPad;
+    y1 += kDirtyPad;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= (int)width_) x1 = (int)width_ - 1;
+    if (y1 >= (int)height_) y1 = (int)height_ - 1;
+    if (x0 > x1 || y0 > y1) return;
+
+    if (!dirty_) {
+        dirty_x0_ = x0;
+        dirty_y0_ = y0;
+        dirty_x1_ = x1;
+        dirty_y1_ = y1;
+        dirty_ = true;
+        return;
+    }
+    if (x0 < dirty_x0_) dirty_x0_ = x0;
+    if (y0 < dirty_y0_) dirty_y0_ = y0;
+    if (x1 > dirty_x1_) dirty_x1_ = x1;
+    if (y1 > dirty_y1_) dirty_y1_ = y1;
 }
 
 uint16_t GameDisplay::rgb(uint8_t r, uint8_t g, uint8_t b) {
@@ -156,6 +190,7 @@ void GameDisplay::clear(uint16_t color) {
     for (uint32_t i = 0; i < n; i++) {
         framebuffer_[i] = color;
     }
+    markDirtyRect(0, 0, (int)width_ - 1, (int)height_ - 1);
 }
 
 void GameDisplay::fillRect(int x, int y, int w, int h, uint16_t color) {
@@ -178,25 +213,68 @@ void GameDisplay::fillRect(int x, int y, int w, int h, uint16_t color) {
             line[col] = color;
         }
     }
+    markDirtyRect(x0, y0, x1 - 1, y1 - 1);
+}
+
+void GameDisplay::fillRects(const FillRect* rects, size_t count) {
+    if (!rects) return;
+    for (size_t i = 0; i < count; i++) {
+        const FillRect& r = rects[i];
+        fillRect(r.x, r.y, r.w, r.h, r.color);
+    }
 }
 
 void GameDisplay::drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bg_color) {
     if (!framebuffer_ || !text) return;
     int cx = x;
+    int min_x = x;
+    int min_y = y;
+    int max_x = x;
+    int max_y = y;
     while (*text) {
         if (*text == '\n') {
             cx = x;
             y += 8;
         } else {
             drawCharFb(framebuffer_, width_, height_, cx, y, *text, color, bg_color, true);
+            int rx1 = cx + 7;
+            int ry1 = y + 7;
+            if (cx < min_x) min_x = cx;
+            if (y < min_y) min_y = y;
+            if (rx1 > max_x) max_x = rx1;
+            if (ry1 > max_y) max_y = ry1;
             cx += 8;
         }
         text++;
     }
+    if (max_x >= min_x && max_y >= min_y) {
+        markDirtyRect(min_x, min_y, max_x, max_y);
+    }
 }
 
-void GameDisplay::present() {
+void GameDisplay::presentFull() {
     if (!lcd_ || !framebuffer_) return;
     lcd_->drawRawImageDMA(0, 0, width_, height_, framebuffer_, dma_channel_, dma_buffer_,
                           dma_buffer_size_);
+    dirty_ = false;
+}
+
+void GameDisplay::presentPartial() {
+    if (!lcd_ || !framebuffer_) return;
+    if (!dirty_) return;
+
+    const int w = dirty_x1_ - dirty_x0_ + 1;
+    const int h = dirty_y1_ - dirty_y0_ + 1;
+    const uint16_t* src = framebuffer_ + (uint32_t)dirty_y0_ * width_ + dirty_x0_;
+    lcd_->drawRawImageDMA((uint16_t)dirty_x0_, (uint16_t)dirty_y0_, (uint16_t)w, (uint16_t)h,
+                          src, dma_channel_, dma_buffer_, dma_buffer_size_);
+    dirty_ = false;
+}
+
+void GameDisplay::present() {
+    if (present_mode_ == PresentMode::Partial) {
+        presentPartial();
+    } else {
+        presentFull();
+    }
 }

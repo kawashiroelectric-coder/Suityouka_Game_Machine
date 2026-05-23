@@ -569,93 +569,62 @@ void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     gpio_put(PIN_CS, 1);
 }
 */
-void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
-                                  const uint16_t* data, int dma_channel, 
-                                  uint8_t* dma_buffer, size_t buffer_size) {
-    if (x >= _width || y >= _height) return;
+static void spiWaitIdle(spi_inst_t* spi_port) {
+    while (!(spi_get_hw(spi_port)->sr & SPI_SSPSR_TFE_BITS)) {
+        tight_loop_contents();
+    }
+    while (spi_get_hw(spi_port)->sr & SPI_SSPSR_BSY_BITS) {
+        tight_loop_contents();
+    }
+}
+
+void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                                  const uint16_t* data, int dma_channel, uint8_t* dma_buffer,
+                                  size_t buffer_size) {
+    if (x >= _width || y >= _height || !data || !dma_buffer || buffer_size < 2) return;
     if (x + w > _width) w = _width - x;
     if (y + h > _height) h = _height - y;
-    
-    // デバッグ出力
-    static int callCount = 0;
-    if (callCount < 3) {
-        printf("drawRawImageDMA: x=%d, y=%d, w=%d, h=%d, total=%d pixels\n", 
-               x, y, w, h, w * h);
-        callCount++;
-    }
-    
+
     setWindow(x, y, x + w - 1, y + h - 1);
-    
+
     gpio_put(PIN_DC, 1);
     gpio_put(PIN_CS, 0);
-    
-    uint32_t bufferPixels = buffer_size / 2;
-    uint32_t totalTransferred = 0;  // デバッグ用カウンタ
-    
-    // 行ごとに転送
+
+    const uint32_t buffer_pixels = static_cast<uint32_t>(buffer_size / 2);
+
     for (uint32_t row = 0; row < h; row++) {
-        uint32_t colProcessed = 0;
-        
-        while (colProcessed < w) {
-            // 今回転送するピクセル数
-            uint32_t transferPixels = w - colProcessed;
-            if (transferPixels > bufferPixels) {
-                transferPixels = bufferPixels;
+        const uint16_t* row_src = data + row * _width;
+        uint32_t col_processed = 0;
+
+        while (col_processed < w) {
+            uint32_t transfer_pixels = w - col_processed;
+            if (transfer_pixels > buffer_pixels) {
+                transfer_pixels = buffer_pixels;
             }
-            
-            // バッファにデータをコピー
-            for (uint32_t i = 0; i < transferPixels; i++) {
-                uint32_t col = colProcessed + i;
-                uint16_t color = data[row * _width + col];
-                
-                dma_buffer[i * 2] = color >> 8;
-                dma_buffer[i * 2 + 1] = color & 0xFF;
+
+            for (uint32_t i = 0; i < transfer_pixels; i++) {
+                const uint16_t color = row_src[col_processed + i];
+                dma_buffer[i * 2] = static_cast<uint8_t>(color >> 8);
+                dma_buffer[i * 2 + 1] = static_cast<uint8_t>(color & 0xFF);
             }
-            
-            // DMA転送
+
             dma_channel_wait_for_finish_blocking(dma_channel);
-            
+
             dma_channel_config c = dma_channel_get_default_config(dma_channel);
             channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
             channel_config_set_dreq(&c, spi_get_dreq(spi_port, true));
             channel_config_set_read_increment(&c, true);
             channel_config_set_write_increment(&c, false);
-            
-            
-            dma_channel_configure(
-                dma_channel,
-                &c,
-                &spi_get_hw(spi_port)->dr,
-                dma_buffer,
-                transferPixels * 2,
-                true
-            );
-            
+
+            dma_channel_configure(dma_channel, &c, &spi_get_hw(spi_port)->dr, dma_buffer,
+                                  transfer_pixels * 2, true);
             dma_channel_wait_for_finish_blocking(dma_channel);
+            spiWaitIdle(spi_port);
 
-            // 新: 実際のハードウェア状態をチェック
-            while (!(spi_get_hw(spi_port)->sr & SPI_SSPSR_TFE_BITS)) {
-                tight_loop_contents();  // TX FIFOが空になるまで
-            }
-
-            while (spi_get_hw(spi_port)->sr & SPI_SSPSR_BSY_BITS) {
-                 tight_loop_contents();  // SPIがアイドルになるまで
-            }
-            
-            colProcessed += transferPixels;
-            totalTransferred += transferPixels;
+            col_processed += transfer_pixels;
         }
     }
-    
-    // デバッグ出力
-    //if (callCount <= 3) {
-    //    printf("  -> 転送完了: %d pixels (期待値: %d)\n", totalTransferred, w * h);
-    //    if (totalTransferred != w * h) {
-    //        printf("  *** 警告: ピクセル数が一致しません！ ***\n");
-    //    }
-    //}
-    // 最後のデータが完全に送信されるまで待つ
-    //busy_wait_us(10);
+
     gpio_put(PIN_CS, 1);
 }
 
