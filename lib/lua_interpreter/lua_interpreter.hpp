@@ -12,6 +12,7 @@
 class GameDisplay;
 
 /** LCD / ボタン / フレームバッファへのコールバック */
+/** Lua から呼ばれるホスト側描画・入力コールバック */
 struct LuaHostHooks {
     void* user_data = nullptr;
     void (*draw_text_bg)(void* user_data, int x, int y, const char* text, uint16_t color,
@@ -22,6 +23,7 @@ struct LuaHostHooks {
 
 struct lua_State;
 
+/** SD 上の Lua スクリプト読み込みと machine.* API 提供 */
 class LuaInterpreter {
 public:
     static constexpr size_t kDefaultMaxScriptBytes = 48 * 1024;
@@ -30,6 +32,7 @@ public:
     ~LuaInterpreter();
 
     void setHostHooks(const LuaHostHooks& hooks);
+    /** FatFS 利用前に SD マウント済みかを設定 */
     void setSdMounted(bool mounted);
     void setMaxScriptBytes(size_t max_bytes);
 
@@ -42,6 +45,7 @@ public:
     /** 指定パスの .lua を読み込んで1回実行 */
     bool runScriptFromSd(const char* path);
 
+    /** SD 上の通常ファイルが存在するか */
     bool sdFileExists(const char* path) const;
 
     const LuaHostHooks& hostHooks() const { return hooks_; }
@@ -57,6 +61,7 @@ private:
     bool endsWithLuaExt(const char* name) const;
     void showStatus(const char* line1, const char* line2, uint16_t color, uint16_t bg);
     bool loadScriptIntoState(lua_State* L, const char* path, const char* source, size_t len);
+    /** print / sleep_ms / machine.* を Lua に登録 */
     void registerLuaHostApi(lua_State* L);
     void closeGameState();
 };

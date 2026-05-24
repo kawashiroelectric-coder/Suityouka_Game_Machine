@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <cstring>
 
-// ゲーム情報構造体
+/** games/ 以下の 1 ゲーム分のメタ情報 */
 struct GameInfo {
     char name[64];
     char program_path[128];
@@ -20,7 +20,7 @@ struct GameInfo {
     bool valid;
 };
 
-// 画像読み込み結果
+/** RGB565 ピクセル配列（デストラクタで pixels を解放） */
 struct ImageData {
     uint16_t* pixels;
     uint16_t width;
@@ -35,44 +35,43 @@ struct ImageData {
     }
 };
 
-// ゲームローダークラス
+/** FatFS 経由で SD 上のゲーム資産を読み込む */
 class GameLoader {
 private:
     FATFS fs;
     bool mounted;
     
-    // ファイルパス構築
+    /** SD_ROOT + dir + filename を dest に連結する */
     void buildPath(char* dest, const char* dir, const char* filename);
     
-    // 画像ファイル読み込み（簡易実装：RGB565形式を想定）
     ImageData loadImageRGB565(const char* path);
     
 public:
     GameLoader();
     ~GameLoader();
     
-    // SDカード初期化・マウント
+    /** SD ドライバ初期化と FatFS マウント */
     bool init();
     
-    // マウント状態確認
+    /** FatFS がマウント済みか */
     bool isMounted() const { return mounted; }
     
-    // ゲーム一覧取得
+    /** games/ 配下のサブディレクトリを列挙し GameInfo を埋める。戻り値は件数 */
     int getGameList(GameInfo* games, int max_games);
     
-    // 画像読み込み（RGB565形式）
+    /** RGB565 生データとして画像を読み込む（240x320 固定想定） */
     ImageData loadImage(const char* path);
     
-    // 音声ファイル読み込み（WAV形式、簡易実装）
+    /** WAV（PCM 16bit）を読み込み、呼び出し側で free(*samples) する */
     bool loadAudioWAV(const char* path, int16_t** samples, uint32_t* sample_count, uint32_t* sample_rate);
     
-    // プログラムファイル読み込み
+    /** 任意バイナリを malloc して読み込む */
     bool loadProgram(const char* path, uint8_t** data, size_t* size);
     
-    // ファイル存在確認
+    /** f_stat でファイルの存在を確認する */
     bool fileExists(const char* path);
     
-    // ディレクトリ一覧表示
+    /** ディレクトリ内容をシリアルに一覧表示する（デバッグ用） */
     void listDirectory(const char* path);
 };
 

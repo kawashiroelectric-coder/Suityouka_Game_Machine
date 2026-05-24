@@ -90,7 +90,7 @@ static void setupLuaInterpreter() {
 
 static bool tryStartLuaGame() {
     if (!sd_mounted) return false;
-    static const char* kGameScripts[] = {"dino.lua", "game.lua"};
+    static const char* kGameScripts[] = {"dino.lua", "stg.lua", "game.lua"};
     char line[64];
     for (const char* script : kGameScripts) {
         if (g_luaInterpreter.sdFileExists(script)) {
@@ -227,9 +227,9 @@ int main() {
 
     
     stdio_init_all();
-    while (!stdio_usb_connected()) {
-        sleep_ms(10);
-    }
+    //while (!stdio_usb_connected()) {
+    //    sleep_ms(10);
+    //}
     printf("=== ゲーム機初期化開始 ===\n");
     
     // GPIO初期化

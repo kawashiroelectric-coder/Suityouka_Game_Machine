@@ -3,7 +3,7 @@
 #include "hw_config.h"
 #include "sd_pins.h"
 
-/* SPI1: SCK=10, MOSI=11, MISO=12, CS=13 */
+/** no-OS-FatFS 用 SPI1 設定（60MHz, mode 3） */
 static spi_t spi = {
     .hw_inst = spi1,
     .sck_gpio = SD_PIN_CLK,
@@ -13,19 +13,23 @@ static spi_t spi = {
     .spi_mode = 3,
 };
 
+/** SPI バスと CS ピンの sd_spi_if */
 static sd_spi_if_t spi_if = {
     .spi = &spi,
     .ss_gpio = SD_PIN_CS,
 };
 
+/** カード検出なしの SD カード記述子 */
 static sd_card_t sd_card = {
     .type = SD_IF_SPI,
     .spi_if_p = &spi_if,
     .use_card_detect = false,
 };
 
+/** 接続 SD カード枚数（本機は 1 枚） */
 size_t sd_get_num(void) { return 1; }
 
+/** インデックス 0 の sd_card_t を返す（他は NULL） */
 sd_card_t *sd_get_by_num(size_t num) {
     return (num == 0) ? &sd_card : NULL;
 }

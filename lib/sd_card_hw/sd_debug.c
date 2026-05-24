@@ -19,6 +19,7 @@
 #define R1_IDLE_STATE   (1u << 0)
 #define R1_NO_RESPONSE  0xFFu
 
+/** カード種別を文字列化 */
 static const char* card_type_str(card_type_t t) {
     switch (t) {
         case SDCARD_NONE: return "NONE";
@@ -30,6 +31,7 @@ static const char* card_type_str(card_type_t t) {
     }
 }
 
+/** disk_initialize 等の DSTATUS を分解表示 */
 static void print_dstatus(const char* label, DSTATUS st) {
     printf("[SD DBG] %s DSTATUS=0x%02X", label, st);
     if (st & STA_NOINIT) printf(" NOINIT");
@@ -39,6 +41,7 @@ static void print_dstatus(const char* label, DSTATUS st) {
     printf("\n");
 }
 
+/** SD コマンド応答 R1 を分解表示 */
 static void print_r1(const char* step, uint32_t r1) {
     printf("[SD DBG] %s R1=0x%02lX", step, (unsigned long)r1);
     if (r1 == R1_NO_RESPONSE) {

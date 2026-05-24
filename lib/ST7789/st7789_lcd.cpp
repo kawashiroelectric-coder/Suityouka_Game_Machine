@@ -1,3 +1,8 @@
+// ============================================
+// ファイル: st7789_lcd.cpp
+// ST7789 LCD ドライバ実装
+// ============================================
+
 #include "st7789_lcd.hpp"
 #include <cstring>
 
@@ -110,6 +115,7 @@ ST7789_LCD::ST7789_LCD() : spi_port(spi0), _width(PHYSICAL_WIDTH), _height(PHYSI
 using uint8_t = unsigned char;  // C++11以降の書き方
 using uint16_t = unsigned short;
 
+/** DC=0 で 1 バイトコマンド送信 */
 void ST7789_LCD::writeCommand(uint8_t cmd) {
     gpio_put(PIN_DC, 0);
     gpio_put(PIN_CS, 0);
@@ -117,6 +123,7 @@ void ST7789_LCD::writeCommand(uint8_t cmd) {
     gpio_put(PIN_CS, 1);
 }
 
+/** DC=1 で 1 バイトデータ送信 */
 void ST7789_LCD::writeData(uint8_t data) {
     gpio_put(PIN_DC, 1);
     gpio_put(PIN_CS, 0);
@@ -125,6 +132,7 @@ void ST7789_LCD::writeData(uint8_t data) {
 }
 
 
+/** DC=1 でバッファを一括送信 */
 void ST7789_LCD::writeDataBuffer(const uint8_t* buf, size_t len) {
     gpio_put(PIN_DC, 1);
     gpio_put(PIN_CS, 0);
@@ -132,8 +140,7 @@ void ST7789_LCD::writeDataBuffer(const uint8_t* buf, size_t len) {
     gpio_put(PIN_CS, 1);
 }
 
-
-
+/** RST ピンでハードウェアリセットパルス */
 void ST7789_LCD::hardwareReset() {
     gpio_put(PIN_RST, 1);
     sleep_ms(5);
@@ -143,8 +150,7 @@ void ST7789_LCD::hardwareReset() {
     sleep_ms(150);
 }
 
-//setwindowで特定箇所のみ変更する指示を出している。
-//道理でfillRectの処理が速いわけだ
+/** CASET / RASET / RAMWR で描画矩形を設定 */
 void ST7789_LCD::setWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
     writeCommand(Command::CASET);
     writeData(x0 >> 8);
@@ -161,6 +167,7 @@ void ST7789_LCD::setWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
     writeCommand(Command::RAMWR);
 }
 
+/** GPIO/SPI 初期化と ST7789 レジスタシーケンス */
 void ST7789_LCD::init() {
     // GPIO初期化
     gpio_init(PIN_CS);
@@ -569,6 +576,7 @@ void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     gpio_put(PIN_CS, 1);
 }
 */
+/** SPI 送信完了まで待機 */
 static void spiWaitIdle(spi_inst_t* spi_port) {
     while (!(spi_get_hw(spi_port)->sr & SPI_SSPSR_TFE_BITS)) {
         tight_loop_contents();

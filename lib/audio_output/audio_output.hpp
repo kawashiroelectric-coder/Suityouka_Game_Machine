@@ -1,6 +1,6 @@
 // ============================================
 // ファイル: audio_output.hpp
-// 音声出力管理クラス（PWM使用）
+// 音声出力管理クラス（PWM + DMA）
 // ============================================
 
 #ifndef AUDIO_OUTPUT_HPP
@@ -12,7 +12,7 @@
 #include "config.hpp"
 #include <cstdint>
 
-// 音声出力管理クラス
+/** PWM + DMA によるステレオ音声出力 */
 class AudioOutput {
 private:
     uint8_t pin_l;
@@ -32,51 +32,52 @@ private:
     bool initialized;
     bool playing;
     
-    // DMAバッファ（ダブルバッファリング）
     static constexpr size_t BUFFER_SIZE = 512;
     int16_t buffer_l[2][BUFFER_SIZE];
     int16_t buffer_r[2][BUFFER_SIZE];
     uint8_t current_buffer;
     
-    // コールバック関数型
+    /** 各 DMA ブロック分の L/R サンプルを生成するコールバック */
     typedef void (*AudioCallback)(int16_t* left, int16_t* right, size_t samples);
     AudioCallback callback;
     
-    // DMA割り込みハンドラ
     static void dma_handler();
     static AudioOutput* instance;
     
 public:
+    /** @param pin_l 左チャンネル PWM ピン @param pin_r 右チャンネル PWM ピン
+     *  @param pin_sd アンプ SD（シャットダウン） @param pin_abd アンプ ABD */
     AudioOutput(uint8_t pin_l, uint8_t pin_r, uint8_t pin_sd, uint8_t pin_abd);
     ~AudioOutput();
     
-    // 初期化
+    /** GPIO / PWM / DMA を初期化する */
     bool init(uint32_t sample_rate = AudioConfig::SAMPLE_RATE);
     
-    // 開始/停止
+    /** DMA 転送とコールバック駆動の再生を開始する */
     void start();
+    /** DMA を停止し無音を出力する */
     void stop();
     
-    // 再生中かどうか
+    /** 再生中かどうか */
     bool isPlaying() const { return playing; }
     
-    // コールバック関数を設定（音声データ生成用）
+    /** サンプル生成コールバックを登録する（start 前に設定） */
     void setCallback(AudioCallback cb) { callback = cb; }
     
-    // 音量設定（0.0～1.0）
+    /** 音量 0.0～1.0（現状はコールバック側で処理想定） */
     void setVolume(float volume);
     
-    // テストトーン生成
+    /** テスト用トーン再生（未実装） */
     void playTone(float frequency, float duration_ms);
     
 private:
-    // DMA転送完了時の処理
+    /** DMA 完了時に次バッファを生成して再転送する */
     void onDMATransferComplete();
     
-    // PWM初期化
+    /** 左右 PWM スライスを設定する */
     void initPWM();
     
-    // DMA初期化
+    /** 左右 DMA チャンネルと IRQ を設定する */
     void initDMA();
 };
 

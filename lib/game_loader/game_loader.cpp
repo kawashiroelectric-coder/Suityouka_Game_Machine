@@ -10,10 +10,12 @@
 #include <cstdio>
 #include <cstdlib>
 
+/** FatFS ワークエリアをゼロ初期化 */
 GameLoader::GameLoader() : mounted(false) {
     memset(&fs, 0, sizeof(FATFS));
 }
 
+/** マウント済みなら f_mount(nullptr) でアンマウント */
 GameLoader::~GameLoader() {
     if (mounted) {
         const char* unmount_root = GameConfig::SD_ROOT[0] ? GameConfig::SD_ROOT : "0:";
@@ -22,6 +24,7 @@ GameLoader::~GameLoader() {
     }
 }
 
+/** sd_get_by_num(0) で SD を取得し f_mount する */
 bool GameLoader::init() {
     // SDカードの取得
     sd_card_t* pSD = sd_get_by_num(0);
@@ -46,6 +49,7 @@ bool GameLoader::init() {
     return true;
 }
 
+/** SD_ROOT/dir/filename を dest に連結 */
 void GameLoader::buildPath(char* dest, const char* dir, const char* filename) {
     strcpy(dest, GameConfig::SD_ROOT);
     strcat(dest, dir);
@@ -53,6 +57,7 @@ void GameLoader::buildPath(char* dest, const char* dir, const char* filename) {
     strcat(dest, filename);
 }
 
+/** games/ 内の各サブディレクトリを 1 ゲームとして列挙 */
 int GameLoader::getGameList(GameInfo* games, int max_games) {
     if (!mounted) return 0;
     
@@ -113,6 +118,7 @@ int GameLoader::getGameList(GameInfo* games, int max_games) {
     return count;
 }
 
+/** 240x320 RGB565 生データとして読み込む */
 ImageData GameLoader::loadImage(const char* path) {
     ImageData result = {nullptr, 0, 0, false};
     
@@ -166,6 +172,7 @@ ImageData GameLoader::loadImage(const char* path) {
     return result;
 }
 
+/** 簡易 WAV ヘッダ解析後 PCM データを malloc */
 bool GameLoader::loadAudioWAV(const char* path, int16_t** samples, uint32_t* sample_count, uint32_t* sample_rate) {
     if (!mounted) return false;
     
@@ -222,6 +229,7 @@ bool GameLoader::loadAudioWAV(const char* path, int16_t** samples, uint32_t* sam
     return true;
 }
 
+/** ファイル全バイトを malloc して読み込む */
 bool GameLoader::loadProgram(const char* path, uint8_t** data, size_t* size) {
     if (!mounted) return false;
     
@@ -256,6 +264,7 @@ bool GameLoader::loadProgram(const char* path, uint8_t** data, size_t* size) {
     return true;
 }
 
+/** f_stat でファイル存在確認 */
 bool GameLoader::fileExists(const char* path) {
     if (!mounted) return false;
     
@@ -264,6 +273,7 @@ bool GameLoader::fileExists(const char* path) {
     return (fr == FR_OK);
 }
 
+/** f_opendir / f_readdir でエントリ名を printf */
 void GameLoader::listDirectory(const char* path) {
     if (!mounted) return;
     

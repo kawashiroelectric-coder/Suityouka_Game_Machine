@@ -71,6 +71,7 @@ private:
 FpsOverlay g_fps_overlay;
 #endif  // GAME_MACHINE_DEBUG
 
+/** Lua 引数を RGB565 に変換（3 整数または 1 整数） */
 uint16_t parseColor(lua_State* L, int idx) {
     int n = lua_gettop(L);
     if (n >= idx + 2 && lua_isnumber(L, idx) && lua_isnumber(L, idx + 1) &&
@@ -89,11 +90,13 @@ uint16_t parseColor(lua_State* L, int idx) {
     return (uint16_t)luaL_checkinteger(L, idx);
 }
 
+/** 実行中インタプリタの GameDisplay を取得 */
 GameDisplay* activeDisplay() {
     if (!g_active_interpreter) return nullptr;
     return g_active_interpreter->hostHooks().display;
 }
 
+/** machine.print 相当: 引数をタブ区切りで stdout へ */
 int luaHostPrint(lua_State* L) {
     int n = lua_gettop(L);
     for (int i = 1; i <= n; i++) {
@@ -107,6 +110,7 @@ int luaHostPrint(lua_State* L) {
     return 0;
 }
 
+/** sleep_ms(ms) */
 int luaHostSleepMs(lua_State* L) {
     lua_Integer ms = luaL_checkinteger(L, 1);
     if (ms < 0) ms = 0;
@@ -114,6 +118,7 @@ int luaHostSleepMs(lua_State* L) {
     return 0;
 }
 
+/** machine.text(x, y, str [, fg [, bg]]) */
 int luaHostLcdText(lua_State* L) {
     if (!g_active_interpreter) return 0;
     const LuaHostHooks& hooks = g_active_interpreter->hostHooks();
@@ -134,6 +139,7 @@ int luaHostLcdText(lua_State* L) {
     return 0;
 }
 
+/** machine.pressed(button_index) */
 int luaHostButtonPressed(lua_State* L) {
     if (!g_active_interpreter) {
         lua_pushboolean(L, 0);
@@ -149,6 +155,7 @@ int luaHostButtonPressed(lua_State* L) {
     return 1;
 }
 
+/** machine.jump_pressed(): ジャンプ用ボタンいずれか */
 int luaHostJumpPressed(lua_State* L) {
     (void)L;
     if (!g_active_interpreter) {
@@ -170,6 +177,7 @@ int luaHostJumpPressed(lua_State* L) {
     return 1;
 }
 
+/** machine.clear(color) */
 int luaHostClear(lua_State* L) {
     GameDisplay* disp = activeDisplay();
     if (!disp) return 0;
@@ -177,6 +185,7 @@ int luaHostClear(lua_State* L) {
     return 0;
 }
 
+/** machine.fill_rect(x, y, w, h, color) */
 int luaHostFillRect(lua_State* L) {
     GameDisplay* disp = activeDisplay();
     if (!disp) return 0;
@@ -189,6 +198,7 @@ int luaHostFillRect(lua_State* L) {
     return 0;
 }
 
+/** machine.fill_rects({{x,y,w,h,color}, ...}) */
 int luaHostFillRects(lua_State* L) {
     GameDisplay* disp = activeDisplay();
     if (!disp) return 0;
@@ -253,6 +263,7 @@ static bool parsePresentModeString(const char* mode, GameDisplay::PresentMode* o
     return false;
 }
 
+/** machine.set_present_mode("full"|"partial") */
 int luaHostSetPresentMode(lua_State* L) {
     GameDisplay* disp = activeDisplay();
     if (!disp) return 0;
@@ -265,6 +276,7 @@ int luaHostSetPresentMode(lua_State* L) {
     return 0;
 }
 
+/** machine.present([mode]) */
 int luaHostPresent(lua_State* L) {
     GameDisplay* disp = activeDisplay();
     if (!disp) return 0;
@@ -285,24 +297,28 @@ int luaHostPresent(lua_State* L) {
     return 0;
 }
 
+/** machine.width() */
 int luaHostWidth(lua_State* L) {
     GameDisplay* disp = activeDisplay();
     lua_pushinteger(L, disp ? disp->width() : 0);
     return 1;
 }
 
+/** machine.height() */
 int luaHostHeight(lua_State* L) {
     GameDisplay* disp = activeDisplay();
     lua_pushinteger(L, disp ? disp->height() : 0);
     return 1;
 }
 
+/** machine.time_ms(): 起動からのミリ秒 */
 int luaHostTimeMs(lua_State* L) {
     (void)L;
     lua_pushinteger(L, (lua_Integer)to_ms_since_boot(get_absolute_time()));
     return 1;
 }
 
+/** machine.rgb(r, g, b) */
 int luaHostRgb(lua_State* L) {
     int r = (int)luaL_checkinteger(L, 1);
     int g = (int)luaL_checkinteger(L, 2);
@@ -313,6 +329,7 @@ int luaHostRgb(lua_State* L) {
 
 }  // namespace
 
+/** print / sleep_ms / machine テーブルをグローバル登録 */
 void LuaInterpreter::registerLuaHostApi(lua_State* L) {
     lua_pushcfunction(L, luaHostPrint);
     lua_setglobal(L, "print");
@@ -357,6 +374,7 @@ LuaInterpreter::LuaInterpreter()
 
 LuaInterpreter::~LuaInterpreter() { closeGameState(); }
 
+/** game_lua_ を閉じ g_active_interpreter をクリア */
 void LuaInterpreter::closeGameState() {
     if (game_lua_) {
         g_active_interpreter = nullptr;
@@ -377,6 +395,7 @@ bool LuaInterpreter::sdFileExists(const char* path) const {
     return !(fno.fattrib & AM_DIR);
 }
 
+/** draw_text_bg コールバックで 2 行ステータス表示 */
 void LuaInterpreter::showStatus(const char* line1, const char* line2, uint16_t color, uint16_t bg) {
     if (hooks_.draw_text_bg) {
         if (line1) hooks_.draw_text_bg(hooks_.user_data, 10, 80, line1, color, bg);
@@ -384,6 +403,7 @@ void LuaInterpreter::showStatus(const char* line1, const char* line2, uint16_t c
     }
 }
 
+/** FatFS でファイルを読み NUL 終端バッファに格納（呼び出し側 free） */
 bool LuaInterpreter::readSdFileToBuffer(const char* path, char** out_buf, size_t* out_len) const {
     *out_buf = nullptr;
     *out_len = 0;
@@ -425,6 +445,7 @@ bool LuaInterpreter::readSdFileToBuffer(const char* path, char** out_buf, size_t
     return true;
 }
 
+/** luaL_loadbuffer + lua_pcall でスクリプトを 1 回実行 */
 bool LuaInterpreter::loadScriptIntoState(lua_State* L, const char* path, const char* source,
                                           size_t len) {
     int load_stat = luaL_loadbuffer(L, source, len, path);
@@ -442,14 +463,16 @@ bool LuaInterpreter::loadScriptIntoState(lua_State* L, const char* path, const c
     return true;
 }
 
+/** 拡張子が .lua（大文字小文字無視）か */
 bool LuaInterpreter::endsWithLuaExt(const char* name) const {
     size_t len = strlen(name);
     if (len < 4) return false;
     const char* ext = name + len - 4;
     return ext[0] == '.' && tolower((unsigned char)ext[1]) == 'l' &&
-           tolower((unsigned char)ext[2]) == 'u' && tolower((unsigned char)ext[3]) == 'a';
+           tolower((unsigned char)ext[2]) == 'u' &&            tolower((unsigned char)ext[3]) == 'a';
 }
 
+/** 一時 lua_State で SD 上の .lua を 1 回実行 */
 bool LuaInterpreter::runScriptFromSd(const char* path) {
     char* source = nullptr;
     size_t len = 0;
@@ -486,6 +509,7 @@ bool LuaInterpreter::runScriptFromSd(const char* path) {
     return ok;
 }
 
+/** game_init / game_update / game_draw ループでゲームを実行 */
 bool LuaInterpreter::runGameLoopFromSd(const char* path) {
     if (!sd_mounted_) {
         printf("Lua: SD not mounted\n");
@@ -593,6 +617,7 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
     return true;
 }
 
+/** main.lua → game.lua → boot.lua → 最初の .lua の順で 1 本実行 */
 bool LuaInterpreter::executeOnSdRoot() {
     if (!sd_mounted_) {
         printf("Lua: SD not mounted\n");

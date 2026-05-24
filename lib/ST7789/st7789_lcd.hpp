@@ -1,3 +1,8 @@
+// ============================================
+// ファイル: st7789_lcd.hpp
+// ST7789 TFT LCD ドライバ（SPI）
+// ============================================
+
 #ifndef ST7789_LCD_HPP
 #define ST7789_LCD_HPP
 
@@ -7,7 +12,7 @@
 #include "hardware/spi.h"
 #include "hardware/dma.h"
 
-// 色定義（RGB565形式）
+/** RGB565 定数と rgb() 変換 */
 namespace Color {
     constexpr uint16_t BLACK   = 0x0000;
     constexpr uint16_t WHITE   = 0xFFFF;
@@ -21,25 +26,21 @@ namespace Color {
     constexpr uint16_t PURPLE  = 0x780F;
     constexpr uint16_t GRAY    = 0x8410;
 
-    
-    // RGB888からRGB565への変換
     constexpr uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
         return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
     }
 }
 
-// フォントサイズ列挙型
+/** 8x8 ビットマップフォントの拡大倍率 */
 enum class FontSize {
-    SMALL  = 1,  // 8x8
-    MEDIUM = 2,  // 16x16
-    LARGE  = 3   // 24x24
+    SMALL  = 1,
+    MEDIUM = 2,
+    LARGE  = 3
 };
 
-
-// ST7789 LCDクラス
+/** ST7789 240x320 液晶（SPI0、回転対応） */
 class ST7789_LCD {
 private:
-    // ピン定義
     static constexpr uint8_t PIN_CS   = 1;
     static constexpr uint8_t PIN_SCK  = 2;
     static constexpr uint8_t PIN_MOSI = 3;
@@ -47,21 +48,17 @@ private:
     static constexpr uint8_t PIN_DC   = 9;
     static constexpr uint8_t PIN_BLK  = 14;
     
-    // ディスプレイサイズ
     static constexpr uint16_t PHYSICAL_WIDTH  = 240;
     static constexpr uint16_t PHYSICAL_HEIGHT = 320;
     
-    
-    // 現在の論理サイズ（回転により変化）
     uint16_t _width;
     uint16_t _height;
     uint8_t _rotation;
     uint16_t _textColor;
     uint16_t _textBgColor;
     FontSize _fontSize;
-    bool _textBg;  // 背景色を描画するかどうか
+    bool _textBg;
     
-    // ST7789コマンド
     enum Command : uint8_t {
         NOP     = 0x00,
         SWRESET = 0x01,
@@ -98,104 +95,80 @@ private:
     
     spi_inst_t* spi_port;
     
-    // コマンド送信
+    /** DC=0: コマンド 1 バイト */
     void writeCommand(uint8_t cmd);
-    
-    // データ送信（1バイト）
+    /** DC=1: データ 1 バイト */
     void writeData(uint8_t data);
-
-    // データ送信を連続で（1バイト）
+    /** RAMWR 連続書き込み中のデータ送信 */
     void writeData_continue(const uint8_t* data, size_t len);
-
-    
-    // データ送信（複数バイト）
+    /** DC=1: データバッファ送信 */
     void writeDataBuffer(const uint8_t* buf, size_t len);
-
-    // ハードウェアリセット
+    /** RST ピンリセット */
     void hardwareReset();
-    
-    // 描画範囲設定
+    /** 描画ウィンドウ (CASET/RASET) + RAMWR */
     void setWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
 
 public:
     ST7789_LCD();
     
-    // 初期化
+    /** GPIO / SPI 初期化と ST7789 レジスタ設定 */
     void init();
     
-    // バックライト制御
+    /** バックライト ON/OFF */
     void setBacklight(bool on);
-
-    //反転表示
+    /** 表示の色反転 ON/OFF */
     void invertDisplay(bool i);
 
-    // SPI/GPIO取得（DMA用）
+    /** DMA 設定用 SPI インスタンス */
     spi_inst_t* getSPI() const { return spi_port; }
     uint8_t getPinCS() const { return PIN_CS; }
     uint8_t getPinDC() const { return PIN_DC; }
     
-    // 描画範囲設定（外部公開）
+    /** 描画ウィンドウ（CASET/RASET/RAMWR）を外部から設定 */
     void setWindowPublic(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
         setWindow(x0, y0, x1, y1);
     }
     
-    // 画面全体を塗りつぶし
+    /** 論理解像度の全面を単色で塗る */
     void fill(uint16_t color);
-    
-    // 矩形描画
+    /** 矩形を SPI ブロッキングで塗る */
     void fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
-    
-    // DMA対応矩形描画（外部から使用）
+    /** 矩形を DMA で塗る */
     void fillRectDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color, 
                      int dma_channel, uint8_t* dma_buffer, size_t buffer_size);
-
-    //円塗りつぶし
+    /** 円塗りつぶし（未実装） */
     void fillCircle(uint16_t x0,uint16_t y0,uint16_t r,uint16_t color);
-    
-    // ピクセル描画
+    /** 1 ピクセル描画（毎回ウィンドウ設定） */
     void drawPixel(uint16_t x, uint16_t y, uint16_t color);
-    
-    // ピクセル描画(高速)
+    /** 連続 RAM 書き込み前提の高速ピクセル描画 */
     void writePixel(uint16_t x, uint16_t y, uint16_t color);
-    
-    // 線描画（水平）
     void drawHLine(uint16_t x, uint16_t y, uint16_t w, uint16_t color);
-    
-    // 線描画（垂直）
     void drawVLine(uint16_t x, uint16_t y, uint16_t h, uint16_t color);
-
-    // 線描画（任意角度・Bresenhamアルゴリズム）
+    /** Bresenham による任意線 */
     void drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color);
-
-    // 矩形枠描画
     void drawRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
-
-    //円描写
     void drawCircle(uint16_t x0,uint16_t y0,uint16_t r,uint16_t color);
-
-    //画面回転（0, 1, 2, 3 = 0°, 90°, 180°, 270°）
+    /** 画面回転 0～3（0°/90°/180°/270°） */
     void setRotation(uint8_t r);
 
-    
-    // テキスト描画関連
     void setTextColor(uint16_t color);
     void setTextColor(uint16_t color, uint16_t bgColor);
     void setFontSize(FontSize size);
     void drawChar(uint16_t x, uint16_t y, char c, uint16_t color);
     void drawText(uint16_t x, uint16_t y, const char* text);
     void drawTextBg(uint16_t x, uint16_t y, const char* text, uint16_t color, uint16_t bgColor);
-    
-    // 画像描画関連
+    /** 24bit BMP バイナリを描画（ヘッダは uint16_t 配列として渡す） */
     void drawBMP(uint16_t x, uint16_t y, const uint16_t* bmpData);
+    /** RGB565 配列を SPI で転送 */
     void drawRawImage(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t* data);
-    
-    // DMA対応画像描画（外部から使用）
+    /** RGB565 配列を DMA で転送（行単位チャンク） */
     void drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
                          const uint16_t* data, int dma_channel, 
                          uint8_t* dma_buffer, size_t buffer_size);
 
-    // ディスプレイサイズ取得
+    /** 現在の論理幅（回転後） */
     uint16_t width() const { return _width; }
+    /** 現在の論理高さ（回転後） */
     uint16_t height() const { return _height; }
     uint8_t rotation() const { return _rotation; }
     

@@ -166,7 +166,7 @@ target_link_libraries(Suityouka_Game_Machine
     lua_static
 )
 target_compile_definitions(Suityouka_Game_Machine PRIVATE
-  GAME_MACHINE_DEBUG   # 常に有効
+#  GAME_MACHINE_DEBUG   # 常に有効
 )
 
 # ============================================

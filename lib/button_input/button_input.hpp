@@ -10,7 +10,7 @@
 #include "hardware/i2c.h"
 #include "config.hpp"
 
-// ボタン定義
+/** 8 ボタン（PCA9539 Port0、ビット 0～7、アクティブロー） */
 enum class Button {
     RIGHT = 0,
     UP = 1,
@@ -22,7 +22,7 @@ enum class Button {
     NEAR = 7
 };
 
-// ボタン入力管理クラス
+/** PCA9539 経由のボタン入力 */
 class ButtonInput {
 private:
     i2c_inst_t* i2c_port;
@@ -31,7 +31,6 @@ private:
     uint8_t current_state;
     bool irq_enabled;
     
-    // PCA9539レジスタアドレス
     static constexpr uint8_t REG_INPUT_PORT0 = 0x00;
     static constexpr uint8_t REG_INPUT_PORT1 = 0x01;
     static constexpr uint8_t REG_OUTPUT_PORT0 = 0x02;
@@ -41,32 +40,33 @@ private:
     static constexpr uint8_t REG_CONFIG_PORT0 = 0x06;
     static constexpr uint8_t REG_CONFIG_PORT1 = 0x07;
     
-    // レジスタ読み書き
+    /** PCA9539 レジスタへ 1 バイト書き込む */
     bool writeRegister(uint8_t reg, uint8_t value);
+    /** PCA9539 レジスタから 1 バイト読み込む */
     bool readRegister(uint8_t reg, uint8_t* value);
     
 public:
     ButtonInput(i2c_inst_t* port, uint8_t addr);
     
-    // 初期化
+    /** Port0 を入力、Port1 を出力に設定する */
     bool init();
     
-    // ボタン状態の更新（定期的に呼び出す）
+    /** I2C から Port0 を読み、current_state / last_state を更新する */
     void update();
     
-    // ボタンが押されているか
+    /** 指定ボタンが押下中か（アクティブロー） */
     bool isPressed(Button button) const;
     
-    // ボタンが離されたか（エッジ検出）
+    /** 直前の update 以降に離されたか（エッジ検出） */
     bool wasReleased(Button button) const;
     
-    // ボタンが押されたか（エッジ検出）
+    /** 直前の update 以降に押されたか（エッジ検出） */
     bool wasPressed(Button button) const;
     
-    // 全ボタンの状態を取得（ビットマスク）
+    /** Port0 の生ビットマスク（1=未押下） */
     uint8_t getAllButtons() const { return current_state; }
     
-    // 前回の状態を取得
+    /** 前回 update 時の Port0 状態 */
     uint8_t getLastState() const { return last_state; }
 };
 

@@ -10,6 +10,7 @@
 
 AudioOutput* AudioOutput::instance = nullptr;
 
+/** コンストラクタ: シングルトン instance を this に設定 */
 AudioOutput::AudioOutput(uint8_t pin_l, uint8_t pin_r, uint8_t pin_sd, uint8_t pin_abd)
     : pin_l(pin_l), pin_r(pin_r), pin_sd(pin_sd), pin_abd(pin_abd),
       sample_rate(AudioConfig::SAMPLE_RATE), initialized(false), playing(false),
@@ -17,6 +18,7 @@ AudioOutput::AudioOutput(uint8_t pin_l, uint8_t pin_r, uint8_t pin_sd, uint8_t p
     instance = this;
 }
 
+/** デストラクタ: 再生停止と PWM 無効化 */
 AudioOutput::~AudioOutput() {
     stop();
     if (initialized) {
@@ -25,6 +27,7 @@ AudioOutput::~AudioOutput() {
     }
 }
 
+/** シャットダウン解除、PWM/DMA 初期化、バッファゼロクリア */
 bool AudioOutput::init(uint32_t sample_rate) {
     this->sample_rate = sample_rate;
     
@@ -56,6 +59,7 @@ bool AudioOutput::init(uint32_t sample_rate) {
     return true;
 }
 
+/** 左右チャンネル PWM スライスをサンプルレートに合わせて設定 */
 void AudioOutput::initPWM() {
     // 左チャンネル
     gpio_set_function(pin_l, GPIO_FUNC_PWM);
@@ -82,6 +86,7 @@ void AudioOutput::initPWM() {
     pwm_set_chan_level(slice_r, channel_r, 0);
 }
 
+/** DMA チャンネル取得と IRQ0 ハンドラ登録 */
 void AudioOutput::initDMA() {
     // 左チャンネル用DMA
     dma_channel_l = dma_claim_unused_channel(true);
@@ -105,6 +110,7 @@ void AudioOutput::initDMA() {
     irq_set_enabled(DMA_IRQ_0, true);
 }
 
+/** DMA IRQ: 左チャンネル完了時に onDMATransferComplete を呼ぶ */
 void AudioOutput::dma_handler() {
     if (instance) {
         if (dma_irqn_get_channel_status(0, instance->dma_channel_l)) {
@@ -114,6 +120,7 @@ void AudioOutput::dma_handler() {
     }
 }
 
+/** 非アクティブバッファをコールバックで埋め、次の DMA 転送を開始 */
 void AudioOutput::onDMATransferComplete() {
     if (!playing || !callback) return;
     
@@ -172,6 +179,7 @@ void AudioOutput::onDMATransferComplete() {
     current_buffer = next_buffer;
 }
 
+/** 両バッファをプリフィルし、DMA 転送を開始 */
 void AudioOutput::start() {
     if (!initialized || playing) return;
     
@@ -233,6 +241,7 @@ void AudioOutput::start() {
     printf("AudioOutput: 再生開始\n");
 }
 
+/** DMA 中止と PWM 出力ゼロ */
 void AudioOutput::stop() {
     if (!playing) return;
     
@@ -247,12 +256,14 @@ void AudioOutput::stop() {
     printf("AudioOutput: 再生停止\n");
 }
 
+/** 音量（プレースホルダ） */
 void AudioOutput::setVolume(float volume) {
     // 音量制御はコールバック内で実装するか、PWMのレベルを調整
     // 簡易実装として、ここでは何もしない（コールバック側で処理）
     (void)volume;
 }
 
+/** テストトーン（未実装） */
 void AudioOutput::playTone(float frequency, float duration_ms) {
     // テスト用のトーン生成（簡易実装）
     // 注意: この実装は簡易版です。実際の使用では、より高度な音声再生システムを実装してください。

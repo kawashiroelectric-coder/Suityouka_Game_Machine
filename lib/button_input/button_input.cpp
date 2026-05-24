@@ -6,6 +6,7 @@
 #include "button_input.hpp"
 #include <cstdio>
 
+/** 初期状態は全ビット 1（未押下） */
 ButtonInput::ButtonInput(i2c_inst_t* port, uint8_t addr)
     : i2c_port(port), i2c_addr(addr), last_state(0xFF), current_state(0xFF), irq_enabled(false) {
 }
@@ -24,6 +25,7 @@ bool ButtonInput::readRegister(uint8_t reg, uint8_t* value) {
     return result == 1;
 }
 
+/** PCA9539 の Port0=入力 Port1=出力として初期化 */
 bool ButtonInput::init() {
     // Port0を入力に設定（1=入力, 0=出力）
     if (!writeRegister(REG_CONFIG_PORT0, 0xFF)) {
@@ -53,6 +55,7 @@ bool ButtonInput::init() {
     return true;
 }
 
+/** REG_INPUT_PORT0 を読み last_state / current_state を更新 */
 void ButtonInput::update() {
     uint8_t port0_value;
     if (readRegister(REG_INPUT_PORT0, &port0_value)) {
@@ -62,11 +65,13 @@ void ButtonInput::update() {
     // 読み取り失敗時は current_state を維持（誤検出を避ける）
 }
 
+/** アクティブロー: ビットが 0 なら押下中 */
 bool ButtonInput::isPressed(Button button) const {
     uint8_t bit = static_cast<uint8_t>(button);
     return !(current_state & (1 << bit));  // アクティブローなので反転
 }
 
+/** 前回 update からの押下→解放エッジ */
 bool ButtonInput::wasReleased(Button button) const {
     uint8_t bit = static_cast<uint8_t>(button);
     bool was_pressed = !(last_state & (1 << bit));
@@ -74,6 +79,7 @@ bool ButtonInput::wasReleased(Button button) const {
     return was_pressed && !is_pressed;
 }
 
+/** 前回 update からの解放→押下エッジ */
 bool ButtonInput::wasPressed(Button button) const {
     uint8_t bit = static_cast<uint8_t>(button);
     bool was_pressed = !(last_state & (1 << bit));

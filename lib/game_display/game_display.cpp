@@ -106,6 +106,7 @@ static const uint8_t kFont8x8[96][8] = {
     {0x6E, 0x3B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
 };
 
+/** フレームバッファに 8x8 グリフ 1 文字を描画 */
 static void drawCharFb(uint16_t* fb, uint16_t w, uint16_t h, int x, int y, char c, uint16_t color,
                        uint16_t bg, bool use_bg) {
     if (!fb || c < 32 || c > 127) return;
@@ -141,6 +142,7 @@ GameDisplay::GameDisplay()
       dirty_x1_(0),
       dirty_y1_(0) {}
 
+/** 描画先バッファと present 用 DMA リソースを登録 */
 void GameDisplay::bind(uint16_t* framebuffer, uint16_t width, uint16_t height, ST7789_LCD* lcd,
                        int dma_channel, uint8_t* dma_buffer, size_t dma_buffer_size) {
     framebuffer_ = framebuffer;
@@ -153,6 +155,7 @@ void GameDisplay::bind(uint16_t* framebuffer, uint16_t width, uint16_t height, S
     dirty_ = false;
 }
 
+/** Partial present 用に変更矩形をパディング付きでマージ */
 void GameDisplay::markDirtyRect(int x0, int y0, int x1, int y1) {
     if (!framebuffer_ || width_ == 0 || height_ == 0) return;
     static constexpr int kDirtyPad = 3;
@@ -184,6 +187,7 @@ uint16_t GameDisplay::rgb(uint8_t r, uint8_t g, uint8_t b) {
     return Color::rgb(r, g, b);
 }
 
+/** フレームバッファ全面を color で塗る */
 void GameDisplay::clear(uint16_t color) {
     if (!framebuffer_) return;
     const uint32_t n = (uint32_t)width_ * height_;
@@ -193,6 +197,7 @@ void GameDisplay::clear(uint16_t color) {
     markDirtyRect(0, 0, (int)width_ - 1, (int)height_ - 1);
 }
 
+/** クリップ付き矩形塗りつぶしと dirty 更新 */
 void GameDisplay::fillRect(int x, int y, int w, int h, uint16_t color) {
     if (!framebuffer_ || w <= 0 || h <= 0) return;
 
@@ -216,6 +221,7 @@ void GameDisplay::fillRect(int x, int y, int w, int h, uint16_t color) {
     markDirtyRect(x0, y0, x1 - 1, y1 - 1);
 }
 
+/** rects 配列の矩形を順に fillRect */
 void GameDisplay::fillRects(const FillRect* rects, size_t count) {
     if (!rects) return;
     for (size_t i = 0; i < count; i++) {
@@ -224,6 +230,7 @@ void GameDisplay::fillRects(const FillRect* rects, size_t count) {
     }
 }
 
+/** 改行対応 8x8 テキスト（背景色あり） */
 void GameDisplay::drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bg_color) {
     if (!framebuffer_ || !text) return;
     int cx = x;
@@ -252,6 +259,7 @@ void GameDisplay::drawTextBg(int x, int y, const char* text, uint16_t color, uin
     }
 }
 
+/** drawRawImageDMA で全面転送 */
 void GameDisplay::presentFull() {
     if (!lcd_ || !framebuffer_) return;
     lcd_->drawRawImageDMA(0, 0, width_, height_, framebuffer_, dma_channel_, dma_buffer_,
@@ -259,6 +267,7 @@ void GameDisplay::presentFull() {
     dirty_ = false;
 }
 
+/** dirty 矩形のみ drawRawImageDMA */
 void GameDisplay::presentPartial() {
     if (!lcd_ || !framebuffer_) return;
     if (!dirty_) return;
@@ -271,6 +280,7 @@ void GameDisplay::presentPartial() {
     dirty_ = false;
 }
 
+/** present_mode_ に応じて Full または Partial */
 void GameDisplay::present() {
     if (present_mode_ == PresentMode::Partial) {
         presentPartial();
