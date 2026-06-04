@@ -128,97 +128,200 @@ static void drawCharFb(uint16_t* fb, uint16_t w, uint16_t h, int x, int y, char 
 }
 
 GameDisplay::GameDisplay()
-    : framebuffer_(nullptr),
+    : buffers_{nullptr, nullptr},
+      work_buffer_(nullptr),
       width_(0),
       height_(0),
+      buffer_height_(0),
+      band_index_(0),
+      current_buffer_index_(0),
+      inflight_buffer_index_(-1),
+      transfer_active_(false),
+      band_y0_(0),
+      band_rows_(0),
       lcd_(nullptr),
       dma_channel_(-1),
       dma_buffer_(nullptr),
-      dma_buffer_size_(0),
-      present_mode_(PresentMode::Full),
-      dirty_(false),
-      dirty_x0_(0),
-      dirty_y0_(0),
-      dirty_x1_(0),
-      dirty_y1_(0) {}
+      dma_buffer_size_(0) {}
 
-/** 描画先バッファと present 用 DMA リソースを登録 */
-void GameDisplay::bind(uint16_t* framebuffer, uint16_t width, uint16_t height, ST7789_LCD* lcd,
-                       int dma_channel, uint8_t* dma_buffer, size_t dma_buffer_size) {
-    framebuffer_ = framebuffer;
+/** バンドバッファと転送用 DMA リソースを登録 */
+void GameDisplay::bind(uint16_t* buffer_a, uint16_t* buffer_b, uint16_t width, uint16_t height,
+                       uint16_t buffer_height, ST7789_LCD* lcd, int dma_channel,
+                       uint8_t* dma_buffer, size_t dma_buffer_size) {
+    buffers_[0] = buffer_a;
+    buffers_[1] = buffer_b ? buffer_b : buffer_a;
+    work_buffer_ = buffers_[0];
     width_ = width;
     height_ = height;
+    buffer_height_ = (buffer_height > 0) ? buffer_height : height;
+    if (buffer_height_ > height_) buffer_height_ = height_;
+    band_index_ = 0;
+    current_buffer_index_ = 0;
+    inflight_buffer_index_ = -1;
+    transfer_active_ = false;
+    band_y0_ = 0;
+    band_rows_ = buffer_height_;
     lcd_ = lcd;
     dma_channel_ = dma_channel;
     dma_buffer_ = dma_buffer;
     dma_buffer_size_ = dma_buffer_size;
-    dirty_ = false;
-}
-
-/** Partial present 用に変更矩形をパディング付きでマージ */
-void GameDisplay::markDirtyRect(int x0, int y0, int x1, int y1) {
-    if (!framebuffer_ || width_ == 0 || height_ == 0) return;
-    static constexpr int kDirtyPad = 3;
-    x0 -= kDirtyPad;
-    y0 -= kDirtyPad;
-    x1 += kDirtyPad;
-    y1 += kDirtyPad;
-    if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
-    if (x1 >= (int)width_) x1 = (int)width_ - 1;
-    if (y1 >= (int)height_) y1 = (int)height_ - 1;
-    if (x0 > x1 || y0 > y1) return;
-
-    if (!dirty_) {
-        dirty_x0_ = x0;
-        dirty_y0_ = y0;
-        dirty_x1_ = x1;
-        dirty_y1_ = y1;
-        dirty_ = true;
-        return;
-    }
-    if (x0 < dirty_x0_) dirty_x0_ = x0;
-    if (y0 < dirty_y0_) dirty_y0_ = y0;
-    if (x1 > dirty_x1_) dirty_x1_ = x1;
-    if (y1 > dirty_y1_) dirty_y1_ = y1;
 }
 
 uint16_t GameDisplay::rgb(uint8_t r, uint8_t g, uint8_t b) {
     return Color::rgb(r, g, b);
 }
 
-/** フレームバッファ全面を color で塗る */
-void GameDisplay::clear(uint16_t color) {
-    if (!framebuffer_) return;
-    const uint32_t n = (uint32_t)width_ * height_;
-    for (uint32_t i = 0; i < n; i++) {
-        framebuffer_[i] = color;
-    }
-    markDirtyRect(0, 0, (int)width_ - 1, (int)height_ - 1);
+/** 画面を覆うのに必要なバンド数 */
+int GameDisplay::bandCount() const {
+    if (buffer_height_ == 0) return 0;
+    return (height_ + buffer_height_ - 1) / buffer_height_;
 }
 
-/** クリップ付き矩形塗りつぶしと dirty 更新 */
+/** バンド描画開始: 描画先バッファ・y 原点・行数を設定 */
+void GameDisplay::beginBand(int band) {
+    band_index_ = band;
+    current_buffer_index_ = (band & 1);
+    band_y0_ = band * (int)buffer_height_;
+    int remaining = (int)height_ - band_y0_;
+    if (remaining < 0) remaining = 0;
+    band_rows_ = (remaining < (int)buffer_height_) ? remaining : (int)buffer_height_;
+    work_buffer_ = buffers_[current_buffer_index_] ? buffers_[current_buffer_index_] : buffers_[0];
+    // 今回使うバッファがまだ DMA 送信中なら完了まで待つ（バッファ再利用保護）
+    if (lcd_ && transfer_active_ && inflight_buffer_index_ == current_buffer_index_) {
+        while (lcd_->isDrawRawImageDMABusy()) {
+            lcd_->pumpDrawRawImageDMA();
+        }
+        transfer_active_ = false;
+        inflight_buffer_index_ = -1;
+    }
+}
+
+/** 現在のバンドを LCD へ転送（非ブロッキング DMA をキック） */
+void GameDisplay::endBand() {
+    if (!lcd_ || !work_buffer_ || band_rows_ <= 0) return;
+    // SPI には 1 本しか流せないため、前バンド送信中はここでポンプして完了待ち
+    while (lcd_->isDrawRawImageDMABusy()) {
+        lcd_->pumpDrawRawImageDMA();
+    }
+    if (lcd_->beginDrawRawImageDMA(0, (uint16_t)band_y0_, width_, (uint16_t)band_rows_,
+                                   work_buffer_, width_, dma_channel_, dma_buffer_,
+                                   dma_buffer_size_)) {
+        transfer_active_ = true;
+        inflight_buffer_index_ = current_buffer_index_;
+    } else {
+        // 念のため begin に失敗したらブロッキングでフォールバック
+        lcd_->drawRawImageDMA(0, (uint16_t)band_y0_, width_, (uint16_t)band_rows_, work_buffer_,
+                              dma_channel_, dma_buffer_, dma_buffer_size_);
+        transfer_active_ = false;
+        inflight_buffer_index_ = -1;
+    }
+}
+
+void GameDisplay::waitForTransferComplete() {
+    if (!lcd_) return;
+    while (lcd_->isDrawRawImageDMABusy()) {
+        lcd_->pumpDrawRawImageDMA();
+    }
+    transfer_active_ = false;
+    inflight_buffer_index_ = -1;
+}
+
+/** 全画面を単色で塗る（バンドバッファを 1 度埋めて全バンドへ転送） */
+void GameDisplay::fillScreen(uint16_t color) {
+    waitForTransferComplete();
+    uint16_t* buf = buffers_[0];
+    if (!buf) return;
+    const uint32_t n = (uint32_t)width_ * buffer_height_;
+    for (uint32_t i = 0; i < n; i++) {
+        buf[i] = color;
+    }
+    if (!lcd_) return;
+    const int bands = bandCount();
+    for (int b = 0; b < bands; b++) {
+        int y0 = b * (int)buffer_height_;
+        int rows = (int)height_ - y0;
+        if (rows > (int)buffer_height_) rows = (int)buffer_height_;
+        if (rows <= 0) break;
+        lcd_->drawRawImageDMA(0, (uint16_t)y0, width_, (uint16_t)rows, buf, dma_channel_,
+                              dma_buffer_, dma_buffer_size_);
+    }
+}
+
+/** 現在のバンドを単色で塗る */
+void GameDisplay::clear(uint16_t color) {
+    if (!work_buffer_ || band_rows_ <= 0) return;
+    const uint32_t n = (uint32_t)width_ * band_rows_;
+    for (uint32_t i = 0; i < n; i++) {
+        work_buffer_[i] = color;
+    }
+}
+
+/** クリップ付き矩形塗りつぶし（論理座標 → 現在バンドへクリップ） */
 void GameDisplay::fillRect(int x, int y, int w, int h, uint16_t color) {
-    if (!framebuffer_ || w <= 0 || h <= 0) return;
+    if (!work_buffer_ || w <= 0 || h <= 0) return;
 
     int x0 = x;
-    int y0 = y;
     int x1 = x + w;
+    int y0 = y;
     int y1 = y + h;
 
     if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
     if (x1 > (int)width_) x1 = (int)width_;
-    if (y1 > (int)height_) y1 = (int)height_;
+    if (y0 < bandTop()) y0 = bandTop();
+    if (y1 > bandBottom()) y1 = bandBottom();
     if (x0 >= x1 || y0 >= y1) return;
 
     for (int row = y0; row < y1; row++) {
-        uint16_t* line = framebuffer_ + (uint32_t)row * width_;
+        uint16_t* line = work_buffer_ + (uint32_t)(row - band_y0_) * width_;
         for (int col = x0; col < x1; col++) {
             line[col] = color;
         }
     }
-    markDirtyRect(x0, y0, x1 - 1, y1 - 1);
+}
+
+/** RGB565 画像全体を転写（クリッピング付き、現在バンドのみ書き込み） */
+void GameDisplay::drawImage(int dx, int dy, int img_w, int img_h, const uint16_t* pixels) {
+    if (!work_buffer_ || !pixels || img_w <= 0 || img_h <= 0) return;
+
+    int sx = 0, sy = 0, sw = img_w, sh = img_h;
+    if (dx < 0) { sx = -dx; sw += dx; dx = 0; }
+    if (dy < 0) { sy = -dy; sh += dy; dy = 0; }
+    if (dx + sw > (int)width_)  sw = (int)width_ - dx;
+    if (dy + sh > (int)height_) sh = (int)height_ - dy;
+    if (sw <= 0 || sh <= 0) return;
+
+    for (int row = 0; row < sh; row++) {
+        const int screen_y = dy + row;
+        if (screen_y < bandTop() || screen_y >= bandBottom()) continue;
+        const uint16_t* src = pixels + (sy + row) * img_w + sx;
+        uint16_t* dst = work_buffer_ + (uint32_t)(screen_y - band_y0_) * width_ + dx;
+        memcpy(dst, src, sw * sizeof(uint16_t));
+    }
+}
+
+/** RGB565 画像の部分矩形を転写（現在バンドのみ書き込み） */
+void GameDisplay::drawImageSub(int dx, int dy, int img_w, int img_h, const uint16_t* pixels,
+                               int sx, int sy, int sw, int sh) {
+    if (!work_buffer_ || !pixels || img_w <= 0 || img_h <= 0) return;
+    if (sx < 0) { dx -= sx; sw += sx; sx = 0; }
+    if (sy < 0) { dy -= sy; sh += sy; sy = 0; }
+    if (sx + sw > img_w) sw = img_w - sx;
+    if (sy + sh > img_h) sh = img_h - sy;
+    if (sw <= 0 || sh <= 0) return;
+
+    if (dx < 0) { sx -= dx; sw += dx; dx = 0; }
+    if (dy < 0) { sy -= dy; sh += dy; dy = 0; }
+    if (dx + sw > (int)width_)  sw = (int)width_ - dx;
+    if (dy + sh > (int)height_) sh = (int)height_ - dy;
+    if (sw <= 0 || sh <= 0) return;
+
+    for (int row = 0; row < sh; row++) {
+        const int screen_y = dy + row;
+        if (screen_y < bandTop() || screen_y >= bandBottom()) continue;
+        const uint16_t* src = pixels + (sy + row) * img_w + sx;
+        uint16_t* dst = work_buffer_ + (uint32_t)(screen_y - band_y0_) * width_ + dx;
+        memcpy(dst, src, sw * sizeof(uint16_t));
+    }
 }
 
 /** rects 配列の矩形を順に fillRect */
@@ -230,61 +333,20 @@ void GameDisplay::fillRects(const FillRect* rects, size_t count) {
     }
 }
 
-/** 改行対応 8x8 テキスト（背景色あり） */
+/** 改行対応 8x8 テキスト（背景色あり、現在バンドへクリップ） */
 void GameDisplay::drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bg_color) {
-    if (!framebuffer_ || !text) return;
+    if (!work_buffer_ || !text) return;
     int cx = x;
-    int min_x = x;
-    int min_y = y;
-    int max_x = x;
-    int max_y = y;
     while (*text) {
         if (*text == '\n') {
             cx = x;
             y += 8;
         } else {
-            drawCharFb(framebuffer_, width_, height_, cx, y, *text, color, bg_color, true);
-            int rx1 = cx + 7;
-            int ry1 = y + 7;
-            if (cx < min_x) min_x = cx;
-            if (y < min_y) min_y = y;
-            if (rx1 > max_x) max_x = rx1;
-            if (ry1 > max_y) max_y = ry1;
+            // y はバンドローカル座標に変換（drawCharFb は [0, band_rows_) でクリップ）
+            drawCharFb(work_buffer_, width_, (uint16_t)band_rows_, cx, y - band_y0_, *text, color,
+                       bg_color, true);
             cx += 8;
         }
         text++;
-    }
-    if (max_x >= min_x && max_y >= min_y) {
-        markDirtyRect(min_x, min_y, max_x, max_y);
-    }
-}
-
-/** drawRawImageDMA で全面転送 */
-void GameDisplay::presentFull() {
-    if (!lcd_ || !framebuffer_) return;
-    lcd_->drawRawImageDMA(0, 0, width_, height_, framebuffer_, dma_channel_, dma_buffer_,
-                          dma_buffer_size_);
-    dirty_ = false;
-}
-
-/** dirty 矩形のみ drawRawImageDMA */
-void GameDisplay::presentPartial() {
-    if (!lcd_ || !framebuffer_) return;
-    if (!dirty_) return;
-
-    const int w = dirty_x1_ - dirty_x0_ + 1;
-    const int h = dirty_y1_ - dirty_y0_ + 1;
-    const uint16_t* src = framebuffer_ + (uint32_t)dirty_y0_ * width_ + dirty_x0_;
-    lcd_->drawRawImageDMA((uint16_t)dirty_x0_, (uint16_t)dirty_y0_, (uint16_t)w, (uint16_t)h,
-                          src, dma_channel_, dma_buffer_, dma_buffer_size_);
-    dirty_ = false;
-}
-
-/** present_mode_ に応じて Full または Partial */
-void GameDisplay::present() {
-    if (present_mode_ == PresentMode::Partial) {
-        presentPartial();
-    } else {
-        presentFull();
     }
 }

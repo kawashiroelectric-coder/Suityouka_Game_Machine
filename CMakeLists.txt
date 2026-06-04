@@ -68,9 +68,13 @@ add_executable(Suityouka_Game_Machine
 pico_set_program_name(Suityouka_Game_Machine "Suityouka_Game_Machine")
 pico_set_program_version(Suityouka_Game_Machine "0.1")
 
-# PIOヘッダー生成（blink.pioが存在する場合）
+# PIOヘッダー生成
 if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/blink.pio)
     pico_generate_pio_header(Suityouka_Game_Machine ${CMAKE_CURRENT_LIST_DIR}/blink.pio)
+endif()
+if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/lib/pcm5102_i2s/pcm5102_i2s.pio)
+    pico_generate_pio_header(Suityouka_Game_Machine
+        ${CMAKE_CURRENT_LIST_DIR}/lib/pcm5102_i2s/pcm5102_i2s.pio)
 endif()
 
 # ============================================
@@ -92,6 +96,7 @@ target_include_directories(Suityouka_Game_Machine PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/lib/game_display    # ゲーム描画
     #${CMAKE_CURRENT_LIST_DIR}/lib/game_loader    # ゲームローダーライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/ST7789         # ST7789 LCD ドライバヘッダー
+    ${CMAKE_CURRENT_LIST_DIR}/lib/pcm5102_i2s    # PCM5102 32bit I2S PIO
     ${CMAKE_CURRENT_LIST_DIR}/lib/sd_card_hw     # SD ピン定義 (sd_pins.h)
     # Lua headers will be provided by FetchContent-built library
 )
@@ -151,6 +156,7 @@ target_compile_definitions(Suityouka_Game_Machine PRIVATE
 target_link_libraries(Suityouka_Game_Machine 
     # Pico SDK基本ライブラリ
     pico_stdlib 
+    pico_multicore   # マルチコア処理（必要に応じて）
     
     # ハードウェア抽象化レイヤー
     hardware_spi      # SPI通信（LCD、SDカード用）
@@ -169,6 +175,8 @@ target_compile_definitions(Suityouka_Game_Machine PRIVATE
 #  GAME_MACHINE_DEBUG   # 常に有効
 )
 
+
+target_link_options(Suityouka_Game_Machine PRIVATE "LINKER:--print-memory-usage")
 # ============================================
 # 出力ファイル生成（.uf2, .hex, .bin等）
 # ============================================

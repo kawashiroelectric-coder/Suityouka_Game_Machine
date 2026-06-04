@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <cstdio>
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
 #include "hardware/gpio.h"
 #include "hardware/adc.h"
 #include "hardware/i2c.h"
@@ -36,8 +37,9 @@ extern "C" {
 #include "sd_debug.h"
 
 
-// フレームバッファ
-static uint16_t framebuffer[GameConfig::SCREEN_WIDTH * GameConfig::SCREEN_HEIGHT];
+//  RGB565 ダブルバッファ（描画用 / DMA 送信用）
+static uint16_t framebuffer_a[GameConfig::BUFFER_WIDTH * GameConfig::BUFFER_HEIGHT];
+static uint16_t framebuffer_b[GameConfig::BUFFER_WIDTH * GameConfig::BUFFER_HEIGHT];
 
 // グローバルオブジェクト
 static ST7789_LCD* lcd = nullptr;
@@ -77,8 +79,9 @@ static bool luaHostButtonPressed(void* user_data, int button_index) {
 
 static void setupLuaInterpreter() {
     g_luaHostCtx.buttons = buttons;
-    g_gameDisplay.bind(framebuffer, GameConfig::SCREEN_WIDTH, GameConfig::SCREEN_HEIGHT, lcd,
-                       dma_channel, dma_buffer, sizeof(dma_buffer));
+    g_gameDisplay.bind(framebuffer_a, framebuffer_b, GameConfig::SCREEN_WIDTH,
+                       GameConfig::SCREEN_HEIGHT, GameConfig::BUFFER_HEIGHT, lcd, dma_channel,
+                       dma_buffer, sizeof(dma_buffer));
     LuaHostHooks hooks = {};
     hooks.user_data = &g_luaHostCtx;
     hooks.draw_text_bg = luaHostDrawText;
@@ -151,13 +154,7 @@ static void listSdRoot() {
 
 // 画面クリア
 void clearScreen(uint16_t color) {
-    for (uint32_t i = 0; i < GameConfig::SCREEN_WIDTH * GameConfig::SCREEN_HEIGHT; i++) {
-        framebuffer[i] = color;
-    }
-    if (lcd) {
-        lcd->drawRawImageDMA(0, 0, GameConfig::SCREEN_WIDTH, GameConfig::SCREEN_HEIGHT,
-                           framebuffer, dma_channel, dma_buffer, sizeof(dma_buffer));
-    }
+    g_gameDisplay.fillScreen(color);
 }
 
 // テキスト表示（簡易版）
@@ -223,8 +220,19 @@ void initDMA(ST7789_LCD& lcd_obj) {
     printf("DMA初期化完了\n");
 }
 
+// 1. Core 1（2つ目のコア）で動かしたいプログラムを関数として定義する
+void core1_entry() {
+    while (true) {
+        // ここはCore 1だけでグルグル回る
+        printf("Hello from Core 1!\n");
+        sleep_ms(1000);
+    }
+}
+
 int main() {
 
+    // 💡 ここでCore 1を叩き起こし、上記の関数を実行させる！
+    //multicore_launch_core1(core1_entry);
     
     stdio_init_all();
     //while (!stdio_usb_connected()) {
@@ -283,14 +291,16 @@ int main() {
         printf("ボタン入力初期化失敗\n");
         return -1;
     }
-    
+    buttons->setBatteryLevel(BatteryLedConfig::LEVEL_EMPTY); // 起動時はバッテリー残量不明として全LED消灯
+
     // LCD初期化
     printf("LCD初期化中...\n");
     lcd = new ST7789_LCD();
     lcd->init();
     initDMA(*lcd);
+    setupLuaInterpreter();
     clearScreen(Color::GRAY);
-    drawTextBg(10, 100, "LCD init", Color::WHITE, Color::GRAY);
+    drawTextBg(10, 100, "LCD init", Color::WHITE, Color::BLACK);
     
     
     // 音声出力初期化
@@ -300,8 +310,6 @@ int main() {
     audio->init();
     drawTextBg(10, 120, "Audio init", Color::WHITE, Color::GRAY);
 
-    setupLuaInterpreter();
-    
     /*
     // ゲームローダー初期化
     printf("ゲームローダー初期化中...\n");
@@ -322,7 +330,7 @@ int main() {
     sleep_ms(2000);
     */
     printf("=== 初期化完了 ===\n");
-    drawTextBg(10, 140, "Start main loop", Color::WHITE, Color::GRAY);
+    drawTextBg(10, 140, "Start main loop", Color::WHITE, Color::BLACK);
 
     bool lua_executed_for_mount = false;
     if (sd_mounted) {
@@ -340,7 +348,7 @@ int main() {
     while (true) {
         if (connectedFlag) {
             if (!isSdCardPresent()) {
-                drawTextBg(10, 100, "SD disconnected", Color::RED, Color::GRAY);
+                drawTextBg(10, 100, "SD disconnected", Color::RED, Color::BLACK);
                 unmountSdCard();
                 syncLuaSdMountState();
                 connectedFlag = false;
@@ -351,7 +359,7 @@ int main() {
                    && mountSdCard()) {
             lastMountAttemptMs = to_ms_since_boot(get_absolute_time());
             syncLuaSdMountState();
-            drawTextBg(10, 160, "sd connected", Color::WHITE, Color::GRAY);
+            drawTextBg(10, 160, "sd connected", Color::WHITE, Color::BLACK);
             printf("SD Card connected.\n");
             connectedFlag = true;
             DIR dir;
@@ -374,7 +382,7 @@ int main() {
                     snprintf(lcdBuffer, sizeof(lcdBuffer), "%s", fno.fname);
                     // snprintf(lcdBuffer, sizeof(lcdBuffer), "%s %lu",
                     //          fno.fname, (unsigned long)fno.fsize);
-                    drawTextBg(10, y, lcdBuffer, Color::BLUE, Color::GRAY);
+                    drawTextBg(10, y, lcdBuffer, Color::BLUE, Color::BLACK);
                     printf("%-32s%lu\n", fno.fname,
                             (unsigned long)fno.fsize);
                     line++;

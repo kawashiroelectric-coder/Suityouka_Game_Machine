@@ -23,10 +23,20 @@ struct LuaHostHooks {
 
 struct lua_State;
 
+/** Lua から参照する RGB565 画像スロット */
+struct ImageSlot {
+    uint16_t* pixels = nullptr;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    bool used = false;
+};
+
 /** SD 上の Lua スクリプト読み込みと machine.* API 提供 */
 class LuaInterpreter {
 public:
     static constexpr size_t kDefaultMaxScriptBytes = 48 * 1024;
+    static constexpr int kMaxImageSlots = 16;
+    static constexpr size_t kMaxImageBytes = 200 * 1024;
 
     LuaInterpreter();
     ~LuaInterpreter();
@@ -50,12 +60,19 @@ public:
 
     const LuaHostHooks& hostHooks() const { return hooks_; }
 
+    /** 画像スロット操作（Lua バインディングから呼ばれる） */
+    int loadImage(const char* path, uint16_t w, uint16_t h);
+    const ImageSlot* getImage(int id) const;
+    void freeImage(int id);
+    void freeAllImages();
+
 private:
     LuaHostHooks hooks_;
     bool sd_mounted_;
     size_t max_script_bytes_;
     char lcd_line_[64];
     lua_State* game_lua_;
+    ImageSlot images_[kMaxImageSlots];
 
     bool readSdFileToBuffer(const char* path, char** out_buf, size_t* out_len) const;
     bool endsWithLuaExt(const char* name) const;

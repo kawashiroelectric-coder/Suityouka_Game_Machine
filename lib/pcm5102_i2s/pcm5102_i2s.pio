@@ -1,0 +1,95 @@
+;
+; PCM5102 向け 32bit ステレオ I2S 送信（1 ステートマシン）
+;
+; ピン（config.hpp AudioConfig::I2S と同じ配線想定）:
+;   GP19 = DIN (DATA, OUT)
+;   GP20 = LRCK / WS  (side-set bit 0)
+;   GP21 = BCK / SCK  (side-set bit 1)
+;
+; FIFO ワード形式（autopull 32bit, 左シフト MSB first）:
+;   1 ワード = 左 32bit | 右 32bit ではなく、
+;   pico-extras 同様「1 ワードに L(下位16相当) + R(上位16)」の S16 用説明があるが、
+;   S32 では DMA から 32bit 単位で L, R を順に送る（2 words / フレーム）。
+;   実運用: ステレオ interleaved int32_t[L,R,L,R,...] を 32bit 幅で DMA 転送。
+;
+; BCLK = 64 * sample_rate (32bit x 2ch)
+; clkdiv は pcm5102_i2s_32_program_init() で設定する。
+;
+; 元: Raspberry Pi pico-extras audio_i2s.pio / elehobica pico_audio_i2s_32b (BSD-3-Clause)
+
+.program pcm5102_i2s_32
+.side_set 2
+
+; side-set: bit0 = LRCK (GP20), bit1 = BCK (GP21)
+
+.wrap_target
+bitloop1:
+    out pins, 1             side 0b00
+    jmp x-- bitloop1        side 0b10
+    out pins, 1             side 0b01
+    set x, 31               side 0b11
+
+bitloop0:
+    out pins, 1             side 0b01
+    jmp x-- bitloop0        side 0b11
+    out pins, 1             side 0b00
+public entry_point:
+    set x, 31               side 0b10
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+/**
+ * PCM5102 用 32bit I2S PIO を初期化する（1 SM: BCK/LRCK + DATA）。
+ *
+ * @param pio              PIO0 または PIO1
+ * @param sm               使用するステートマシン番号
+ * @param offset           pio_add_program() で得たオフセット
+ * @param data_pin         DIN (例: 19)
+ * @param clock_pin_base   LRCK ピン (例: 20)。BCK は base+1 (例: 21)
+ * @param sample_rate_hz   サンプルレート (Hz)
+ */
+static inline void pcm5102_i2s_32_program_init(PIO pio, uint sm, uint offset, uint data_pin,
+                                               uint clock_pin_base, uint sample_rate_hz) {
+    pio_gpio_init(pio, data_pin);
+    pio_gpio_init(pio, clock_pin_base);
+    pio_gpio_init(pio, clock_pin_base + 1);
+
+    pio_sm_config c = pcm5102_i2s_32_program_get_default_config(offset);
+    sm_config_set_out_pins(&c, data_pin, 1);
+    sm_config_set_sideset_pins(&c, clock_pin_base);
+    sm_config_set_out_shift(&c, false, true, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    /* 32bit stereo: 64 BCLK per LRCK period; 手順あたり約 4 サイクル → おおよそ 256*fs */
+    uint32_t sys_hz = clock_get_hz(clk_sys);
+    float bclk_hz = (float)sample_rate_hz * 64.0f;
+    float cycles_per_bclk = 4.0f;
+    float div = (float)sys_hz / (bclk_hz * cycles_per_bclk);
+    if (div < 1.0f) {
+        div = 1.0f;
+    }
+    sm_config_set_clkdiv(&c, div);
+
+    pio_sm_init(pio, sm, offset, &c);
+
+    uint32_t pin_mask = (1u << data_pin) | (3u << clock_pin_base);
+    pio_sm_set_consecutive_pindirs(pio, sm, data_pin, 1, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, clock_pin_base, 2, true);
+    pio_sm_set_pins_with_mask(pio, sm, 0, pin_mask);
+    pio_sm_clear_fifos(pio, sm);
+
+    pio_sm_exec(pio, sm, pio_encode_jmp(offset + pcm5102_i2s_32_offset_entry_point));
+}
+
+/** SM を有効化 */
+static inline void pcm5102_i2s_32_start(PIO pio, uint sm) {
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+/** SM を停止 */
+static inline void pcm5102_i2s_32_stop(PIO pio, uint sm) {
+    pio_sm_set_enabled(pio, sm, false);
+}
+%}

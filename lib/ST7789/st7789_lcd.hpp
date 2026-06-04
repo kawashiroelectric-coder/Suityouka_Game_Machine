@@ -44,8 +44,8 @@ private:
     static constexpr uint8_t PIN_CS   = 1;
     static constexpr uint8_t PIN_SCK  = 2;
     static constexpr uint8_t PIN_MOSI = 3;
-    static constexpr uint8_t PIN_RST  = 8;
-    static constexpr uint8_t PIN_DC   = 9;
+    static constexpr uint8_t PIN_RST  = 4;
+    static constexpr uint8_t PIN_DC   = 5;
     static constexpr uint8_t PIN_BLK  = 14;
     
     static constexpr uint16_t PHYSICAL_WIDTH  = 240;
@@ -94,7 +94,27 @@ private:
     };
     
     spi_inst_t* spi_port;
-    
+
+    /** 非ブロッキング DMA 転送の進行状態 */
+    struct AsyncDmaState {
+        bool active = false;
+        uint16_t x = 0;
+        uint16_t y = 0;
+        uint16_t w = 0;
+        uint16_t h = 0;
+        const uint16_t* data = nullptr;
+        uint32_t src_stride = 0;
+        int dma_channel = -1;
+        uint8_t* dma_buffer = nullptr;
+        size_t dma_buffer_size = 0;
+        uint32_t row = 0;
+        uint32_t col_processed = 0;
+    };
+    AsyncDmaState dma_async_;
+
+    void dmaAsyncStartChunk();
+    void dmaAsyncFinish();
+
     /** DC=0: コマンド 1 バイト */
     void writeCommand(uint8_t cmd);
     /** DC=1: データ 1 バイト */
@@ -161,10 +181,18 @@ public:
     void drawBMP(uint16_t x, uint16_t y, const uint16_t* bmpData);
     /** RGB565 配列を SPI で転送 */
     void drawRawImage(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t* data);
-    /** RGB565 配列を DMA で転送（行単位チャンク） */
-    void drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
-                         const uint16_t* data, int dma_channel, 
-                         uint8_t* dma_buffer, size_t buffer_size);
+    /** RGB565 配列を DMA で転送（行単位チャンク、完了までブロック） */
+    void drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                         const uint16_t* data, int dma_channel, uint8_t* dma_buffer,
+                         size_t buffer_size);
+    /** 非ブロッキング DMA 転送を開始（src_stride=0 のとき w をストライドとする） */
+    bool beginDrawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                              const uint16_t* data, uint32_t src_stride, int dma_channel,
+                              uint8_t* dma_buffer, size_t buffer_size);
+    /** 進行中の DMA を 1 ステップ進める（メインループから呼ぶ） */
+    void pumpDrawRawImageDMA();
+    /** 非ブロッキング DMA が動作中か */
+    bool isDrawRawImageDMABusy() const { return dma_async_.active; }
 
     /** 現在の論理幅（回転後） */
     uint16_t width() const { return _width; }

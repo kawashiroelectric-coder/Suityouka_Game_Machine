@@ -29,7 +29,11 @@ private:
     uint8_t i2c_addr;
     uint8_t last_state;
     uint8_t current_state;
+    uint8_t port1_output_;
     bool irq_enabled;
+
+    /** Port1 出力レジスタへ反映（P1.3〜P1.7 は常に 0） */
+    bool writePort1Output();
     
     static constexpr uint8_t REG_INPUT_PORT0 = 0x00;
     static constexpr uint8_t REG_INPUT_PORT1 = 0x01;
@@ -44,6 +48,7 @@ private:
     bool writeRegister(uint8_t reg, uint8_t value);
     /** PCA9539 レジスタから 1 バイト読み込む */
     bool readRegister(uint8_t reg, uint8_t* value);
+    
     
 public:
     ButtonInput(i2c_inst_t* port, uint8_t addr);
@@ -68,6 +73,21 @@ public:
     
     /** 前回 update 時の Port0 状態 */
     uint8_t getLastState() const { return last_state; }
+
+    /** Port1 の P1.0〜P1.2（pin_index 0=FULL, 1=MID, 2=LOW）を ON/OFF。他 LED は変更しない */
+    bool setBatteryLed(uint8_t pin_index, bool on);
+
+    /**
+     * 残量表示（同時 1 灯のみ）
+     * 0=消灯, 1=P1.2(LOW), 2=P1.1(MID), 3=P1.0(FULL)
+     */
+    bool setBatteryLevel(uint8_t level);
+
+    /** P1.0〜P1.2 のマスク（下位 3bit）を一括設定 */
+    bool setBatteryLedMask(uint8_t mask);
+
+    /** 現在の Port1 出力イメージ（下位 3bit が LED） */
+    uint8_t batteryLedMask() const { return port1_output_ & BatteryLedConfig::PORT1_MASK; }
 };
 
 #endif // BUTTON_INPUT_HPP

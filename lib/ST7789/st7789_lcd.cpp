@@ -586,54 +586,108 @@ static void spiWaitIdle(spi_inst_t* spi_port) {
     }
 }
 
-void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
-                                  const uint16_t* data, int dma_channel, uint8_t* dma_buffer,
-                                  size_t buffer_size) {
-    if (x >= _width || y >= _height || !data || !dma_buffer || buffer_size < 2) return;
-    if (x + w > _width) w = _width - x;
-    if (y + h > _height) h = _height - y;
+void ST7789_LCD::dmaAsyncFinish() {
+    gpio_put(PIN_CS, 1);
+    dma_async_.active = false;
+    dma_async_.data = nullptr;
+}
 
-    setWindow(x, y, x + w - 1, y + h - 1);
-
-    gpio_put(PIN_DC, 1);
-    gpio_put(PIN_CS, 0);
-
-    const uint32_t buffer_pixels = static_cast<uint32_t>(buffer_size / 2);
-
-    for (uint32_t row = 0; row < h; row++) {
-        const uint16_t* row_src = data + row * _width;
-        uint32_t col_processed = 0;
-
-        while (col_processed < w) {
-            uint32_t transfer_pixels = w - col_processed;
-            if (transfer_pixels > buffer_pixels) {
-                transfer_pixels = buffer_pixels;
-            }
-
-            for (uint32_t i = 0; i < transfer_pixels; i++) {
-                const uint16_t color = row_src[col_processed + i];
-                dma_buffer[i * 2] = static_cast<uint8_t>(color >> 8);
-                dma_buffer[i * 2 + 1] = static_cast<uint8_t>(color & 0xFF);
-            }
-
-            dma_channel_wait_for_finish_blocking(dma_channel);
-
-            dma_channel_config c = dma_channel_get_default_config(dma_channel);
-            channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
-            channel_config_set_dreq(&c, spi_get_dreq(spi_port, true));
-            channel_config_set_read_increment(&c, true);
-            channel_config_set_write_increment(&c, false);
-
-            dma_channel_configure(dma_channel, &c, &spi_get_hw(spi_port)->dr, dma_buffer,
-                                  transfer_pixels * 2, true);
-            dma_channel_wait_for_finish_blocking(dma_channel);
-            spiWaitIdle(spi_port);
-
-            col_processed += transfer_pixels;
-        }
+void ST7789_LCD::dmaAsyncStartChunk() {
+    if (!dma_async_.active || !dma_async_.data || !dma_async_.dma_buffer ||
+        dma_async_.dma_buffer_size < 2 || dma_async_.dma_channel < 0) {
+        dmaAsyncFinish();
+        return;
     }
 
-    gpio_put(PIN_CS, 1);
+    const uint32_t buffer_pixels = static_cast<uint32_t>(dma_async_.dma_buffer_size / 2);
+    const uint32_t stride = dma_async_.src_stride ? dma_async_.src_stride : dma_async_.w;
+
+    while (dma_async_.row < dma_async_.h) {
+        const uint16_t* row_src =
+            dma_async_.data + dma_async_.row * stride + dma_async_.col_processed;
+        uint32_t transfer_pixels = dma_async_.w - dma_async_.col_processed;
+        if (transfer_pixels > buffer_pixels) {
+            transfer_pixels = buffer_pixels;
+        }
+
+        uint8_t* out = dma_async_.dma_buffer;
+        for (uint32_t i = 0; i < transfer_pixels; i++) {
+            const uint16_t color = row_src[i];
+            out[i * 2] = static_cast<uint8_t>(color >> 8);
+            out[i * 2 + 1] = static_cast<uint8_t>(color & 0xFF);
+        }
+
+        dma_channel_config c = dma_channel_get_default_config(dma_async_.dma_channel);
+        channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
+        channel_config_set_dreq(&c, spi_get_dreq(spi_port, true));
+        channel_config_set_read_increment(&c, true);
+        channel_config_set_write_increment(&c, false);
+
+        dma_channel_configure(dma_async_.dma_channel, &c, &spi_get_hw(spi_port)->dr, out,
+                              transfer_pixels * 2, true);
+
+        dma_async_.col_processed += transfer_pixels;
+        if (dma_async_.col_processed >= dma_async_.w) {
+            dma_async_.col_processed = 0;
+            dma_async_.row++;
+        }
+        return;
+    }
+
+    spiWaitIdle(spi_port);
+    dmaAsyncFinish();
+}
+
+bool ST7789_LCD::beginDrawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                                      const uint16_t* data, uint32_t src_stride, int dma_channel,
+                                      uint8_t* dma_buffer, size_t buffer_size) {
+    if (dma_async_.active) return false;
+    if (x >= _width || y >= _height || !data || !dma_buffer || buffer_size < 2 ||
+        dma_channel < 0) {
+        return false;
+    }
+    if (x + w > _width) w = _width - x;
+    if (y + h > _height) h = _height - y;
+    if (w == 0 || h == 0) return false;
+
+    dma_async_.active = true;
+    dma_async_.x = x;
+    dma_async_.y = y;
+    dma_async_.w = w;
+    dma_async_.h = h;
+    dma_async_.data = data;
+    dma_async_.src_stride = src_stride ? src_stride : w;
+    dma_async_.dma_channel = dma_channel;
+    dma_async_.dma_buffer = dma_buffer;
+    dma_async_.dma_buffer_size = buffer_size;
+    dma_async_.row = 0;
+    dma_async_.col_processed = 0;
+
+    setWindow(x, y, x + w - 1, y + h - 1);
+    gpio_put(PIN_DC, 1);
+    gpio_put(PIN_CS, 0);
+    dmaAsyncStartChunk();
+    return dma_async_.active;
+}
+
+void ST7789_LCD::pumpDrawRawImageDMA() {
+    if (!dma_async_.active) return;
+    if (dma_channel_is_busy(dma_async_.dma_channel)) return;
+    dmaAsyncStartChunk();
+}
+
+void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                                 const uint16_t* data, int dma_channel, uint8_t* dma_buffer,
+                                 size_t buffer_size) {
+    while (isDrawRawImageDMABusy()) {
+        pumpDrawRawImageDMA();
+    }
+    if (!beginDrawRawImageDMA(x, y, w, h, data, w, dma_channel, dma_buffer, buffer_size)) {
+        return;
+    }
+    while (isDrawRawImageDMABusy()) {
+        pumpDrawRawImageDMA();
+    }
 }
 
 void ST7789_LCD::drawBMP(uint16_t x, uint16_t y, const uint16_t* bmpData) {

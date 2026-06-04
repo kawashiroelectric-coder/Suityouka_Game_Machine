@@ -8,8 +8,12 @@
 
 /** 初期状態は全ビット 1（未押下） */
 ButtonInput::ButtonInput(i2c_inst_t* port, uint8_t addr)
-    : i2c_port(port), i2c_addr(addr), last_state(0xFF), current_state(0xFF), irq_enabled(false) {
-}
+    : i2c_port(port),
+      i2c_addr(addr),
+      last_state(0xFF),
+      current_state(0xFF),
+      port1_output_(0),
+      irq_enabled(false) {}
 
 bool ButtonInput::writeRegister(uint8_t reg, uint8_t value) {
     uint8_t buf[2] = {reg, value};
@@ -25,6 +29,7 @@ bool ButtonInput::readRegister(uint8_t reg, uint8_t* value) {
     return result == 1;
 }
 
+
 /** PCA9539 の Port0=入力 Port1=出力として初期化 */
 bool ButtonInput::init() {
     // Port0を入力に設定（1=入力, 0=出力）
@@ -38,7 +43,8 @@ bool ButtonInput::init() {
         printf("ButtonInput: Port1設定失敗\n");
         return false;
     }
-    if (!writeRegister(REG_OUTPUT_PORT1, 0x00)) {
+    port1_output_ = 0;
+    if (!writePort1Output()) {
         printf("ButtonInput: Port1出力設定失敗\n");
         return false;
     }
@@ -53,6 +59,42 @@ bool ButtonInput::init() {
 
     printf("ButtonInput: 初期化完了 port0=0x%02X (1=未押下)\n", current_state);
     return true;
+}
+
+bool ButtonInput::writePort1Output() {
+    return writeRegister(REG_OUTPUT_PORT1, port1_output_ & BatteryLedConfig::PORT1_MASK);
+}
+
+bool ButtonInput::setBatteryLed(uint8_t pin_index, bool on) {
+    if (pin_index >= BatteryLedConfig::LED_COUNT) {
+        return false;
+    }
+    uint8_t bit = static_cast<uint8_t>(1u << pin_index);
+    if (on) {
+        port1_output_ |= bit;
+    } else {
+        port1_output_ &= static_cast<uint8_t>(~bit);
+    }
+    return writePort1Output();
+}
+
+bool ButtonInput::setBatteryLevel(uint8_t level) {
+    if (level > BatteryLedConfig::LEVEL_FULL) {
+        level = BatteryLedConfig::LEVEL_FULL;
+    }
+    static const uint8_t kMaskByLevel[] = {
+        BatteryLedConfig::MASK_OFF,
+        BatteryLedConfig::MASK_LOW,
+        BatteryLedConfig::MASK_MID,
+        BatteryLedConfig::MASK_FULL,
+    };
+    port1_output_ = kMaskByLevel[level];
+    return writePort1Output();
+}
+
+bool ButtonInput::setBatteryLedMask(uint8_t mask) {
+    port1_output_ = mask & BatteryLedConfig::PORT1_MASK;
+    return writePort1Output();
 }
 
 /** REG_INPUT_PORT0 を読み last_state / current_state を更新 */

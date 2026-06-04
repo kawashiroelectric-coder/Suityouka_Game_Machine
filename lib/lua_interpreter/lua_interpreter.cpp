@@ -250,50 +250,23 @@ int luaHostFillRects(lua_State* L) {
     return 0;
 }
 
-static bool parsePresentModeString(const char* mode, GameDisplay::PresentMode* out) {
-    if (!mode || !out) return false;
-    if (strcmp(mode, "partial") == 0 || strcmp(mode, "dirty") == 0) {
-        *out = GameDisplay::PresentMode::Partial;
-        return true;
-    }
-    if (strcmp(mode, "full") == 0) {
-        *out = GameDisplay::PresentMode::Full;
-        return true;
-    }
-    return false;
-}
-
-/** machine.set_present_mode("full"|"partial") */
+/**
+ * machine.set_present_mode("full"|"partial")
+ * バンド（ラインバッファ）描画ではホストのゲームループが全バンドを順に転送するため、
+ * 描画モードの切り替えは行わない（互換のため受け取って無視）。
+ */
 int luaHostSetPresentMode(lua_State* L) {
-    GameDisplay* disp = activeDisplay();
-    if (!disp) return 0;
-    const char* mode = luaL_checkstring(L, 1);
-    GameDisplay::PresentMode parsed;
-    if (!parsePresentModeString(mode, &parsed)) {
-        return luaL_error(L, "set_present_mode: use \"full\" or \"partial\"");
-    }
-    disp->setPresentMode(parsed);
+    (void)L;
     return 0;
 }
 
-/** machine.present([mode]) */
+/**
+ * machine.present([mode])
+ * バンド描画ではバンドごとに game_draw → 転送をホストが駆動するため、
+ * スクリプト側からの present 要求は無視する（互換のための no-op）。
+ */
 int luaHostPresent(lua_State* L) {
-    GameDisplay* disp = activeDisplay();
-    if (!disp) return 0;
-    if (lua_gettop(L) >= 1) {
-        const char* mode = luaL_checkstring(L, 1);
-        GameDisplay::PresentMode parsed;
-        if (!parsePresentModeString(mode, &parsed)) {
-            return luaL_error(L, "present: use \"full\" or \"partial\"");
-        }
-        if (parsed == GameDisplay::PresentMode::Partial) {
-            disp->presentPartial();
-        } else {
-            disp->presentFull();
-        }
-        return 0;
-    }
-    disp->present();
+    (void)L;
     return 0;
 }
 
@@ -325,6 +298,68 @@ int luaHostRgb(lua_State* L) {
     int b = (int)luaL_checkinteger(L, 3);
     lua_pushinteger(L, GameDisplay::rgb((uint8_t)r, (uint8_t)g, (uint8_t)b));
     return 1;
+}
+
+/** machine.load_image(path, width, height) → id（失敗時は nil, errmsg） */
+int luaHostLoadImage(lua_State* L) {
+    if (!g_active_interpreter) return luaL_error(L, "no active interpreter");
+    const char* path = luaL_checkstring(L, 1);
+    int w = (int)luaL_checkinteger(L, 2);
+    int h = (int)luaL_checkinteger(L, 3);
+    if (w <= 0 || h <= 0) return luaL_error(L, "load_image: width/height must be > 0");
+
+    int id = g_active_interpreter->loadImage(path, (uint16_t)w, (uint16_t)h);
+    if (id < 0) {
+        lua_pushnil(L);
+        lua_pushstring(L, "load_image failed (see serial log)");
+        return 2;
+    }
+    lua_pushinteger(L, id);
+    return 1;
+}
+
+/** machine.draw_image(id, x, y [, sx, sy, sw, sh]) */
+int luaHostDrawImage(lua_State* L) {
+    if (!g_active_interpreter) return 0;
+    GameDisplay* disp = activeDisplay();
+    if (!disp) return 0;
+
+    int id = (int)luaL_checkinteger(L, 1);
+    int dx = (int)luaL_checkinteger(L, 2);
+    int dy = (int)luaL_checkinteger(L, 3);
+
+    const ImageSlot* slot = g_active_interpreter->getImage(id);
+    if (!slot) return luaL_error(L, "draw_image: invalid image id %d", id);
+
+    if (lua_gettop(L) >= 7) {
+        int sx = (int)luaL_checkinteger(L, 4);
+        int sy = (int)luaL_checkinteger(L, 5);
+        int sw = (int)luaL_checkinteger(L, 6);
+        int sh = (int)luaL_checkinteger(L, 7);
+        disp->drawImageSub(dx, dy, slot->width, slot->height, slot->pixels, sx, sy, sw, sh);
+    } else {
+        disp->drawImage(dx, dy, slot->width, slot->height, slot->pixels);
+    }
+    return 0;
+}
+
+/** machine.free_image(id) */
+int luaHostFreeImage(lua_State* L) {
+    if (!g_active_interpreter) return 0;
+    int id = (int)luaL_checkinteger(L, 1);
+    g_active_interpreter->freeImage(id);
+    return 0;
+}
+
+/** machine.image_size(id) → width, height */
+int luaHostImageSize(lua_State* L) {
+    if (!g_active_interpreter) return luaL_error(L, "no active interpreter");
+    int id = (int)luaL_checkinteger(L, 1);
+    const ImageSlot* slot = g_active_interpreter->getImage(id);
+    if (!slot) return luaL_error(L, "image_size: invalid image id %d", id);
+    lua_pushinteger(L, slot->width);
+    lua_pushinteger(L, slot->height);
+    return 2;
 }
 
 }  // namespace
@@ -361,6 +396,14 @@ void LuaInterpreter::registerLuaHostApi(lua_State* L) {
     lua_setfield(L, -2, "time_ms");
     lua_pushcfunction(L, luaHostRgb);
     lua_setfield(L, -2, "rgb");
+    lua_pushcfunction(L, luaHostLoadImage);
+    lua_setfield(L, -2, "load_image");
+    lua_pushcfunction(L, luaHostDrawImage);
+    lua_setfield(L, -2, "draw_image");
+    lua_pushcfunction(L, luaHostFreeImage);
+    lua_setfield(L, -2, "free_image");
+    lua_pushcfunction(L, luaHostImageSize);
+    lua_setfield(L, -2, "image_size");
     lua_setglobal(L, "machine");
 }
 
@@ -368,18 +411,103 @@ LuaInterpreter::LuaInterpreter()
     : hooks_(),
       sd_mounted_(false),
       max_script_bytes_(kDefaultMaxScriptBytes),
-      game_lua_(nullptr) {
+      game_lua_(nullptr),
+      images_() {
     lcd_line_[0] = '\0';
 }
 
-LuaInterpreter::~LuaInterpreter() { closeGameState(); }
+LuaInterpreter::~LuaInterpreter() {
+    closeGameState();
+    freeAllImages();
+}
 
-/** game_lua_ を閉じ g_active_interpreter をクリア */
+/** game_lua_ を閉じ g_active_interpreter をクリアし画像も全解放 */
 void LuaInterpreter::closeGameState() {
     if (game_lua_) {
         g_active_interpreter = nullptr;
         lua_close(game_lua_);
         game_lua_ = nullptr;
+    }
+    freeAllImages();
+}
+
+/** SD から RGB565 生データを読み込みスロットに格納。成功時スロット ID、失敗時 -1 */
+int LuaInterpreter::loadImage(const char* path, uint16_t w, uint16_t h) {
+    if (!sd_mounted_) {
+        printf("loadImage: SD not mounted\n");
+        return -1;
+    }
+    size_t byte_size = (size_t)w * h * 2;
+    if (byte_size == 0 || byte_size > kMaxImageBytes) {
+        printf("loadImage: size out of range (%u x %u = %u bytes, max %u)\n",
+               w, h, (unsigned)byte_size, (unsigned)kMaxImageBytes);
+        return -1;
+    }
+
+    int slot_id = -1;
+    for (int i = 0; i < kMaxImageSlots; i++) {
+        if (!images_[i].used) { slot_id = i; break; }
+    }
+    if (slot_id < 0) {
+        printf("loadImage: no free slot (max %d)\n", kMaxImageSlots);
+        return -1;
+    }
+
+    FIL file;
+    FRESULT fr = f_open(&file, path, FA_READ);
+    if (fr != FR_OK) {
+        printf("loadImage: open failed %s (%s)\n", path, FRESULT_str(fr));
+        return -1;
+    }
+
+    FSIZE_t fsize = f_size(&file);
+    if (fsize < byte_size) {
+        printf("loadImage: file too small (%lu < %u)\n", (unsigned long)fsize, (unsigned)byte_size);
+        f_close(&file);
+        return -1;
+    }
+
+    uint16_t* pixels = static_cast<uint16_t*>(malloc(byte_size));
+    if (!pixels) {
+        printf("loadImage: malloc failed (%u bytes)\n", (unsigned)byte_size);
+        f_close(&file);
+        return -1;
+    }
+
+    UINT br = 0;
+    fr = f_read(&file, pixels, (UINT)byte_size, &br);
+    f_close(&file);
+    if (fr != FR_OK || br != (UINT)byte_size) {
+        printf("loadImage: read failed %s\n", path);
+        free(pixels);
+        return -1;
+    }
+
+    images_[slot_id].pixels = pixels;
+    images_[slot_id].width = w;
+    images_[slot_id].height = h;
+    images_[slot_id].used = true;
+    printf("loadImage: [%d] %s %ux%u OK\n", slot_id, path, w, h);
+    return slot_id;
+}
+
+const ImageSlot* LuaInterpreter::getImage(int id) const {
+    if (id < 0 || id >= kMaxImageSlots) return nullptr;
+    if (!images_[id].used) return nullptr;
+    return &images_[id];
+}
+
+void LuaInterpreter::freeImage(int id) {
+    if (id < 0 || id >= kMaxImageSlots) return;
+    if (images_[id].used) {
+        free(images_[id].pixels);
+        images_[id] = ImageSlot();
+    }
+}
+
+void LuaInterpreter::freeAllImages() {
+    for (int i = 0; i < kMaxImageSlots; i++) {
+        freeImage(i);
     }
 }
 
@@ -593,23 +721,35 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
         }
         lua_pop(game_lua_, 1);
 
-        lua_getglobal(game_lua_, "game_draw");
-        if (lua_isfunction(game_lua_, -1)) {
-            if (lua_pcall(game_lua_, 0, 0, 0) != LUA_OK) {
-                const char* err = lua_tostring(game_lua_, -1);
-                printf("game_draw error: %s\n", err ? err : "?");
+        // バンド（ラインバッファ）描画: 1 フレームを横帯に分割し、
+        // 各バンドで game_draw を呼んでそのバンド領域だけ LCD へ転送する。
+        const int bands = hooks_.display->bandCount();
+        bool draw_error = false;
+        for (int band = 0; band < bands; band++) {
+            hooks_.display->beginBand(band);
+
+            lua_getglobal(game_lua_, "game_draw");
+            if (lua_isfunction(game_lua_, -1)) {
+                if (lua_pcall(game_lua_, 0, 0, 0) != LUA_OK) {
+                    const char* err = lua_tostring(game_lua_, -1);
+                    printf("game_draw error: %s\n", err ? err : "?");
+                    lua_pop(game_lua_, 1);
+                    draw_error = true;
+                    break;
+                }
+            } else {
                 lua_pop(game_lua_, 1);
-                break;
             }
-        } else {
-            lua_pop(game_lua_, 1);
-        }
 
 #ifdef GAME_MACHINE_DEBUG
-        g_fps_overlay.draw(hooks_.display);
+            g_fps_overlay.draw(hooks_.display);
 #endif
-        hooks_.display->present();
-        //sleep_ms(16);
+            hooks_.display->endBand();
+        }
+        if (draw_error) break;
+        hooks_.display->waitForTransferComplete();
+
+        sleep_ms(16);
     }
 
     printf("Lua game ended: %s\n", path);
