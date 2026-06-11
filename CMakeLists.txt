@@ -49,12 +49,16 @@ add_executable(Suityouka_Game_Machine
     
     # 音声出力管理
     lib/audio_output/audio_output.cpp
+    lib/battery_monitor/battery_monitor.cpp
 
     # SD上 Lua スクリプト実行
+    lib/heap_budget/heap_budget.cpp
     lib/lua_interpreter/lua_interpreter.cpp
+    lib/lua_interpreter/lua_audio.cpp
 
     # ゲーム描画 (RGB565 framebuffer)
     lib/game_display/game_display.cpp
+    lib/tile_layers/tile_layers.cpp
     
     # ゲームローダー（SDカード読み込み）
     #lib/game_loader/game_loader.cpp
@@ -92,8 +96,11 @@ target_include_directories(Suityouka_Game_Machine PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}                    # プロジェクトルート（config.hpp等）
     ${CMAKE_CURRENT_LIST_DIR}/lib/button_input   # ボタン入力ライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/audio_output   # 音声出力ライブラリのヘッダー
+    ${CMAKE_CURRENT_LIST_DIR}/lib/battery_monitor # バッテリー ADC (Core1)
+    ${CMAKE_CURRENT_LIST_DIR}/lib/heap_budget      # 動的ヒープ予算
     ${CMAKE_CURRENT_LIST_DIR}/lib/lua_interpreter  # Lua インタプリタ
     ${CMAKE_CURRENT_LIST_DIR}/lib/game_display    # ゲーム描画
+    ${CMAKE_CURRENT_LIST_DIR}/lib/tile_layers     # タイル背景レイヤー
     #${CMAKE_CURRENT_LIST_DIR}/lib/game_loader    # ゲームローダーライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/ST7789         # ST7789 LCD ドライバヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/pcm5102_i2s    # PCM5102 32bit I2S PIO
@@ -162,10 +169,10 @@ target_link_libraries(Suityouka_Game_Machine
     hardware_spi      # SPI通信（LCD、SDカード用）
     hardware_i2c      # I2C通信（ボタン入力用）
     hardware_dma      # DMA転送（LCD、音声出力用）
-    hardware_pio      # PIO（必要に応じて）
+    hardware_adc        # バッテリー電圧 (Core1)
+    hardware_pio      # PCM5102 I2S（音声 PIO）
     hardware_gpio     # GPIO制御
     hardware_adc      # ADC（バッテリーモニター用）
-    hardware_pwm      # PWM（音声出力用）
 
     # SDカード/FatFSライブラリ
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico

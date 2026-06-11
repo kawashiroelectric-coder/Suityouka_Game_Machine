@@ -5,6 +5,8 @@
 #include "game_display.hpp"
 #include "st7789_lcd.hpp"
 
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 // 8x8 ASCII (st7789_lcd と同じ簡易フォント)
@@ -177,6 +179,18 @@ int GameDisplay::bandCount() const {
     return (height_ + buffer_height_ - 1) / buffer_height_;
 }
 
+bool GameDisplay::rectIntersectsBand(int y, int h) const {
+    if (h <= 0) return false;
+    return (y + h) > bandTop() && y < bandBottom();
+}
+
+void GameDisplay::plotPixel(int x, int y, uint16_t color) {
+    if (!work_buffer_) return;
+    if (x < 0 || x >= (int)width_) return;
+    if (y < bandTop() || y >= bandBottom()) return;
+    work_buffer_[(uint32_t)(y - band_y0_) * width_ + (uint32_t)x] = color;
+}
+
 /** バンド描画開始: 描画先バッファ・y 原点・行数を設定 */
 void GameDisplay::beginBand(int band) {
     band_index_ = band;
@@ -322,6 +336,131 @@ void GameDisplay::drawImageSub(int dx, int dy, int img_w, int img_h, const uint1
         uint16_t* dst = work_buffer_ + (uint32_t)(screen_y - band_y0_) * width_ + dx;
         memcpy(dst, src, sw * sizeof(uint16_t));
     }
+}
+
+/** 透過色をスキップして部分矩形を転写 */
+void GameDisplay::drawImageSubKeyed(int dx, int dy, int img_w, int img_h, const uint16_t* pixels,
+                                    int sx, int sy, int sw, int sh, uint16_t key_color,
+                                    bool key_enabled) {
+    if (!key_enabled) {
+        drawImageSub(dx, dy, img_w, img_h, pixels, sx, sy, sw, sh);
+        return;
+    }
+    if (!work_buffer_ || !pixels || img_w <= 0 || img_h <= 0) return;
+    if (sx < 0) { dx -= sx; sw += sx; sx = 0; }
+    if (sy < 0) { dy -= sy; sh += sy; sy = 0; }
+    if (sx + sw > img_w) sw = img_w - sx;
+    if (sy + sh > img_h) sh = img_h - sy;
+    if (sw <= 0 || sh <= 0) return;
+
+    if (dx < 0) { sx -= dx; sw += dx; dx = 0; }
+    if (dy < 0) { sy -= dy; sh += dy; dy = 0; }
+    if (dx + sw > (int)width_) sw = (int)width_ - dx;
+    if (dy + sh > (int)height_) sh = (int)height_ - dy;
+    if (sw <= 0 || sh <= 0) return;
+
+    for (int row = 0; row < sh; row++) {
+        const int screen_y = dy + row;
+        if (screen_y < bandTop() || screen_y >= bandBottom()) continue;
+        const uint16_t* src = pixels + (sy + row) * img_w + sx;
+        uint16_t* dst = work_buffer_ + (uint32_t)(screen_y - band_y0_) * width_ + dx;
+        for (int col = 0; col < sw; col++) {
+            const uint16_t c = src[col];
+            if (c != key_color) {
+                dst[col] = c;
+            }
+        }
+    }
+}
+
+void GameDisplay::drawLine(int x0, int y0, int x1, int y1, uint16_t color) {
+    int dx = abs(x1 - x0);
+    int sx = (x0 < x1) ? 1 : -1;
+    int dy = -abs(y1 - y0);
+    int sy = (y0 < y1) ? 1 : -1;
+    int err = dx + dy;
+
+    while (true) {
+        plotPixel(x0, y0, color);
+        if (x0 == x1 && y0 == y1) break;
+        const int e2 = err * 2;
+        if (e2 >= dy) {
+            err += dy;
+            x0 += sx;
+        }
+        if (e2 <= dx) {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+void GameDisplay::drawCircle(int cx, int cy, int radius, uint16_t color) {
+    if (radius <= 0) {
+        plotPixel(cx, cy, color);
+        return;
+    }
+    int x = radius;
+    int y = 0;
+    int err = 0;
+
+    while (x >= y) {
+        plotPixel(cx + x, cy + y, color);
+        plotPixel(cx + y, cy + x, color);
+        plotPixel(cx - y, cy + x, color);
+        plotPixel(cx - x, cy + y, color);
+        plotPixel(cx - x, cy - y, color);
+        plotPixel(cx - y, cy - x, color);
+        plotPixel(cx + y, cy - x, color);
+        plotPixel(cx + x, cy - y, color);
+        y++;
+        err += 1 + 2 * y;
+        if (2 * (err - x) + 1 > 0) {
+            x--;
+            err += 1 - 2 * x;
+        }
+    }
+}
+
+void GameDisplay::fillCircle(int cx, int cy, int radius, uint16_t color) {
+    if (radius <= 0) {
+        plotPixel(cx, cy, color);
+        return;
+    }
+    for (int dy = -radius; dy <= radius; dy++) {
+        const int row_y = cy + dy;
+        if (row_y < bandTop() || row_y >= bandBottom()) continue;
+        const int dx = (int)(sqrtf((float)(radius * radius - dy * dy)) + 0.5f);
+        fillRect(cx - dx, row_y, dx * 2 + 1, 1, color);
+    }
+}
+
+void GameDisplay::drawTile(int dx, int dy, int tile_w, int tile_h, int sheet_cols,
+                           const uint16_t* tileset, int sheet_w, int sheet_h, int tile_index) {
+    if (!tileset || tile_w <= 0 || tile_h <= 0 || sheet_cols <= 0 || tile_index < 0) {
+        return;
+    }
+    const int sx = (tile_index % sheet_cols) * tile_w;
+    const int sy = (tile_index / sheet_cols) * tile_h;
+    if (sx + tile_w > sheet_w || sy + tile_h > sheet_h) {
+        return;
+    }
+    drawImageSub(dx, dy, sheet_w, sheet_h, tileset, sx, sy, tile_w, tile_h);
+}
+
+void GameDisplay::drawTileKeyed(int dx, int dy, int tile_w, int tile_h, int sheet_cols,
+                                const uint16_t* tileset, int sheet_w, int sheet_h, int tile_index,
+                                uint16_t key_color, bool key_enabled) {
+    if (!tileset || tile_w <= 0 || tile_h <= 0 || sheet_cols <= 0 || tile_index < 0) {
+        return;
+    }
+    const int sx = (tile_index % sheet_cols) * tile_w;
+    const int sy = (tile_index / sheet_cols) * tile_h;
+    if (sx + tile_w > sheet_w || sy + tile_h > sheet_h) {
+        return;
+    }
+    drawImageSubKeyed(dx, dy, sheet_w, sheet_h, tileset, sx, sy, tile_w, tile_h, key_color,
+                      key_enabled);
 }
 
 /** rects 配列の矩形を順に fillRect */

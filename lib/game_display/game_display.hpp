@@ -58,6 +58,15 @@ public:
 
     /** 画面を覆うのに必要なバンド数 */
     int bandCount() const;
+    /** 現在描画中のバンド番号（0 .. bandCount()-1） */
+    int bandIndex() const { return band_index_; }
+    /** 現在バンドの画面上端 y（含む） */
+    int bandTopY() const { return band_y0_; }
+    /** 現在バンドの画面下端 y（含まない） */
+    int bandBottomY() const { return band_y0_ + band_rows_; }
+    /** 論理矩形 [y, y+h) が現在バンドと交差するか */
+    bool rectIntersectsBand(int y, int h) const;
+
     /** バンド描画開始: 描画先バッファ・y 原点・行数を設定する */
     void beginBand(int band);
     /** 現在のバンドを LCD へ転送（非ブロッキング DMA をキック） */
@@ -74,11 +83,26 @@ public:
     void fillRect(int x, int y, int w, int h, uint16_t color);
     /** 複数矩形をまとめて塗る */
     void fillRects(const FillRect* rects, size_t count);
+    /** クリッピング付き直線（Bresenham） */
+    void drawLine(int x0, int y0, int x1, int y1, uint16_t color);
+    /** クリッピング付き円の輪郭 */
+    void drawCircle(int cx, int cy, int radius, uint16_t color);
+    /** クリッピング付き塗りつぶし円 */
+    void fillCircle(int cx, int cy, int radius, uint16_t color);
+    /** タイルセットから 1 タイルを転写（tile_index < 0 でスキップ） */
+    void drawTile(int dx, int dy, int tile_w, int tile_h, int sheet_cols, const uint16_t* tileset,
+                  int sheet_w, int sheet_h, int tile_index);
     /** RGB565 画像をクリッピング付きで転写 */
     void drawImage(int dx, int dy, int img_w, int img_h, const uint16_t* pixels);
     /** RGB565 画像の一部領域を転写 */
     void drawImageSub(int dx, int dy, int img_w, int img_h, const uint16_t* pixels,
                       int sx, int sy, int sw, int sh);
+    /** 透過色（RGB565）をスキップして転写。key_enabled=false なら drawImageSub と同じ */
+    void drawImageSubKeyed(int dx, int dy, int img_w, int img_h, const uint16_t* pixels,
+                           int sx, int sy, int sw, int sh, uint16_t key_color, bool key_enabled);
+    /** タイル 1 枚を透過色付きで転写 */
+    void drawTileKeyed(int dx, int dy, int tile_w, int tile_h, int sheet_cols, const uint16_t* tileset,
+                       int sheet_w, int sheet_h, int tile_index, uint16_t key_color, bool key_enabled);
     /** 8x8 フォントで背景付きテキスト描画 */
     void drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bg_color);
 
@@ -86,10 +110,9 @@ public:
     static uint16_t rgb(uint8_t r, uint8_t g, uint8_t b);
 
 private:
-    /** 現在のバンドの画面上端 y */
     int bandTop() const { return band_y0_; }
-    /** 現在のバンドの画面下端 y（exclusive） */
     int bandBottom() const { return band_y0_ + band_rows_; }
+    void plotPixel(int x, int y, uint16_t color);
 
     uint16_t* buffers_[2];
     uint16_t* work_buffer_;

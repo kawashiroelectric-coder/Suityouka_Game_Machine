@@ -6,6 +6,8 @@
 #include "button_input.hpp"
 #include <cstdio>
 
+#include "pico/sync.h"
+
 /** 初期状態は全ビット 1（未押下） */
 ButtonInput::ButtonInput(i2c_inst_t* port, uint8_t addr)
     : i2c_port(port),
@@ -15,17 +17,35 @@ ButtonInput::ButtonInput(i2c_inst_t* port, uint8_t addr)
       port1_output_(0),
       irq_enabled(false) {}
 
+namespace {
+critical_section_t* i2cCriticalSection() {
+    static critical_section_t cs;
+    static bool inited = false;
+    if (!inited) {
+        critical_section_init(&cs);
+        inited = true;
+    }
+    return &cs;
+}
+}  // namespace
+
 bool ButtonInput::writeRegister(uint8_t reg, uint8_t value) {
+    critical_section_enter_blocking(i2cCriticalSection());
     uint8_t buf[2] = {reg, value};
     int result = i2c_write_blocking(i2c_port, i2c_addr, buf, 2, false);
+    critical_section_exit(i2cCriticalSection());
     return result == 2;
 }
 
 bool ButtonInput::readRegister(uint8_t reg, uint8_t* value) {
+    critical_section_enter_blocking(i2cCriticalSection());
     int result = i2c_write_blocking(i2c_port, i2c_addr, &reg, 1, true);
-    if (result != 1) return false;
-    
+    if (result != 1) {
+        critical_section_exit(i2cCriticalSection());
+        return false;
+    }
     result = i2c_read_blocking(i2c_port, i2c_addr, value, 1, false);
+    critical_section_exit(i2cCriticalSection());
     return result == 1;
 }
 

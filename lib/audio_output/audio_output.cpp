@@ -1,273 +1,232 @@
 // ============================================
 // ファイル: audio_output.cpp
-// 音声出力管理クラスの実装
+// PCM5102 32bit I2S（pcm5102_i2s.pio）+ DMA、Core 1 駆動
 // ============================================
 
 #include "audio_output.hpp"
+#include "battery_monitor.hpp"
+#include "pcm5102_i2s.hpp"
+
 #include <cstdio>
 #include <cmath>
+#include <cstring>
+
+#include "hardware/clocks.h"
 #include "hardware/irq.h"
+#include "pico/multicore.h"
 
-AudioOutput* AudioOutput::instance = nullptr;
+AudioOutput* AudioOutput::instance_ = nullptr;
 
-/** コンストラクタ: シングルトン instance を this に設定 */
-AudioOutput::AudioOutput(uint8_t pin_l, uint8_t pin_r, uint8_t pin_sd, uint8_t pin_abd)
-    : pin_l(pin_l), pin_r(pin_r), pin_sd(pin_sd), pin_abd(pin_abd),
-      sample_rate(AudioConfig::SAMPLE_RATE), initialized(false), playing(false),
-      current_buffer(0), callback(nullptr) {
-    instance = this;
+AudioOutput::AudioOutput()
+    : sample_rate_(AudioConfig::SAMPLE_RATE),
+      initialized_(false),
+      core1_ready_(false),
+      playing_(false),
+      start_requested_(false),
+      stop_requested_(false),
+      pio_(pio1),
+      sm_(0),
+      pio_offset_(0),
+      dma_channel_(-1),
+      current_buffer_(0),
+      callback_(nullptr),
+      volume_(1.0f) {
+    instance_ = this;
+    memset(buffer_a_, 0, sizeof(buffer_a_));
+    memset(buffer_b_, 0, sizeof(buffer_b_));
 }
 
-/** デストラクタ: 再生停止と PWM 無効化 */
 AudioOutput::~AudioOutput() {
     stop();
-    if (initialized) {
-        pwm_set_enabled(slice_l, false);
-        pwm_set_enabled(slice_r, false);
+    instance_ = nullptr;
+}
+
+void AudioOutput::core1Entry() {
+    if (instance_) {
+        instance_->core1Loop();
     }
 }
 
-/** シャットダウン解除、PWM/DMA 初期化、バッファゼロクリア */
 bool AudioOutput::init(uint32_t sample_rate) {
-    this->sample_rate = sample_rate;
-    
-    // GPIO初期化
-    gpio_init(pin_sd);
-    gpio_set_dir(pin_sd, GPIO_OUT);
-    gpio_put(pin_sd, 1);  // シャットダウン解除
-    
-    gpio_init(pin_abd);
-    gpio_set_dir(pin_abd, GPIO_OUT);
-    gpio_put(pin_abd, 0);
-    
-    // PWM初期化
-    initPWM();
-    
-    // DMA初期化
-    initDMA();
-    
-    // バッファをゼロクリア
-    for (size_t i = 0; i < BUFFER_SIZE; i++) {
-        buffer_l[0][i] = 0;
-        buffer_l[1][i] = 0;
-        buffer_r[0][i] = 0;
-        buffer_r[1][i] = 0;
+    if (initialized_) {
+        return true;
     }
-    
-    initialized = true;
-    printf("AudioOutput: 初期化完了 (サンプルレート: %lu Hz)\n", sample_rate);
+    sample_rate_ = sample_rate;
+    core1_ready_ = false;
+    multicore_launch_core1(core1Entry);
+
+    const uint32_t deadline = to_ms_since_boot(get_absolute_time()) + 3000;
+    while (!core1_ready_) {
+        if (to_ms_since_boot(get_absolute_time()) > deadline) {
+            printf("AudioOutput: Core1 init timeout\n");
+            return false;
+        }
+        tight_loop_contents();
+    }
+    initialized_ = true;
+    printf("AudioOutput: PCM5102 I2S init OK (%lu Hz, Core1)\n",
+           (unsigned long)sample_rate_);
     return true;
 }
 
-/** 左右チャンネル PWM スライスをサンプルレートに合わせて設定 */
-void AudioOutput::initPWM() {
-    // 左チャンネル
-    gpio_set_function(pin_l, GPIO_FUNC_PWM);
-    slice_l = pwm_gpio_to_slice_num(pin_l);
-    channel_l = pwm_gpio_to_channel(pin_l);
-    
-    pwm_config cfg_l = pwm_get_default_config();
-    pwm_config_set_clkdiv(&cfg_l, 125.0f / (sample_rate / 1000.0f));  // 125MHz / (sample_rate / 1000)
-    pwm_config_set_wrap(&cfg_l, AudioConfig::PWM_WRAP);
-    pwm_config_set_phase_correct(&cfg_l, false);
-    pwm_init(slice_l, &cfg_l, true);
-    pwm_set_chan_level(slice_l, channel_l, 0);
-    
-    // 右チャンネル
-    gpio_set_function(pin_r, GPIO_FUNC_PWM);
-    slice_r = pwm_gpio_to_slice_num(pin_r);
-    channel_r = pwm_gpio_to_channel(pin_r);
-    
-    pwm_config cfg_r = pwm_get_default_config();
-    pwm_config_set_clkdiv(&cfg_r, 125.0f / (sample_rate / 1000.0f));
-    pwm_config_set_wrap(&cfg_r, AudioConfig::PWM_WRAP);
-    pwm_config_set_phase_correct(&cfg_r, false);
-    pwm_init(slice_r, &cfg_r, true);
-    pwm_set_chan_level(slice_r, channel_r, 0);
+void AudioOutput::initHardwareOnCore1() {
+    using namespace AudioConfig::I2S;
+
+    gpio_init(PIN_SPMUTE);
+    gpio_set_dir(PIN_SPMUTE, GPIO_OUT);
+    gpio_put(PIN_SPMUTE, 1);
+
+    gpio_init(PIN_MUTE);
+    gpio_set_dir(PIN_MUTE, GPIO_OUT);
+    gpio_put(PIN_MUTE, 1);
+
+    pio_offset_ = pio_add_program(pio_, &pcm5102_i2s_32_program);
+    pcm5102_i2s_init_sm(pio_, sm_, pio_offset_, sample_rate_);
+
+    dma_channel_ = dma_claim_unused_channel(true);
+    dma_channel_set_irq1_enabled(dma_channel_, true);
+    irq_set_exclusive_handler(DMA_IRQ_1, dmaIrqHandler);
+    irq_set_enabled(DMA_IRQ_1, true);
+
+    pcm5102_i2s_32_start(pio_, sm_);
+    core1_ready_ = true;
 }
 
-/** DMA チャンネル取得と IRQ0 ハンドラ登録 */
-void AudioOutput::initDMA() {
-    // 左チャンネル用DMA
-    dma_channel_l = dma_claim_unused_channel(true);
-    dma_channel_config cfg_l = dma_channel_get_default_config(dma_channel_l);
-    channel_config_set_transfer_data_size(&cfg_l, DMA_SIZE_16);
-    channel_config_set_dreq(&cfg_l, pwm_get_dreq(slice_l));
-    channel_config_set_read_increment(&cfg_l, true);
-    channel_config_set_write_increment(&cfg_l, false);
-    
-    // 右チャンネル用DMA
-    dma_channel_r = dma_claim_unused_channel(true);
-    dma_channel_config cfg_r = dma_channel_get_default_config(dma_channel_r);
-    channel_config_set_transfer_data_size(&cfg_r, DMA_SIZE_16);
-    channel_config_set_dreq(&cfg_r, pwm_get_dreq(slice_r));
-    channel_config_set_read_increment(&cfg_r, true);
-    channel_config_set_write_increment(&cfg_r, false);
-    
-    // DMA割り込み設定
-    dma_channel_set_irq0_enabled(dma_channel_l, true);
-    irq_set_exclusive_handler(DMA_IRQ_0, dma_handler);
-    irq_set_enabled(DMA_IRQ_0, true);
+void AudioOutput::fillBuffer(int32_t* dst, int16_t* scratch_l, int16_t* scratch_r) {
+    if (callback_) {
+        callback_(scratch_l, scratch_r, BUFFER_FRAMES);
+    } else {
+        memset(scratch_l, 0, BUFFER_FRAMES * sizeof(int16_t));
+        memset(scratch_r, 0, BUFFER_FRAMES * sizeof(int16_t));
+    }
+
+    for (size_t i = 0; i < BUFFER_FRAMES; i++) {
+        const int32_t l = static_cast<int32_t>(scratch_l[i] * volume_) << 16;
+        const int32_t r = static_cast<int32_t>(scratch_r[i] * volume_) << 16;
+        dst[i * 2] = l;
+        dst[i * 2 + 1] = r;
+    }
 }
 
-/** DMA IRQ: 左チャンネル完了時に onDMATransferComplete を呼ぶ */
-void AudioOutput::dma_handler() {
-    if (instance) {
-        if (dma_irqn_get_channel_status(0, instance->dma_channel_l)) {
-            dma_irqn_acknowledge_channel(0, instance->dma_channel_l);
-            instance->onDMATransferComplete();
+void AudioOutput::kickDma(const int32_t* src) {
+    if (dma_channel_ < 0) {
+        return;
+    }
+    dma_channel_config cfg = dma_channel_get_default_config(dma_channel_);
+    channel_config_set_transfer_data_size(&cfg, DMA_SIZE_32);
+    channel_config_set_dreq(&cfg, pio_get_dreq(pio_, sm_, true));
+    channel_config_set_read_increment(&cfg, true);
+    channel_config_set_write_increment(&cfg, false);
+
+    dma_channel_configure(dma_channel_, &cfg, &pio_->txf[sm_], src, BUFFER_WORDS, true);
+}
+
+void AudioOutput::dmaIrqHandler() {
+    if (!instance_ || instance_->dma_channel_ < 0) {
+        return;
+    }
+    if (dma_irqn_get_channel_status(1, instance_->dma_channel_)) {
+        dma_irqn_acknowledge_channel(1, instance_->dma_channel_);
+        instance_->onDmaComplete();
+    }
+}
+
+void AudioOutput::onDmaComplete() {
+    if (!playing_) {
+        return;
+    }
+
+    static int16_t scratch_l[BUFFER_FRAMES];
+    static int16_t scratch_r[BUFFER_FRAMES];
+
+    const uint8_t next = static_cast<uint8_t>(1 - current_buffer_);
+    int32_t* next_buf = (next == 0) ? buffer_a_ : buffer_b_;
+    fillBuffer(next_buf, scratch_l, scratch_r);
+    kickDma(next_buf);
+    current_buffer_ = next;
+}
+
+void AudioOutput::startPlaybackOnCore1() {
+    if (playing_ || dma_channel_ < 0) {
+        return;
+    }
+
+    static int16_t scratch_l[BUFFER_FRAMES];
+    static int16_t scratch_r[BUFFER_FRAMES];
+
+    playing_ = true;
+    fillBuffer(buffer_a_, scratch_l, scratch_r);
+    fillBuffer(buffer_b_, scratch_l, scratch_r);
+    current_buffer_ = 0;
+    kickDma(buffer_a_);
+    printf("AudioOutput: I2S playback start (Core1)\n");
+}
+
+void AudioOutput::stopPlaybackOnCore1() {
+    if (!playing_) {
+        return;
+    }
+    playing_ = false;
+    if (dma_channel_ >= 0) {
+        dma_channel_abort(dma_channel_);
+    }
+    memset(buffer_a_, 0, sizeof(buffer_a_));
+    memset(buffer_b_, 0, sizeof(buffer_b_));
+    printf("AudioOutput: I2S playback stop\n");
+}
+
+void AudioOutput::core1Loop() {
+    initHardwareOnCore1();
+    BatteryMonitor::initOnCore1();
+
+    uint32_t last_battery_ms = to_ms_since_boot(get_absolute_time());
+
+    while (true) {
+        if (start_requested_ && !playing_) {
+            start_requested_ = false;
+            startPlaybackOnCore1();
         }
+        if (stop_requested_ && playing_) {
+            stop_requested_ = false;
+            stopPlaybackOnCore1();
+        }
+
+        const uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+        if (now_ms - last_battery_ms >= BatteryConfig::SAMPLE_INTERVAL_MS) {
+            BatteryMonitor::tick();
+            last_battery_ms = now_ms;
+        }
+
+        tight_loop_contents();
     }
 }
 
-/** 非アクティブバッファをコールバックで埋め、次の DMA 転送を開始 */
-void AudioOutput::onDMATransferComplete() {
-    if (!playing || !callback) return;
-    
-    // 次のバッファを生成
-    uint8_t next_buffer = 1 - current_buffer;
-    
-    // コールバックで音声データを生成
-    callback(buffer_l[next_buffer], buffer_r[next_buffer], BUFFER_SIZE);
-    
-    // 次のDMA転送を開始
-    dma_channel_config cfg_l = dma_channel_get_default_config(dma_channel_l);
-    channel_config_set_transfer_data_size(&cfg_l, DMA_SIZE_16);
-    channel_config_set_dreq(&cfg_l, pwm_get_dreq(slice_l));
-    channel_config_set_read_increment(&cfg_l, true);
-    channel_config_set_write_increment(&cfg_l, false);
-    
-    // PWM CCレジスタへのポインタ（チャンネルA/Bで異なる）
-    volatile uint32_t* pwm_cc_l;
-    if (channel_l == PWM_CHAN_A) {
-        pwm_cc_l = &pwm_hw->slice[slice_l].cc;
-    } else {
-        pwm_cc_l = (volatile uint32_t*)((uintptr_t)&pwm_hw->slice[slice_l].cc + sizeof(uint32_t));
-    }
-    
-    volatile uint32_t* pwm_cc_r;
-    if (channel_r == PWM_CHAN_A) {
-        pwm_cc_r = &pwm_hw->slice[slice_r].cc;
-    } else {
-        pwm_cc_r = (volatile uint32_t*)((uintptr_t)&pwm_hw->slice[slice_r].cc + sizeof(uint32_t));
-    }
-    
-    dma_channel_configure(
-        dma_channel_l,
-        &cfg_l,
-        pwm_cc_l,  // PWM比較レジスタ
-        buffer_l[next_buffer],
-        BUFFER_SIZE,
-        true
-    );
-    
-    dma_channel_config cfg_r = dma_channel_get_default_config(dma_channel_r);
-    channel_config_set_transfer_data_size(&cfg_r, DMA_SIZE_16);
-    channel_config_set_dreq(&cfg_r, pwm_get_dreq(slice_r));
-    channel_config_set_read_increment(&cfg_r, true);
-    channel_config_set_write_increment(&cfg_r, false);
-    
-    dma_channel_configure(
-        dma_channel_r,
-        &cfg_r,
-        pwm_cc_r,
-        buffer_r[next_buffer],
-        BUFFER_SIZE,
-        true
-    );
-    
-    current_buffer = next_buffer;
-}
-
-/** 両バッファをプリフィルし、DMA 転送を開始 */
 void AudioOutput::start() {
-    if (!initialized || playing) return;
-    
-    playing = true;
-    
-    // 最初のバッファを生成
-    if (callback) {
-        callback(buffer_l[0], buffer_r[0], BUFFER_SIZE);
-        callback(buffer_l[1], buffer_r[1], BUFFER_SIZE);
+    if (!initialized_) {
+        return;
     }
-    
-    // DMA転送開始
-    dma_channel_config cfg_l = dma_channel_get_default_config(dma_channel_l);
-    channel_config_set_transfer_data_size(&cfg_l, DMA_SIZE_16);
-    channel_config_set_dreq(&cfg_l, pwm_get_dreq(slice_l));
-    channel_config_set_read_increment(&cfg_l, true);
-    channel_config_set_write_increment(&cfg_l, false);
-    
-    // PWM CCレジスタへのポインタ（チャンネルA/Bで異なる）
-    volatile uint32_t* pwm_cc_l;
-    if (channel_l == PWM_CHAN_A) {
-        pwm_cc_l = &pwm_hw->slice[slice_l].cc;
-    } else {
-        pwm_cc_l = (volatile uint32_t*)((uintptr_t)&pwm_hw->slice[slice_l].cc + sizeof(uint32_t));
-    }
-    
-    volatile uint32_t* pwm_cc_r;
-    if (channel_r == PWM_CHAN_A) {
-        pwm_cc_r = &pwm_hw->slice[slice_r].cc;
-    } else {
-        pwm_cc_r = (volatile uint32_t*)((uintptr_t)&pwm_hw->slice[slice_r].cc + sizeof(uint32_t));
-    }
-    
-    dma_channel_configure(
-        dma_channel_l,
-        &cfg_l,
-        pwm_cc_l,
-        buffer_l[0],
-        BUFFER_SIZE,
-        true
-    );
-    
-    dma_channel_config cfg_r = dma_channel_get_default_config(dma_channel_r);
-    channel_config_set_transfer_data_size(&cfg_r, DMA_SIZE_16);
-    channel_config_set_dreq(&cfg_r, pwm_get_dreq(slice_r));
-    channel_config_set_read_increment(&cfg_r, true);
-    channel_config_set_write_increment(&cfg_r, false);
-    
-    dma_channel_configure(
-        dma_channel_r,
-        &cfg_r,
-        pwm_cc_r,
-        buffer_r[0],
-        BUFFER_SIZE,
-        true
-    );
-    
-    current_buffer = 0;
-    printf("AudioOutput: 再生開始\n");
+    start_requested_ = true;
 }
 
-/** DMA 中止と PWM 出力ゼロ */
 void AudioOutput::stop() {
-    if (!playing) return;
-    
-    playing = false;
-    dma_channel_abort(dma_channel_l);
-    dma_channel_abort(dma_channel_r);
-    
-    // 無音を出力
-    pwm_set_chan_level(slice_l, channel_l, 0);
-    pwm_set_chan_level(slice_r, channel_r, 0);
-    
-    printf("AudioOutput: 再生停止\n");
+    stop_requested_ = true;
+    const uint32_t deadline = to_ms_since_boot(get_absolute_time()) + 500;
+    while (playing_ && to_ms_since_boot(get_absolute_time()) < deadline) {
+        tight_loop_contents();
+    }
 }
 
-/** 音量（プレースホルダ） */
 void AudioOutput::setVolume(float volume) {
-    // 音量制御はコールバック内で実装するか、PWMのレベルを調整
-    // 簡易実装として、ここでは何もしない（コールバック側で処理）
-    (void)volume;
+    if (volume < 0.0f) {
+        volume = 0.0f;
+    }
+    if (volume > 1.0f) {
+        volume = 1.0f;
+    }
+    volume_ = volume;
 }
 
-/** テストトーン（未実装） */
 void AudioOutput::playTone(float frequency, float duration_ms) {
-    // テスト用のトーン生成（簡易実装）
-    // 注意: この実装は簡易版です。実際の使用では、より高度な音声再生システムを実装してください。
     (void)frequency;
     (void)duration_ms;
-    // TODO: トーン生成機能を実装
 }

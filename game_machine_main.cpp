@@ -7,15 +7,14 @@
 #include <stdio.h>
 #include <cstdio>
 #include "pico/stdlib.h"
-#include "pico/multicore.h"
 #include "hardware/gpio.h"
-#include "hardware/adc.h"
 #include "hardware/i2c.h"
 #include "hardware/dma.h"
 #include "st7789_lcd.hpp"
 #include "config.hpp"
 #include "button_input.hpp"
 #include "audio_output.hpp"
+#include "battery_monitor.hpp"
 #include "lua_interpreter.hpp"
 #include "game_display.hpp"
 //#include "game_loader.hpp"
@@ -93,7 +92,7 @@ static void setupLuaInterpreter() {
 
 static bool tryStartLuaGame() {
     if (!sd_mounted) return false;
-    static const char* kGameScripts[] = {"dino.lua", "stg.lua", "game.lua"};
+    static const char* kGameScripts[] = {"dino.lua", "stg.lua", "layers_test.lua", "game.lua"};
     char line[64];
     for (const char* script : kGameScripts) {
         if (g_luaInterpreter.sdFileExists(script)) {
@@ -220,20 +219,7 @@ void initDMA(ST7789_LCD& lcd_obj) {
     printf("DMA初期化完了\n");
 }
 
-// 1. Core 1（2つ目のコア）で動かしたいプログラムを関数として定義する
-void core1_entry() {
-    while (true) {
-        // ここはCore 1だけでグルグル回る
-        printf("Hello from Core 1!\n");
-        sleep_ms(1000);
-    }
-}
-
 int main() {
-
-    // 💡 ここでCore 1を叩き起こし、上記の関数を実行させる！
-    //multicore_launch_core1(core1_entry);
-    
     stdio_init_all();
     //while (!stdio_usb_connected()) {
     //    sleep_ms(10);
@@ -244,19 +230,6 @@ int main() {
     gpio_init(I2CConfig::RST);
     gpio_set_dir(I2CConfig::RST, GPIO_OUT);
     gpio_put(I2CConfig::RST, 1);
-    
-    gpio_init(AudioConfig::PIN_AUDIO_SD);
-    gpio_set_dir(AudioConfig::PIN_AUDIO_SD, GPIO_OUT);
-    gpio_put(AudioConfig::PIN_AUDIO_SD, 0);  // シャットダウン
-    
-    gpio_init(AudioConfig::PIN_ABD);
-    gpio_set_dir(AudioConfig::PIN_ABD, GPIO_OUT);
-    gpio_put(AudioConfig::PIN_ABD, 0);
-    
-    // ADC初期化（バッテリーモニター）
-    adc_init();
-    adc_gpio_init(BatteryConfig::PIN_ADC);
-    adc_select_input(BatteryConfig::ADC_CHANNEL);
     
     // I2C初期化
     printf("I2C初期化中...\n");
@@ -291,7 +264,6 @@ int main() {
         printf("ボタン入力初期化失敗\n");
         return -1;
     }
-    buttons->setBatteryLevel(BatteryLedConfig::LEVEL_EMPTY); // 起動時はバッテリー残量不明として全LED消灯
 
     // LCD初期化
     printf("LCD初期化中...\n");
@@ -303,12 +275,16 @@ int main() {
     drawTextBg(10, 100, "LCD init", Color::WHITE, Color::BLACK);
     
     
-    // 音声出力初期化
-    printf("音声出力初期化中...\n");
-    audio = new AudioOutput(AudioConfig::PIN_L_OUT, AudioConfig::PIN_R_OUT,
-                           AudioConfig::PIN_AUDIO_SD, AudioConfig::PIN_ABD);
-    audio->init();
-    drawTextBg(10, 120, "Audio init", Color::WHITE, Color::GRAY);
+    // 音声出力初期化（PCM5102 I2S / Core 1 + バッテリー ADC）
+    printf("音声出力初期化中 (PCM5102 I2S)...\n");
+    BatteryMonitor::attach(buttons);
+    audio = new AudioOutput();
+    if (!audio->init()) {
+        drawTextBg(10, 120, "Audio fail", Color::RED, Color::GRAY);
+    } else {
+        g_luaInterpreter.setAudioOutput(audio);
+        drawTextBg(10, 120, "Audio I2S OK", Color::WHITE, Color::GRAY);
+    }
 
     /*
     // ゲームローダー初期化
@@ -397,6 +373,7 @@ int main() {
             }
         }
        // drawTextBg(10, 180, "loop", Color::WHITE, Color::BLACK);
+        g_luaInterpreter.audioEngine().pumpStream();
         sleep_ms(500);
     /*
     int logo_x = 0;

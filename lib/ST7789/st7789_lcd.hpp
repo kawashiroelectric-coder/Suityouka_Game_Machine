@@ -11,6 +11,7 @@
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
 #include "hardware/dma.h"
+#include "config.hpp"
 
 /** RGB565 定数と rgb() 変換 */
 namespace Color {
@@ -41,16 +42,6 @@ enum class FontSize {
 /** ST7789 240x320 液晶（SPI0、回転対応） */
 class ST7789_LCD {
 private:
-    static constexpr uint8_t PIN_CS   = 1;
-    static constexpr uint8_t PIN_SCK  = 2;
-    static constexpr uint8_t PIN_MOSI = 3;
-    static constexpr uint8_t PIN_RST  = 4;
-    static constexpr uint8_t PIN_DC   = 5;
-    static constexpr uint8_t PIN_BLK  = 14;
-    
-    static constexpr uint16_t PHYSICAL_WIDTH  = 240;
-    static constexpr uint16_t PHYSICAL_HEIGHT = 320;
-    
     uint16_t _width;
     uint16_t _height;
     uint8_t _rotation;
@@ -141,8 +132,8 @@ public:
 
     /** DMA 設定用 SPI インスタンス */
     spi_inst_t* getSPI() const { return spi_port; }
-    uint8_t getPinCS() const { return PIN_CS; }
-    uint8_t getPinDC() const { return PIN_DC; }
+    uint8_t getPinCS() const { return LCDConfig::PIN_CS; }
+    uint8_t getPinDC() const { return LCDConfig::PIN_DC; }
     
     /** 描画ウィンドウ（CASET/RASET/RAMWR）を外部から設定 */
     void setWindowPublic(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {

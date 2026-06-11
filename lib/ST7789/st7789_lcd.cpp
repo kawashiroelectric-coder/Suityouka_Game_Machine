@@ -107,7 +107,10 @@ static const uint8_t font8x8[96][8] = {
 };
 
 
-ST7789_LCD::ST7789_LCD() : spi_port(spi0), _width(PHYSICAL_WIDTH), _height(PHYSICAL_HEIGHT), 
+ST7789_LCD::ST7789_LCD()
+    : spi_port(LCDConfig::spiHw()),
+      _width(LCDConfig::PHYSICAL_WIDTH),
+      _height(LCDConfig::PHYSICAL_HEIGHT),
                             _rotation(0), _textColor(Color::WHITE), _textBgColor(Color::BLACK),
                             _fontSize(FontSize::SMALL), _textBg(false) {}
 
@@ -117,36 +120,36 @@ using uint16_t = unsigned short;
 
 /** DC=0 で 1 バイトコマンド送信 */
 void ST7789_LCD::writeCommand(uint8_t cmd) {
-    gpio_put(PIN_DC, 0);
-    gpio_put(PIN_CS, 0);
+    gpio_put(LCDConfig::PIN_DC, 0);
+    gpio_put(LCDConfig::PIN_CS, 0);
     spi_write_blocking(spi_port, &cmd, 1);
-    gpio_put(PIN_CS, 1);
+    gpio_put(LCDConfig::PIN_CS, 1);
 }
 
 /** DC=1 で 1 バイトデータ送信 */
 void ST7789_LCD::writeData(uint8_t data) {
-    gpio_put(PIN_DC, 1);
-    gpio_put(PIN_CS, 0);
+    gpio_put(LCDConfig::PIN_DC, 1);
+    gpio_put(LCDConfig::PIN_CS, 0);
     spi_write_blocking(spi_port, &data, 1);
-    gpio_put(PIN_CS, 1);
+    gpio_put(LCDConfig::PIN_CS, 1);
 }
 
 
 /** DC=1 でバッファを一括送信 */
 void ST7789_LCD::writeDataBuffer(const uint8_t* buf, size_t len) {
-    gpio_put(PIN_DC, 1);
-    gpio_put(PIN_CS, 0);
+    gpio_put(LCDConfig::PIN_DC, 1);
+    gpio_put(LCDConfig::PIN_CS, 0);
     spi_write_blocking(spi_port, buf, len);
-    gpio_put(PIN_CS, 1);
+    gpio_put(LCDConfig::PIN_CS, 1);
 }
 
 /** RST ピンでハードウェアリセットパルス */
 void ST7789_LCD::hardwareReset() {
-    gpio_put(PIN_RST, 1);
+    gpio_put(LCDConfig::PIN_RST, 1);
     sleep_ms(5);
-    gpio_put(PIN_RST, 0);
+    gpio_put(LCDConfig::PIN_RST, 0);
     sleep_ms(20);
-    gpio_put(PIN_RST, 1);
+    gpio_put(LCDConfig::PIN_RST, 1);
     sleep_ms(150);
 }
 
@@ -170,25 +173,25 @@ void ST7789_LCD::setWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
 /** GPIO/SPI 初期化と ST7789 レジスタシーケンス */
 void ST7789_LCD::init() {
     // GPIO初期化
-    gpio_init(PIN_CS);
-    gpio_init(PIN_RST);
-    gpio_init(PIN_DC);
-    gpio_init(PIN_BLK);
+    gpio_init(LCDConfig::PIN_CS);
+    gpio_init(LCDConfig::PIN_RST);
+    gpio_init(LCDConfig::PIN_DC);
+    gpio_init(LCDConfig::PIN_BLK);
     
-    gpio_set_dir(PIN_CS, GPIO_OUT);
-    gpio_set_dir(PIN_RST, GPIO_OUT);
-    gpio_set_dir(PIN_DC, GPIO_OUT);
-    gpio_set_dir(PIN_BLK, GPIO_OUT);
+    gpio_set_dir(LCDConfig::PIN_CS, GPIO_OUT);
+    gpio_set_dir(LCDConfig::PIN_RST, GPIO_OUT);
+    gpio_set_dir(LCDConfig::PIN_DC, GPIO_OUT);
+    gpio_set_dir(LCDConfig::PIN_BLK, GPIO_OUT);
     
-    gpio_put(PIN_CS, 1);
-    gpio_put(PIN_BLK, 1);  // バックライトON
+    gpio_put(LCDConfig::PIN_CS, 1);
+    gpio_put(LCDConfig::PIN_BLK, 1);  // バックライトON
     
     // SPI初期化
-    spi_init(spi_port, 60* 1000 * 1000);  // 60MHz
+    spi_init(spi_port, LCDConfig::SPI_BAUD_HZ);
     
     //spi_set_format(spi0, 8, SPI_CPOL_1, SPI_CPHA_1, SPI_MSB_FIRST); //現状不要 spimode3に変更時はコメントアウト解除
-    gpio_set_function(PIN_SCK, GPIO_FUNC_SPI);
-    gpio_set_function(PIN_MOSI, GPIO_FUNC_SPI);
+    gpio_set_function(LCDConfig::PIN_SCK, GPIO_FUNC_SPI);
+    gpio_set_function(LCDConfig::PIN_MOSI, GPIO_FUNC_SPI);
     
     // ディスプレイリセット
     hardwareReset();
@@ -203,7 +206,7 @@ void ST7789_LCD::init() {
     writeCommand(Command::COLMOD);
     writeData(0x55);  // 16ビットカラー
     // Set rotation to landscape (match GameConfig: 320x240)
-    setRotation(1);
+    setRotation(LCDConfig::DEFAULT_ROTATION);
     
     writeCommand(Command::INVON);
     
@@ -215,7 +218,7 @@ void ST7789_LCD::init() {
 }
 
 void ST7789_LCD::setBacklight(bool on) {
-    gpio_put(PIN_BLK, on ? 1 : 0);
+    gpio_put(LCDConfig::PIN_BLK, on ? 1 : 0);
 }
 
 
@@ -242,14 +245,14 @@ void ST7789_LCD::fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16
     uint8_t colorBuf[2] = {static_cast<uint8_t>(color >> 8), 
                             static_cast<uint8_t>(color & 0xFF)};
     
-    gpio_put(PIN_DC, 1);
-    gpio_put(PIN_CS, 0);
+    gpio_put(LCDConfig::PIN_DC, 1);
+    gpio_put(LCDConfig::PIN_CS, 0);
     
     for (uint32_t i = 0; i < w * h; i++) {
         spi_write_blocking(spi_port, colorBuf, 2);
     }
     
-    gpio_put(PIN_CS, 1);
+    gpio_put(LCDConfig::PIN_CS, 1);
 }
 
 
@@ -274,8 +277,8 @@ void ST7789_LCD::fillRectDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uin
         dma_buffer[i + 1] = colorBuf[1];
     }
     
-    gpio_put(PIN_DC, 1);
-    gpio_put(PIN_CS, 0);
+    gpio_put(LCDConfig::PIN_DC, 1);
+    gpio_put(LCDConfig::PIN_CS, 0);
     
     // DMA転送（必要に応じて複数回）
     uint32_t remaining = pixelCount;
@@ -300,7 +303,7 @@ void ST7789_LCD::fillRectDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uin
         remaining -= transferPixels;
     }
     
-    gpio_put(PIN_CS, 1);
+    gpio_put(LCDConfig::PIN_CS, 1);
 }
 
 
@@ -376,7 +379,7 @@ void ST7789_LCD::drawCircle(uint16_t x0,uint16_t y0,uint16_t r,uint16_t color){
   int16_t x = 0;
   int16_t y = r;
 
-    gpio_put(PIN_CS, 0);
+    gpio_put(LCDConfig::PIN_CS, 0);
      writePixel(x0, y0 + r, color);
      writePixel(x0, y0 - r, color);
      writePixel(x0 + r, y0, color);
@@ -401,7 +404,7 @@ void ST7789_LCD::drawCircle(uint16_t x0,uint16_t y0,uint16_t r,uint16_t color){
     writePixel(x0 + y, y0 - x, color);
     writePixel(x0 - y, y0 - x, color);
   }
-    gpio_put(PIN_CS, 1);
+    gpio_put(LCDConfig::PIN_CS, 1);
 }
 
 void ST7789_LCD::setRotation(uint8_t r) {
@@ -412,23 +415,23 @@ void ST7789_LCD::setRotation(uint8_t r) {
     switch (_rotation) {
         case 0:  // 0° (ポートレート)
             writeData(0x00);
-            _width = PHYSICAL_WIDTH;
-            _height = PHYSICAL_HEIGHT;
+            _width = LCDConfig::PHYSICAL_WIDTH;
+            _height = LCDConfig::PHYSICAL_HEIGHT;
             break;
         case 1:  // 90° (ランドスケープ)
             writeData(0x60);
-            _width = PHYSICAL_HEIGHT;
-            _height = PHYSICAL_WIDTH;
+            _width = LCDConfig::PHYSICAL_HEIGHT;
+            _height = LCDConfig::PHYSICAL_WIDTH;
             break;
         case 2:  // 180° (ポートレート反転)
             writeData(0xC0);
-            _width = PHYSICAL_WIDTH;
-            _height = PHYSICAL_HEIGHT;
+            _width = LCDConfig::PHYSICAL_WIDTH;
+            _height = LCDConfig::PHYSICAL_HEIGHT;
             break;
         case 3:  // 270° (ランドスケープ反転)
             writeData(0xA0);
-            _width = PHYSICAL_HEIGHT;
-            _height = PHYSICAL_WIDTH;
+            _width = LCDConfig::PHYSICAL_HEIGHT;
+            _height = LCDConfig::PHYSICAL_WIDTH;
             break;
     }
 }
@@ -503,8 +506,8 @@ void ST7789_LCD::drawRawImage(uint16_t x, uint16_t y, uint16_t w, uint16_t h, co
     
     setWindow(x, y, x + w - 1, y + h - 1);
     
-    gpio_put(PIN_DC, 1);
-    gpio_put(PIN_CS, 0);
+    gpio_put(LCDConfig::PIN_DC, 1);
+    gpio_put(LCDConfig::PIN_CS, 0);
     
     for (uint32_t i = 0; i < w * h; i++) {
         uint16_t color = data[i];
@@ -513,7 +516,7 @@ void ST7789_LCD::drawRawImage(uint16_t x, uint16_t y, uint16_t w, uint16_t h, co
         spi_write_blocking(spi_port, colorBuf, 2);
     }
     
-    gpio_put(PIN_CS, 1);
+    gpio_put(LCDConfig::PIN_CS, 1);
 }
 /*
 void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
@@ -525,8 +528,8 @@ void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     
     setWindow(x, y, x + w - 1, y + h - 1);
     
-    gpio_put(PIN_DC, 1);
-    gpio_put(PIN_CS, 0);
+    gpio_put(LCDConfig::PIN_DC, 1);
+    gpio_put(LCDConfig::PIN_CS, 0);
     
     uint32_t pixelCount = w * h;
     uint32_t bufferPixels = buffer_size / 2;
@@ -573,7 +576,7 @@ void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
         }
     }
     
-    gpio_put(PIN_CS, 1);
+    gpio_put(LCDConfig::PIN_CS, 1);
 }
 */
 /** SPI 送信完了まで待機 */
@@ -587,7 +590,7 @@ static void spiWaitIdle(spi_inst_t* spi_port) {
 }
 
 void ST7789_LCD::dmaAsyncFinish() {
-    gpio_put(PIN_CS, 1);
+    gpio_put(LCDConfig::PIN_CS, 1);
     dma_async_.active = false;
     dma_async_.data = nullptr;
 }
@@ -664,8 +667,8 @@ bool ST7789_LCD::beginDrawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16
     dma_async_.col_processed = 0;
 
     setWindow(x, y, x + w - 1, y + h - 1);
-    gpio_put(PIN_DC, 1);
-    gpio_put(PIN_CS, 0);
+    gpio_put(LCDConfig::PIN_DC, 1);
+    gpio_put(LCDConfig::PIN_CS, 0);
     dmaAsyncStartChunk();
     return dma_async_.active;
 }
@@ -707,8 +710,8 @@ void ST7789_LCD::drawBMP(uint16_t x, uint16_t y, const uint16_t* bmpData) {
     
     setWindow(x, y, x + width - 1, y + height - 1);
     
-    gpio_put(PIN_DC, 1);
-    gpio_put(PIN_CS, 0);
+    gpio_put(LCDConfig::PIN_DC, 1);
+    gpio_put(LCDConfig::PIN_CS, 0);
     
     // BMPは下から上に格納されているので反転して描画
     uint32_t rowSize = ((width * 3 + 3) / 4) * 4; // 4バイトアライメント
@@ -727,5 +730,5 @@ void ST7789_LCD::drawBMP(uint16_t x, uint16_t y, const uint16_t* bmpData) {
         }
     }
     
-    gpio_put(PIN_CS, 1);
+    gpio_put(LCDConfig::PIN_CS, 1);
 }

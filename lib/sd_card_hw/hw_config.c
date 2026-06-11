@@ -1,16 +1,17 @@
 /* hw_config.c - Suityouka Game Machine SD card (SPI1) */
 
 #include "hw_config.h"
+#include "config.hpp"
 #include "sd_pins.h"
 
-/** no-OS-FatFS 用 SPI1 設定（60MHz, mode 3） */
+/** no-OS-FatFS 用 SPI1（.hw_inst=spi1 は SDConfig::SPI_HW と一致させる） */
 static spi_t spi = {
     .hw_inst = spi1,
     .sck_gpio = SD_PIN_CLK,
     .mosi_gpio = SD_PIN_MOSI,
     .miso_gpio = SD_PIN_MISO,
-    .baud_rate = 60 * 1000 * 1000,
-    .spi_mode = 3,
+    .baud_rate = CFG_SD_SPI_BAUD_HZ,
+    .spi_mode = CFG_SD_SPI_MODE,
 };
 
 /** SPI バスと CS ピンの sd_spi_if */
