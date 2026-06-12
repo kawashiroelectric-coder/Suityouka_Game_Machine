@@ -46,6 +46,8 @@ add_executable(Suityouka_Game_Machine
     
     # ボタン入力管理
     lib/button_input/button_input.cpp
+    lib/encoder_input/encoder_input.cpp
+    lib/input_test_mode/input_test_mode.cpp
     
     # 音声出力管理
     lib/audio_output/audio_output.cpp
@@ -95,6 +97,8 @@ pico_enable_stdio_usb(Suityouka_Game_Machine 1)
 target_include_directories(Suityouka_Game_Machine PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}                    # プロジェクトルート（config.hpp等）
     ${CMAKE_CURRENT_LIST_DIR}/lib/button_input   # ボタン入力ライブラリのヘッダー
+    ${CMAKE_CURRENT_LIST_DIR}/lib/encoder_input  # ロータリーエンコーダ
+    ${CMAKE_CURRENT_LIST_DIR}/lib/input_test_mode # SD 未検知時入力テスト
     ${CMAKE_CURRENT_LIST_DIR}/lib/audio_output   # 音声出力ライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/battery_monitor # バッテリー ADC (Core1)
     ${CMAKE_CURRENT_LIST_DIR}/lib/heap_budget      # 動的ヒープ予算

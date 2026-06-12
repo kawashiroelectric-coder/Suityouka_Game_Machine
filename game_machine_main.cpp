@@ -17,6 +17,7 @@
 #include "battery_monitor.hpp"
 #include "lua_interpreter.hpp"
 #include "game_display.hpp"
+#include "input_test_mode.hpp"
 //#include "game_loader.hpp"
 
 #include <string>
@@ -131,6 +132,73 @@ static bool isSdCardPresent() {
     sd_card_t* card = sd_get_by_num(0);
     if (!card || !card->sd_test_com) return false;
     return card->sd_test_com(card);
+}
+
+static bool tryMountSdFromTestMode(void* user_data) {
+    (void)user_data;
+    if (!isSdCardPresent()) {
+        return false;
+    }
+    if (!mountSdCard()) {
+        return false;
+    }
+    syncLuaSdMountState();
+    return true;
+}
+
+static void inputTestModeFrameService(void* user_data) {
+    (void)user_data;
+    g_luaInterpreter.audioEngine().pumpStream();
+}
+
+static void runInputTestMode() {
+    if (!lcd || !buttons) {
+        return;
+    }
+    InputTestMode::Config config = {};
+    config.lcd = lcd;
+    config.buttons = buttons;
+    config.try_mount = tryMountSdFromTestMode;
+    config.on_frame = inputTestModeFrameService;
+    config.mount_retry_ms = 2000;
+    config.frame_interval_ms = 50;
+    InputTestMode::run(config);
+}
+
+static void handleSdCardConnected(bool& lua_executed_for_mount) {
+    syncLuaSdMountState();
+    drawTextBg(10, 160, "sd connected", Color::WHITE, Color::BLACK);
+    printf("SD Card connected.\n");
+    DIR dir;
+    FILINFO fno;
+    if (f_opendir(&dir, "/") == FR_OK) {
+        const int baseY = 100;
+        const int lineStep = 10;
+        int line = 0;
+        const int maxLines = 12;
+        char lcdBuffer[64];
+        while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != 0) {
+            if (fno.fname[0] == '.' &&
+                (fno.fname[1] == '\0' || (fno.fname[1] == '.' && fno.fname[2] == '\0'))) {
+                continue;
+            }
+            if (line >= maxLines) {
+                break;
+            }
+            const int y = baseY + line * lineStep;
+            snprintf(lcdBuffer, sizeof(lcdBuffer), "%s", fno.fname);
+            drawTextBg(10, y, lcdBuffer, Color::BLUE, Color::BLACK);
+            printf("%-32s%lu\n", fno.fname, static_cast<unsigned long>(fno.fsize));
+            ++line;
+        }
+        f_closedir(&dir);
+    }
+    if (!lua_executed_for_mount) {
+        if (!tryStartLuaGame()) {
+            g_luaInterpreter.executeOnSdRoot();
+        }
+        lua_executed_for_mount = true;
+    }
 }
 
 static void listSdRoot() {
@@ -309,6 +377,9 @@ int main() {
     drawTextBg(10, 140, "Start main loop", Color::WHITE, Color::BLACK);
 
     bool lua_executed_for_mount = false;
+    if (!sd_mounted) {
+        runInputTestMode();
+    }
     if (sd_mounted) {
         if (!tryStartLuaGame()) {
             g_luaInterpreter.executeOnSdRoot();
@@ -317,60 +388,28 @@ int main() {
     }
 
     bool connectedFlag = sd_mounted;
-    char lcdBuffer[64];
     uint32_t lastMountAttemptMs = 0;
 
     // メインループ
     while (true) {
         if (connectedFlag) {
             if (!isSdCardPresent()) {
-                drawTextBg(10, 100, "SD disconnected", Color::RED, Color::BLACK);
                 unmountSdCard();
                 syncLuaSdMountState();
                 connectedFlag = false;
                 lua_executed_for_mount = false;
+                runInputTestMode();
+                if (sd_mounted) {
+                    connectedFlag = true;
+                    handleSdCardConnected(lua_executed_for_mount);
+                }
             }
         } else if (isSdCardPresent()
                    && (to_ms_since_boot(get_absolute_time()) - lastMountAttemptMs >= 5000)
                    && mountSdCard()) {
             lastMountAttemptMs = to_ms_since_boot(get_absolute_time());
-            syncLuaSdMountState();
-            drawTextBg(10, 160, "sd connected", Color::WHITE, Color::BLACK);
-            printf("SD Card connected.\n");
             connectedFlag = true;
-            DIR dir;
-            FILINFO fno;
-             if (f_opendir(&dir, "/") == FR_OK) {
-                const int baseY = 100;      // 1行目の Y
-                const int lineStep = 10;    // 行間（8pxフォント + 少し余白）
-                int line = 0;
-                const int maxLines = 12;    // 画面に収まる行数（お好みで）
-                while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != 0) {
-                    // 任意: カレント/親ディレクトリをスキップ
-                    if (fno.fname[0] == '.' &&
-                        (fno.fname[1] == '\0' ||
-                        (fno.fname[1] == '.' && fno.fname[2] == '\0'))) {
-                        continue;
-                    }
-                    if (line >= maxLines) break;
-                    int y = baseY + line * lineStep;
-                    // ファイル名だけ（サイズも出すなら下のコメント参照）
-                    snprintf(lcdBuffer, sizeof(lcdBuffer), "%s", fno.fname);
-                    // snprintf(lcdBuffer, sizeof(lcdBuffer), "%s %lu",
-                    //          fno.fname, (unsigned long)fno.fsize);
-                    drawTextBg(10, y, lcdBuffer, Color::BLUE, Color::BLACK);
-                    printf("%-32s%lu\n", fno.fname,
-                            (unsigned long)fno.fsize);
-                    line++;
-                }
-             f_closedir(&dir);
-            }
-            if (!lua_executed_for_mount) {
-                if (!tryStartLuaGame()) {
-                    g_luaInterpreter.executeOnSdRoot();
-                }
-                lua_executed_for_mount = true;
-            }
+            handleSdCardConnected(lua_executed_for_mount);
         }
        // drawTextBg(10, 180, "loop", Color::WHITE, Color::BLACK);
         g_luaInterpreter.audioEngine().pumpStream();
