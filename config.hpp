@@ -157,9 +157,9 @@ namespace BatteryConfig {
     /** Core1 でのサンプリング周期 (ms) */
     constexpr uint32_t SAMPLE_INTERVAL_MS = 100;
     /** FULL 表示: V >= この値 */
-    constexpr float THRESHOLD_FULL_V = 2.8f;
+    constexpr float THRESHOLD_FULL_V = 1.1f;
     /** MID 表示: THRESHOLD_MID_V <= V < THRESHOLD_FULL_V */
-    constexpr float THRESHOLD_MID_V = 2.4f;
+    constexpr float THRESHOLD_MID_V = 0.9f;
 }
 
 namespace BatteryLedConfig {
