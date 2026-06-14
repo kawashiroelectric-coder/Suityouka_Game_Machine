@@ -43,11 +43,14 @@ add_executable(Suityouka_Game_Machine
     # SDカード (carlk3/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico)
     lib/sd_card_hw/hw_config.c
     lib/sd_card_hw/sd_debug.c
+    lib/sd_service/sd_service.cpp
     
     # ボタン入力管理
     lib/button_input/button_input.cpp
     lib/encoder_input/encoder_input.cpp
     lib/input_test_mode/input_test_mode.cpp
+    lib/file_explorer/file_explorer.cpp
+    lib/encoder_volume/encoder_volume.cpp
     
     # 音声出力管理
     lib/audio_output/audio_output.cpp
@@ -56,10 +59,15 @@ add_executable(Suityouka_Game_Machine
     # SD上 Lua スクリプト実行
     lib/heap_budget/heap_budget.cpp
     lib/lua_interpreter/lua_interpreter.cpp
+    lib/lua_interpreter/lua_api_internal.cpp
+    lib/lua_interpreter/lua_api_draw.cpp
+    lib/lua_interpreter/lua_api_audio.cpp
+    lib/lua_interpreter/lua_api_machine.cpp
     lib/lua_interpreter/lua_audio.cpp
 
     # ゲーム描画 (RGB565 framebuffer)
     lib/game_display/game_display.cpp
+    lib/font_renderer/font_renderer.cpp
     lib/tile_layers/tile_layers.cpp
     
     # ゲームローダー（SDカード読み込み）
@@ -99,15 +107,20 @@ target_include_directories(Suityouka_Game_Machine PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/lib/button_input   # ボタン入力ライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/encoder_input  # ロータリーエンコーダ
     ${CMAKE_CURRENT_LIST_DIR}/lib/input_test_mode # SD 未検知時入力テスト
+    ${CMAKE_CURRENT_LIST_DIR}/lib/file_explorer   # SD ファイルエクスプローラ
+    ${CMAKE_CURRENT_LIST_DIR}/lib/encoder_volume  # エンコーダ音量
     ${CMAKE_CURRENT_LIST_DIR}/lib/audio_output   # 音声出力ライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/battery_monitor # バッテリー ADC (Core1)
     ${CMAKE_CURRENT_LIST_DIR}/lib/heap_budget      # 動的ヒープ予算
     ${CMAKE_CURRENT_LIST_DIR}/lib/lua_interpreter  # Lua インタプリタ
     ${CMAKE_CURRENT_LIST_DIR}/lib/game_display    # ゲーム描画
+    ${CMAKE_CURRENT_LIST_DIR}/lib/font_renderer   # UTF-8 サブセットフォント
+    ${CMAKE_CURRENT_LIST_DIR}/lib/sd_path_util    # FatFS パス正規化
     ${CMAKE_CURRENT_LIST_DIR}/lib/tile_layers     # タイル背景レイヤー
     #${CMAKE_CURRENT_LIST_DIR}/lib/game_loader    # ゲームローダーライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/ST7789         # ST7789 LCD ドライバヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/pcm5102_i2s    # PCM5102 32bit I2S PIO
+    ${CMAKE_CURRENT_LIST_DIR}/lib/sd_service       # SD マウント管理
     ${CMAKE_CURRENT_LIST_DIR}/lib/sd_card_hw     # SD ピン定義 (sd_pins.h)
     # Lua headers will be provided by FetchContent-built library
 )

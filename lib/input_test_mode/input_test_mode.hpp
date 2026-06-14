@@ -10,6 +10,7 @@
 
 class ST7789_LCD;
 class ButtonInput;
+class EncoderInput;
 
 /** SD 利用可能になるまでブロックし、入力状態を LCD に表示する */
 class InputTestMode {
@@ -20,6 +21,8 @@ public:
     struct Config {
         ST7789_LCD* lcd = nullptr;
         ButtonInput* buttons = nullptr;
+        /** 共有エンコーダ（nullptr ならローカル生成） */
+        EncoderInput* encoder = nullptr;
         TryMountCallback try_mount = nullptr;
         FrameCallback on_frame = nullptr;
         void* user_data = nullptr;

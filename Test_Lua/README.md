@@ -1,68 +1,24 @@
-# layers モード表示テスト
+# Test_Lua サンプル集
 
-GBA 風タイルレイヤー合成（`machine.set_draw_mode("layers")`）の動作確認用サンプルです。
+Pico 向け Lua ゲームサンプルです。各フォルダの README に編集方法があります。
 
-## フォルダ構成
+| フォルダ | 内容 | 詳細 |
+|----------|------|------|
+| [visual_novel/](visual_novel/) | ビジュアルノベル（テキスト・背景・立ち絵） | [visual_novel/README.md](visual_novel/README.md) |
+| [tile_test/](tile_test/) | タイルレイヤー表示テスト（GBA 風 parallax） | [tile_test/README.md](tile_test/README.md) |
 
-```
-Test_Lua/
-├── layers_test.lua      # テストゲーム本体
-├── generate_assets.py   # タイル .bin 生成スクリプト
-├── README.md
-└── tiles/
-    ├── tiles.bin        # 128×128 タイルセット（16×16 タイル × 8列）
-    └── player.bin       # 16×16 プレイヤースプライト
-```
+## SD 配置の早見表
 
-## タイルセット（1 始まり番号）
+| サンプル | SD 上のパス |
+|----------|-------------|
+| visual_novel | `/visual_novel/visual_novel.lua` + `scenario.lua` + `fonts/` + `images/` |
+| tile_test | `/layers_test.lua` + `/tiles/*.bin` |
 
-| 番号 | 内容 | レイヤー |
-|------|------|----------|
-| 1 | 草地 | 地面 |
-| 2 | 草地（模様） | 地面 |
-| 3 | 土 | 地面 |
-| 4 | 水 | 地面（下段） |
-| 5 | 雲（透過） | 前景 |
-| 6 | 茂み（透過） | 前景 |
-| 7 | レンガ | 地面 |
-| 8 | 星 | （未使用・予備） |
+## 共通ツール
 
-透過タイルはキー色 **マゼンタ `0xF81F`** です（`transparent = true`）。
+| スクリプト | 用途 |
+|------------|------|
+| [generate_assets.py](generate_assets.py) | tile_test 用タイルセット `.bin` 生成 |
+| [../tool/png_to_rgb565bin.py](../tool/png_to_rgb565bin.py) | PNG → RGB565 `.bin` 変換 |
 
-## アセット再生成
-
-```bash
-cd Test_Lua
-python generate_assets.py
-```
-
-## SD カードへの配置
-
-FatFS ルート（`/`）に次のようにコピーしてください。
-
-```
-/（SD ルート）
-├── layers_test.lua    … または game.lua にリネームして自動起動
-└── tiles/
-    ├── tiles.bin
-    └── player.bin
-```
-
-### 起動方法
-
-1. **`layers_test.lua` を SD ルートへコピー** … `dino.lua` / `stg.lua` が無ければ自動起動（`game.lua` より優先度は低い）
-2. **`game.lua` にリネーム** … 最優先でないが確実に起動したい場合
-
-## 操作
-
-| 入力 | 動作 |
-|------|------|
-| RIGHT (ボタン 0) | プレイヤー右移動 |
-| DOWN (ボタン 3) | プレイヤー左移動 |
-| ジャンプ系ボタン | テスト終了 |
-
-## 表示内容
-
-- **レイヤー 0**: スクロールする地面タイルマップ（自動横スクロール）
-- **レイヤー 1**: 雲・茂み（透過、より速いパララックススクロール）
-- **`game_draw`**: プレイヤースプライト + テキスト（`machine.clear` は使用しない）
+API リファレンス: [LUA_API.md](../LUA_API.md)

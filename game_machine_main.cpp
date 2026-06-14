@@ -18,39 +18,26 @@
 #include "lua_interpreter.hpp"
 #include "game_display.hpp"
 #include "input_test_mode.hpp"
-//#include "game_loader.hpp"
+#include "file_explorer.hpp"
+#include "encoder_volume.hpp"
+#include "sd_service.hpp"
 
-#include <string>
 #include <cstring>
 
 extern "C" {
 #include "hw_config.h"
-#include "f_util.h"
-#include "ff.h"
+#include "sd_debug.h"
 }
 
-#include "assets/GameLogo.h"
-#include "assets/nitorih1.h"
-#include "assets/nitorih2.h"
-#include "assets/nitorih3.h"
-#include "assets/nitorih4.h"
-#include "sd_debug.h"
-
-
-//  RGB565 ダブルバッファ（描画用 / DMA 送信用）
 static uint16_t framebuffer_a[GameConfig::BUFFER_WIDTH * GameConfig::BUFFER_HEIGHT];
 static uint16_t framebuffer_b[GameConfig::BUFFER_WIDTH * GameConfig::BUFFER_HEIGHT];
 
-// グローバルオブジェクト
 static ST7789_LCD* lcd = nullptr;
 static ButtonInput* buttons = nullptr;
 static AudioOutput* audio = nullptr;
-//static GameLoader* loader = nullptr;
 static int dma_channel = -1;
 static uint8_t dma_buffer[16384];
 
-static FATFS sd_fs;
-static bool sd_mounted = false;
 static LuaInterpreter g_luaInterpreter;
 static GameDisplay g_gameDisplay;
 
@@ -61,6 +48,14 @@ struct MainLuaHostContext {
 static MainLuaHostContext g_luaHostCtx;
 
 void drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bgColor);
+void clearScreen(uint16_t color);
+void waitForAnyButton();
+
+static void inputTestModeFrameService(void* user_data);
+static void runInputTestMode();
+static void runFileExplorer();
+static void runUntilSdReady();
+static void syncLuaSdMountState();
 
 static void luaHostDrawText(void* user_data, int x, int y, const char* text, uint16_t color,
                             uint16_t bg_color) {
@@ -88,58 +83,70 @@ static void setupLuaInterpreter() {
     hooks.is_button_pressed = luaHostButtonPressed;
     hooks.display = &g_gameDisplay;
     g_luaInterpreter.setHostHooks(hooks);
-    g_luaInterpreter.setSdMounted(sd_mounted);
+    g_luaInterpreter.setSdMounted(SdService::isMounted());
 }
 
-static bool tryStartLuaGame() {
-    if (!sd_mounted) return false;
-    static const char* kGameScripts[] = {"dino.lua", "stg.lua", "layers_test.lua", "game.lua"};
+static void fileExplorerRunLua(const char* path, void* user_data) {
+    (void)user_data;
+    if (!path || path[0] == '\0') {
+        return;
+    }
+    printf("FileExplorer: run %s\n", path);
+    if (g_luaInterpreter.runGameLoopFromSd(path)) {
+        return;
+    }
+
     char line[64];
-    for (const char* script : kGameScripts) {
-        if (g_luaInterpreter.sdFileExists(script)) {
-            printf("Starting Lua game: %s\n", script);
-            drawTextBg(10, 100, "Lua game", Color::WHITE, Color::BLACK);
-            snprintf(line, sizeof(line), "%s", script);
-            drawTextBg(10, 112, line, Color::WHITE, Color::BLACK);
-            sleep_ms(500);
-            return g_luaInterpreter.runGameLoopFromSd(script);
+    clearScreen(Color::BLACK);
+    drawTextBg(10, 80, "Game start failed", Color::RED, Color::BLACK);
+    snprintf(line, sizeof(line), "%s", path);
+    drawTextBg(10, 92, line, Color::WHITE, Color::BLACK);
+    const char* err = g_luaInterpreter.lastError();
+    if (err && err[0] != '\0') {
+        drawTextBg(10, 116, err, Color::ORANGE, Color::BLACK);
+    }
+    drawTextBg(10, 140, "Press any button", Color::YELLOW, Color::BLACK);
+    waitForAnyButton();
+}
+
+static bool fileExplorerSdPresent(void* user_data) {
+    (void)user_data;
+    return SdService::isMounted() && SdService::isCardPresent();
+}
+
+static void runFileExplorer() {
+    if (!lcd || !buttons || !SdService::isMounted()) {
+        return;
+    }
+    FileExplorer::Config config = {};
+    config.lcd = lcd;
+    config.buttons = buttons;
+    config.on_frame = inputTestModeFrameService;
+    config.on_run_lua = fileExplorerRunLua;
+    config.is_sd_present = fileExplorerSdPresent;
+    config.frame_interval_ms = 50;
+    FileExplorer::run(config);
+}
+
+static void runUntilSdReady() {
+    while (!SdService::isMounted()) {
+        runInputTestMode();
+        if (SdService::isMounted()) {
+            break;
         }
     }
-    return false;
 }
 
-static void syncLuaSdMountState() { g_luaInterpreter.setSdMounted(sd_mounted); }
-
-static bool mountSdCard() {
-    FRESULT fr = f_mount(&sd_fs, "", 1);
-    if (fr != FR_OK) {
-        printf("f_mount failed: %s (%d)\n", FRESULT_str(fr), fr);
-        sd_mounted = false;
-        return false;
-    }
-    sd_mounted = true;
-    return true;
-}
-
-static void unmountSdCard() {
-    if (sd_mounted) {
-        f_unmount("");
-        sd_mounted = false;
-    }
-}
-
-static bool isSdCardPresent() {
-    sd_card_t* card = sd_get_by_num(0);
-    if (!card || !card->sd_test_com) return false;
-    return card->sd_test_com(card);
+static void syncLuaSdMountState() {
+    g_luaInterpreter.setSdMounted(SdService::isMounted());
 }
 
 static bool tryMountSdFromTestMode(void* user_data) {
     (void)user_data;
-    if (!isSdCardPresent()) {
+    if (!SdService::isCardPresent()) {
         return false;
     }
-    if (!mountSdCard()) {
+    if (!SdService::mount()) {
         return false;
     }
     syncLuaSdMountState();
@@ -149,6 +156,7 @@ static bool tryMountSdFromTestMode(void* user_data) {
 static void inputTestModeFrameService(void* user_data) {
     (void)user_data;
     g_luaInterpreter.audioEngine().pumpStream();
+    EncoderVolumeControl::service();
 }
 
 static void runInputTestMode() {
@@ -158,6 +166,7 @@ static void runInputTestMode() {
     InputTestMode::Config config = {};
     config.lcd = lcd;
     config.buttons = buttons;
+    config.encoder = &EncoderVolumeControl::encoder();
     config.try_mount = tryMountSdFromTestMode;
     config.on_frame = inputTestModeFrameService;
     config.mount_retry_ms = 2000;
@@ -165,79 +174,27 @@ static void runInputTestMode() {
     InputTestMode::run(config);
 }
 
-static void handleSdCardConnected(bool& lua_executed_for_mount) {
+static void handleSdCardConnected() {
     syncLuaSdMountState();
-    drawTextBg(10, 160, "sd connected", Color::WHITE, Color::BLACK);
     printf("SD Card connected.\n");
-    DIR dir;
-    FILINFO fno;
-    if (f_opendir(&dir, "/") == FR_OK) {
-        const int baseY = 100;
-        const int lineStep = 10;
-        int line = 0;
-        const int maxLines = 12;
-        char lcdBuffer[64];
-        while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != 0) {
-            if (fno.fname[0] == '.' &&
-                (fno.fname[1] == '\0' || (fno.fname[1] == '.' && fno.fname[2] == '\0'))) {
-                continue;
-            }
-            if (line >= maxLines) {
-                break;
-            }
-            const int y = baseY + line * lineStep;
-            snprintf(lcdBuffer, sizeof(lcdBuffer), "%s", fno.fname);
-            drawTextBg(10, y, lcdBuffer, Color::BLUE, Color::BLACK);
-            printf("%-32s%lu\n", fno.fname, static_cast<unsigned long>(fno.fsize));
-            ++line;
-        }
-        f_closedir(&dir);
-    }
-    if (!lua_executed_for_mount) {
-        if (!tryStartLuaGame()) {
-            g_luaInterpreter.executeOnSdRoot();
-        }
-        lua_executed_for_mount = true;
-    }
+    SdService::listRoot();
 }
 
-static void listSdRoot() {
-    DIR dir;
-    FILINFO fno;
-    FRESULT fr = f_opendir(&dir, "/");
-    if (fr != FR_OK) {
-        printf("f_opendir failed: %s (%d)\n", FRESULT_str(fr), fr);
-        return;
-    }
-    while (true) {
-        fr = f_readdir(&dir, &fno);
-        if (fr != FR_OK || fno.fname[0] == 0) break;
-        printf("  %s\t%lu\n", fno.fname, static_cast<unsigned long>(fno.fsize));
-    }
-    f_closedir(&dir);
-}
-
-
-
-// 画面クリア
 void clearScreen(uint16_t color) {
     g_gameDisplay.fillScreen(color);
 }
 
-// テキスト表示（簡易版）
-void drawText(int x, int y, const char* text, uint16_t color) {
-    if (!lcd) return;
-    lcd->setTextColor(color);
-    lcd->drawText(x, y, text);
-}
-
 void drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bgColor) {
-    if (!lcd) return;
+    if (!lcd) {
+        return;
+    }
     lcd->drawTextBg(x, y, text, color, bgColor);
 }
 
 bool isAnyButtonPressed() {
-    if (!buttons) return false;
+    if (!buttons) {
+        return false;
+    }
     for (int i = 0; i < 8; i++) {
         if (buttons->isPressed(static_cast<Button>(i))) {
             return true;
@@ -247,10 +204,14 @@ bool isAnyButtonPressed() {
 }
 
 void waitForButtonRelease() {
-    if (!buttons) return;
+    if (!buttons) {
+        return;
+    }
     while (true) {
         buttons->update();
-        if (!isAnyButtonPressed()) break;
+        if (!isAnyButtonPressed()) {
+            break;
+        }
         sleep_ms(50);
     }
 }
@@ -270,36 +231,28 @@ void waitForAnyButton() {
     }
 }
 
-
-// DMA初期化
 void initDMA(ST7789_LCD& lcd_obj) {
     dma_channel = dma_claim_unused_channel(true);
     dma_channel_config config = dma_channel_get_default_config(dma_channel);
-    
+
     channel_config_set_transfer_data_size(&config, DMA_SIZE_8);
     channel_config_set_dreq(&config, spi_get_dreq(lcd_obj.getSPI(), true));
     channel_config_set_read_increment(&config, true);
     channel_config_set_write_increment(&config, false);
-    
-    dma_channel_configure(dma_channel, &config,
-                         &spi_get_hw(lcd_obj.getSPI())->dr, NULL, 0, false);
-    
+
+    dma_channel_configure(dma_channel, &config, &spi_get_hw(lcd_obj.getSPI())->dr, NULL, 0, false);
+
     printf("DMA初期化完了\n");
 }
 
 int main() {
     stdio_init_all();
-    //while (!stdio_usb_connected()) {
-    //    sleep_ms(10);
-    //}
     printf("=== ゲーム機初期化開始 ===\n");
-    
-    // GPIO初期化
+
     gpio_init(I2CConfig::RST);
     gpio_set_dir(I2CConfig::RST, GPIO_OUT);
     gpio_put(I2CConfig::RST, 1);
-    
-    // I2C初期化
+
     printf("I2C初期化中...\n");
     i2c_init(I2CConfig::PORT, I2CConfig::BAUD_RATE);
     gpio_set_function(I2CConfig::SDA, GPIO_FUNC_I2C);
@@ -307,25 +260,22 @@ int main() {
     gpio_pull_up(I2CConfig::SDA);
     gpio_pull_up(I2CConfig::SCL);
 
-    // SDカード電源ON
     printf("SDカード電源ON\n");
     gpio_init(SDConfig::PIN_SD_POWER);
     gpio_set_dir(SDConfig::PIN_SD_POWER, GPIO_OUT);
     gpio_put(SDConfig::PIN_SD_POWER, 0);
     sleep_ms(200);
 
-    // SDカード初期化・段階別デバッグ (no-OS-FatFS-SD-SDIO-SPI-RPi-Pico)
     printf("SDカード初期化中...\n");
     sd_debug_run_diagnostics();
-    if (mountSdCard()) {
+    if (SdService::mount()) {
         printf("SDカードマウント成功\n");
-        listSdRoot();
+        SdService::listRoot();
         syncLuaSdMountState();
     } else {
         printf("SDカードマウント失敗（上の [SD DBG] ログを確認）\n");
     }
 
-    // ボタン入力初期化
     printf("ボタン入力初期化中...\n");
     buttons = new ButtonInput(I2CConfig::PORT, I2CConfig::PCA9539_ADDR);
     if (!buttons->init()) {
@@ -333,7 +283,6 @@ int main() {
         return -1;
     }
 
-    // LCD初期化
     printf("LCD初期化中...\n");
     lcd = new ST7789_LCD();
     lcd->init();
@@ -341,9 +290,7 @@ int main() {
     setupLuaInterpreter();
     clearScreen(Color::GRAY);
     drawTextBg(10, 100, "LCD init", Color::WHITE, Color::BLACK);
-    
-    
-    // 音声出力初期化（PCM5102 I2S / Core 1 + バッテリー ADC）
+
     printf("音声出力初期化中 (PCM5102 I2S)...\n");
     BatteryMonitor::attach(buttons);
     audio = new AudioOutput();
@@ -354,110 +301,25 @@ int main() {
         drawTextBg(10, 120, "Audio I2S OK", Color::WHITE, Color::GRAY);
     }
 
-    /*
-    // ゲームローダー初期化
-    printf("ゲームローダー初期化中...\n");
-    loader = new GameLoader();
-    if (!loader->init()) {
-        printf("ゲームローダー初期化失敗（SDカード未挿入の可能性）\n");
+    EncoderVolumeControl::init(audio, &g_luaInterpreter.audioEngine());
+    EncoderVolumeControl::setDisplay(lcd);
+    if (!EncoderVolumeControl::initEncoder()) {
+        drawTextBg(10, 132, "Enc IRQ fail", Color::ORANGE, Color::GRAY);
     }
-    */
-    
-    // 起動画面
-    // Display embedded GameLogo centered
-    /*
-    clearScreen(Color::BLACK);
-    int logo_x = (GameConfig::SCREEN_WIDTH - GameLogo_width) / 2;
-    int logo_y = (GameConfig::SCREEN_HEIGHT - GameLogo_height) / 2;
-    lcd->drawRawImageDMA(logo_x, logo_y, GameLogo_width, GameLogo_height,
-                       (uint16_t*)GameLogo_pixels, dma_channel, dma_buffer, sizeof(dma_buffer));
-    sleep_ms(2000);
-    */
+
     printf("=== 初期化完了 ===\n");
-    drawTextBg(10, 140, "Start main loop", Color::WHITE, Color::BLACK);
+    drawTextBg(10, 140, "File explorer", Color::WHITE, Color::BLACK);
 
-    bool lua_executed_for_mount = false;
-    if (!sd_mounted) {
-        runInputTestMode();
-    }
-    if (sd_mounted) {
-        if (!tryStartLuaGame()) {
-            g_luaInterpreter.executeOnSdRoot();
-        }
-        lua_executed_for_mount = true;
-    }
+    runUntilSdReady();
 
-    bool connectedFlag = sd_mounted;
-    uint32_t lastMountAttemptMs = 0;
-
-    // メインループ
     while (true) {
-        if (connectedFlag) {
-            if (!isSdCardPresent()) {
-                unmountSdCard();
-                syncLuaSdMountState();
-                connectedFlag = false;
-                lua_executed_for_mount = false;
-                runInputTestMode();
-                if (sd_mounted) {
-                    connectedFlag = true;
-                    handleSdCardConnected(lua_executed_for_mount);
-                }
-            }
-        } else if (isSdCardPresent()
-                   && (to_ms_since_boot(get_absolute_time()) - lastMountAttemptMs >= 5000)
-                   && mountSdCard()) {
-            lastMountAttemptMs = to_ms_since_boot(get_absolute_time());
-            connectedFlag = true;
-            handleSdCardConnected(lua_executed_for_mount);
+        if (SdService::isMounted()) {
+            runFileExplorer();
+            SdService::unmount();
+            syncLuaSdMountState();
         }
-       // drawTextBg(10, 180, "loop", Color::WHITE, Color::BLACK);
-        g_luaInterpreter.audioEngine().pumpStream();
-        sleep_ms(500);
-    /*
-    int logo_x = 0;
-    int logo_y = 0;
-    lcd->drawRawImageDMA(logo_x, logo_y, 320, 240,
-                       (uint16_t*)nitorih1_pixels, dma_channel, dma_buffer, sizeof(dma_buffer));
-    sleep_ms(2000);
-    lcd->drawRawImageDMA(logo_x, logo_y, 320, 240,
-                       (uint16_t*)nitorih2_pixels, dma_channel, dma_buffer, sizeof(dma_buffer));
-    sleep_ms(2000);
-    lcd->drawRawImageDMA(logo_x, logo_y, 320, 240,
-                       (uint16_t*)nitorih3_pixels, dma_channel, dma_buffer, sizeof(dma_buffer));
-    sleep_ms(2000);
-    lcd->drawRawImageDMA(logo_x, logo_y, 320, 240,
-                       (uint16_t*)nitorih4_pixels, dma_channel, dma_buffer, sizeof(dma_buffer));
-    sleep_ms(2000);
-    */
-        /*
-        // ゲーム選択
-        int selected = showGameMenu();
-        
-        if (selected >= 0 && loader->isMounted()) {
-            // ゲーム情報取得
-            GameInfo games[10];
-            int count = loader->getGameList(games, 10);
-            if (selected < count) {
-                runGame(games[selected]);
-            }
-        } else if (!loader->isMounted()) {
-            // SDカード未挿入またはマウントエラー
-            clearScreen(Color::BLACK);
-            drawTextBg(10, 100, "SD Card Error", Color::RED, Color::BLACK);
-            drawTextBg(10, 120, "Press any button", Color::YELLOW, Color::BLACK);
-            waitForAnyButton();
-        }
-        */
-        
+
+        runUntilSdReady();
+        handleSdCardConnected();
     }
-    
-    // クリーンアップ（通常は到達しない）
-    //delete loader;
-    //delete audio;
-    //delete buttons;
-    //delete lcd;
-    
-    //return 0;
-    
 }

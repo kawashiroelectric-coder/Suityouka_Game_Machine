@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "button_input.hpp"
+#include "battery_monitor.hpp"
 #include "config.hpp"
 #include "encoder_input.hpp"
 #include "pico/stdlib.h"
@@ -40,7 +41,7 @@ constexpr int kBarX = 24;
 constexpr int kBarY = 196;
 constexpr int kBarW = 272;
 constexpr int kBarH = 12;
-constexpr uint16_t kBarFill = Color::rgb(30, 30, 30);
+constexpr uint16_t kBarFill = Color::rgb(0, 0, 0);
 
 struct UiState {
     bool button_pressed[8] = {};
@@ -50,7 +51,31 @@ struct UiState {
     char delta_line[16] = {};
     char pin_line[32] = {};
     char raw_line[32] = {};
+    char battery_line[16] = {};
 };
+
+bool drawTextIfChanged(ST7789_LCD* lcd, int x, int y, const char* text, uint16_t fg,
+                       uint16_t bg, char* cache, size_t cache_size) {
+    if (strcmp(cache, text) == 0) {
+        return false;
+    }
+    strncpy(cache, text, cache_size - 1);
+    cache[cache_size - 1] = '\0';
+    lcd->drawTextBg(static_cast<uint16_t>(x), static_cast<uint16_t>(y), text, fg, bg);
+    return true;
+}
+
+void formatBatteryLine(char* line, size_t line_size) {
+    const float voltage = BatteryMonitor::lastVoltage();
+    snprintf(line, line_size, "%6.3f V", static_cast<double>(voltage));
+}
+
+bool updateBatteryLine(ST7789_LCD* lcd, UiState& state) {
+    char line[16];
+    formatBatteryLine(line, sizeof(line));
+    return drawTextIfChanged(lcd, 240, 6, line, Color::WHITE, Color::BLACK, state.battery_line,
+                             sizeof(state.battery_line));
+}
 
 void drawButtonBox(ST7789_LCD* lcd, const ButtonLayout& layout, bool pressed, bool edge) {
     const uint16_t fill = pressed ? Color::GREEN : Color::rgb(40, 40, 40);
@@ -72,7 +97,6 @@ void drawStaticBackground(ST7789_LCD* lcd) {
     lcd->drawTextBg(8, 18, "SD not detected - insert SD card", Color::YELLOW, Color::BLACK);
 
     lcd->fillRect(kBarX, kBarY, kBarW, kBarH, kBarFill);
-    lcd->drawRect(kBarX, kBarY, kBarW, kBarH, Color::GRAY);
 
     char line[48];
     snprintf(line, sizeof(line), "GP%d/A GP%d/B GP%d/SW", EncoderConfig::PIN_A,
@@ -80,26 +104,20 @@ void drawStaticBackground(ST7789_LCD* lcd) {
     lcd->drawTextBg(24, 172, line, Color::GRAY, Color::BLACK);
 }
 
-bool drawTextIfChanged(ST7789_LCD* lcd, int x, int y, const char* text, uint16_t fg,
-                       uint16_t bg, char* cache, size_t cache_size) {
-    if (strcmp(cache, text) == 0) {
-        return false;
-    }
-    strncpy(cache, text, cache_size - 1);
-    cache[cache_size - 1] = '\0';
-    lcd->drawTextBg(static_cast<uint16_t>(x), static_cast<uint16_t>(y), text, fg, bg);
-    return true;
+void drawEncoderBarFrame(ST7789_LCD* lcd) {
+    lcd->drawRect(kBarX, kBarY, kBarW, kBarH, Color::GRAY);
 }
 
-void updateEncoderMarker(ST7789_LCD* lcd, int32_t position, UiState& state) {
+void refreshEncoderBar(ST7789_LCD* lcd, int32_t position, UiState& state) {
     const int marker = kBarX + static_cast<int>((position % kBarW + kBarW) % kBarW);
-    if (marker == state.marker_x) {
-        return;
-    }
-    if (state.marker_x >= 0) {
+
+    if (state.marker_x >= 0 && state.marker_x != marker) {
         lcd->fillRect(static_cast<uint16_t>(state.marker_x), static_cast<uint16_t>(kBarY - 2), 4,
                       static_cast<uint16_t>(kBarH + 4), kBarFill);
     }
+
+    drawEncoderBarFrame(lcd);
+
     lcd->fillRect(static_cast<uint16_t>(marker), static_cast<uint16_t>(kBarY - 2), 4,
                   static_cast<uint16_t>(kBarH + 4), Color::CYAN);
     state.marker_x = marker;
@@ -148,14 +166,14 @@ bool updateDynamicFields(ST7789_LCD* lcd, ButtonInput* buttons, EncoderInput& en
     changed |= drawTextIfChanged(lcd, 24, 160, line, Color::WHITE, Color::BLACK, state.pin_line,
                                  sizeof(state.pin_line));
 
-    const int marker_before = state.marker_x;
-    updateEncoderMarker(lcd, encoder.position(), state);
-    changed |= (state.marker_x != marker_before);
+    refreshEncoderBar(lcd, encoder.position(), state);
 
     const uint8_t raw = buttons->getAllButtons();
     snprintf(line, sizeof(line), "Port0 raw: 0x%02X (1=open)", raw);
     changed |= drawTextIfChanged(lcd, 24, 214, line, Color::GRAY, Color::BLACK, state.raw_line,
                                  sizeof(state.raw_line));
+
+    changed |= updateBatteryLine(lcd, state);
 
     return changed;
 }
@@ -184,13 +202,17 @@ void initUiState(ST7789_LCD* lcd, ButtonInput* buttons, EncoderInput& encoder, U
     lcd->drawTextBg(24, 214, line, Color::GRAY, Color::BLACK);
     strncpy(state.raw_line, line, sizeof(state.raw_line));
 
+    formatBatteryLine(line, sizeof(line));
+    lcd->drawTextBg(240, 6, line, Color::WHITE, Color::BLACK);
+    strncpy(state.battery_line, line, sizeof(state.battery_line));
+
     for (const ButtonLayout& layout : kButtons) {
         const bool pressed = buttons->isPressed(layout.id);
         drawButtonBox(lcd, layout, pressed, false);
         state.button_pressed[static_cast<int>(layout.id)] = pressed;
     }
 
-    updateEncoderMarker(lcd, encoder.position(), state);
+    refreshEncoderBar(lcd, encoder.position(), state);
 }
 
 }  // namespace
@@ -200,17 +222,22 @@ void InputTestMode::run(const Config& config) {
         return;
     }
 
-    EncoderInput encoder;
-    if (!encoder.initIrq()) {
-        config.lcd->drawTextBg(8, 110, "Encoder IRQ fail", Color::RED, Color::BLACK);
-        return;
+    EncoderInput local_encoder;
+    EncoderInput* encoder = config.encoder;
+    const bool owns_encoder = (encoder == nullptr);
+    if (owns_encoder) {
+        encoder = &local_encoder;
+        if (!encoder->initIrq()) {
+            config.lcd->drawTextBg(8, 110, "Encoder IRQ fail", Color::RED, Color::BLACK);
+            return;
+        }
     }
 
     UiState ui_state;
     config.buttons->update();
-    encoder.update();
-    (void)encoder.consumeDelta();
-    initUiState(config.lcd, config.buttons, encoder, ui_state);
+    encoder->update();
+    (void)encoder->consumeDelta();
+    initUiState(config.lcd, config.buttons, *encoder, ui_state);
 
     uint32_t last_mount_attempt_ms = 0;
     absolute_time_t last_frame = get_absolute_time();
@@ -221,7 +248,9 @@ void InputTestMode::run(const Config& config) {
         if (config.try_mount && (now_ms - last_mount_attempt_ms >= config.mount_retry_ms)) {
             last_mount_attempt_ms = now_ms;
             if (config.try_mount(config.user_data)) {
-                encoder.disableIrq();
+                if (owns_encoder) {
+                    encoder->disableIrq();
+                }
                 config.lcd->fill(Color::BLACK);
                 config.lcd->drawTextBg(8, 110, "SD detected", Color::GREEN, Color::BLACK);
                 config.lcd->drawTextBg(8, 122, "Starting...", Color::WHITE, Color::BLACK);
@@ -230,15 +259,15 @@ void InputTestMode::run(const Config& config) {
         }
 
         config.buttons->update();
-        encoder.update();
-        const int32_t frame_delta = encoder.consumeDelta();
-        (void)encoder.wasSwitchPressed();
-
-        (void)updateDynamicFields(config.lcd, config.buttons, encoder, frame_delta, ui_state);
-
         if (config.on_frame) {
             config.on_frame(config.user_data);
         }
+
+        encoder->update();
+        const int32_t frame_delta = owns_encoder ? encoder->consumeDelta() : 0;
+        (void)encoder->wasSwitchPressed();
+
+        (void)updateDynamicFields(config.lcd, config.buttons, *encoder, frame_delta, ui_state);
 
         const absolute_time_t target =
             delayed_by_ms(last_frame, config.frame_interval_ms);

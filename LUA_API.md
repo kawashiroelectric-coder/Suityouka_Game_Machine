@@ -57,7 +57,10 @@ SD カード上の Lua ゲームから使える API の一覧です。
 
 | 関数 | 引数 | 戻り値 | 意味 |
 |------|------|--------|------|
-| `machine.text(x, y, str [, fg [, bg]])` | `x`, `y` … 左上座標（ピクセル）<br>`str` … 文字列<br>`fg` … 前景色（省略時: 白）<br>`bg` … 背景色（省略時: 黒） | なし | 8×8 ビットマップフォントでテキスト描画（背景付き）。色は下記「色の指定」を参照。 |
+| `machine.text(x, y, str [, fg [, bg]])` | `x`, `y` … 左上座標（ピクセル）<br>`str` … 文字列（UTF-8）<br>`fg` … 前景色（省略時: 白）<br>`bg` … 背景色（省略時: 黒） | なし | 8×8 テキスト描画。`machine.load_font` 済みなら **UTF-8 日本語（美咲サブセット）**、未 load 時は ASCII のみ。 |
+| `machine.load_font(path)` | SD 上の MISF v1 `.bin`（`generate_font.py` 生成） | `true` / `nil`, errmsg | 美咲フォントサブセットを読み込み、`machine.text` を UTF-8 対応にする。 |
+| `machine.font_loaded()` | なし | `boolean` | フォント読込済みか。 |
+| `machine.font_height()` | なし | `integer` | フォント行高（通常 **8**）。 |
 | `machine.width()` | なし | `integer` | 論理画面幅（ピクセル）。通常 **320**（`GameConfig::SCREEN_WIDTH`）。 |
 | `machine.height()` | なし | `integer` | 論理画面高さ（ピクセル）。通常 **240**（`GameConfig::SCREEN_HEIGHT`）。 |
 
@@ -176,10 +179,13 @@ SD カード上の Lua ゲームから使える API の一覧です。
 |------|------|--------|------|
 | `machine.load_image(path, width, height)` | `path` … SD 上のパス（例: `"img/logo.bin"`）<br>`width`, `height` … 画像のピクセルサイズ | 成功: `id`（整数）<br>失敗: `nil`, `errmsg` | ファイルを読み込み RAM スロットに保持。最大 **16 枚**、1 枚あたり最大 **200KB**。 |
 | `machine.draw_image(id, x, y [, sx, sy, sw, sh])` | `id` … `load_image` の戻り値<br>`x`, `y` … 描画先左上<br>省略時: 画像全体<br>7 引数時: ソース矩形 `(sx,sy,sw,sh)` を指定して部分転写 | なし | RGB565 画像を画面に描画（クリッピング付き）。 |
+| `machine.draw_image_keyed(id, x, y [, key_color] \| id, x, y, sx, sy, sw, sh [, key_color])` | 透過色（RGB565）のピクセルをスキップして描画。`key_color` 省略時は **0xF81F**（マゼンタ） | なし | 立ち絵など透過 PNG を `.bin` 化した画像向け。 |
+| `machine.draw_bg_stream(path, x, y, width, height)` | SD 上の RGB565 `.bin` を **現在バンド分だけ** 読み込んで描画 | `boolean` | 背景など大きい画像向け。RAM に全枚載せない。次バンド分を **SD 先読み** し LCD DMA と重ねる（VN 背景 320×168 等）。 |
 | `machine.free_image(id)` | `id` | なし | 画像スロットを解放。 |
 | `machine.image_size(id)` | `id` | `width`, `height` | 読み込み済み画像のサイズを返す。無効 `id` はエラー。 |
 | `machine.load_sprite(...)` | `load_image` と同じ | 同左 | 画像 API の別名（スプライト／タイルセット用）。 |
 | `machine.draw_sprite(...)` | `draw_image` と同じ | なし | 同上。 |
+| `machine.draw_sprite_keyed(...)` | `draw_image_keyed` と同じ | なし | 同上。 |
 | `machine.free_sprite(id)` | `free_image` と同じ | なし | 同上。 |
 | `machine.draw_tilemap(id, map_x, map_y, cols, rows, tile_w, tile_h, sheet_cols, data)` | `id` … タイルセット画像<br>`map_x`, `map_y` … マップ左上<br>`cols`, `rows` … マップのタイル数<br>`tile_w`, `tile_h` … 1 タイルのピクセルサイズ<br>`sheet_cols` … タイルセット画像内の横タイル数<br>`data` … **1 始まり**のタイル番号配列（行優先、最大 2048 セル）。**負の値はスキップ** | なし | タイルマップを描画。現在バンドと交差する行のみ処理。 |
 

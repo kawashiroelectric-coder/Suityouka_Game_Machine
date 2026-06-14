@@ -1,7 +1,6 @@
 -- layers モード表示テスト (Suityouka Game Machine)
--- SD カードルートに本ファイルと tiles/ フォルダを配置して起動
--- 起動: layers_test.lua を game.lua にリネームするか、ホスト側でパス指定
-
+-- SD: /tile_test/layers_test.lua + /tile_test/tiles/*.bin
+-- 相対パスは layers_test.lua があるフォルダ基準（tiles/ は同フォルダ内）
 local W = machine.width()
 local H = machine.height()
 
@@ -18,6 +17,10 @@ local scroll_cloud = 0
 local player_x = 80
 local player_y = 0
 local elapsed = 0
+
+-- player.bin の RGB565 サイズと一致させる（7200 bytes = 60×60×2）
+local PLAYER_W = 80
+local PLAYER_H = 80
 
 local function build_ground_map()
     local m = {}
@@ -69,12 +72,6 @@ function game_init()
         return
     end
 
-    player_id = machine.load_sprite("tiles/player.bin", 16, 16)
-    if not player_id then
-        print("layers_test: load tiles/player.bin failed")
-        return
-    end
-
     machine.set_layer(0, {
         tileset = sheet_id,
         tile_w = TILE,
@@ -106,7 +103,12 @@ function game_init()
     })
     machine.set_layer_tiles(1, build_cloud_map())
 
-    player_y = H - TILE * 4
+    player_id = machine.load_sprite("tiles/player.bin", PLAYER_W, PLAYER_H)
+    if not player_id then
+        print("layers_test: load tiles/player.bin failed (check W×H vs file size)")
+    end
+
+    player_y = H - PLAYER_H
     scroll_ground = 0
     scroll_cloud = 0
     elapsed = 0
@@ -132,13 +134,24 @@ function game_update(dt)
     if machine.pressed(0) then
         player_x = player_x + dt / 8
     end
-    if machine.pressed(3) then
+    if machine.pressed(2) then
         player_x = player_x - dt / 8
     end
-    if player_x < 8 then player_x = 8 end
-    if player_x > W - 24 then player_x = W - 24 end
+    if machine.pressed(3) then
+        player_y = player_y + dt / 8
+    end
+    if machine.pressed(1) then
+        player_y = player_y - dt / 8
+    end
+        
+    -- 左右のはみ出し防止
+    if player_x < 0 then player_x = 0 end
+    if player_x > W - PLAYER_W then player_x = W - PLAYER_W end
+    if player_y < 0 then player_y = 0 end
+    if player_y > H - PLAYER_H then player_y = H - PLAYER_H end
 
-    player_y = H - TILE * 4 + math.floor(math.sin(elapsed / 400) * 4)
+
+    --player_y = H - TILE * 4 + math.floor(math.sin(elapsed / 400) * 4)
 
     if machine.jump_pressed() then
         --return true
@@ -147,14 +160,13 @@ function game_update(dt)
 end
 
 function game_draw()
-    if not player_id then
-        return
+    if player_id then
+        machine.draw_sprite_keyed(player_id, math.floor(player_x), math.floor(player_y))
     end
-    machine.draw_sprite(player_id, math.floor(player_x), math.floor(player_y))
 
     machine.text(4, 4, "LAYERS TEST",
         machine.rgb(255, 255, 255), machine.rgb(25, 35, 70))
-    machine.text(4, 14, "R:RIGHT D:LEFT",
+    machine.text(4, 14, "R:RIGHT L:LEFT U/D:MOVE",
         machine.rgb(200, 200, 220), machine.rgb(25, 35, 70))
     machine.text(4, H - 12, "JUMP=EXIT",
         machine.rgb(200, 200, 220), machine.rgb(25, 35, 70))

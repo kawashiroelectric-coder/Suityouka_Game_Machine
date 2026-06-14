@@ -183,7 +183,7 @@ namespace BatteryLedConfig {
 
 /** 動的ヒープ（malloc / Lua）の全体予算。静的 RAM・スタックを除いた目安値 */
 namespace HeapConfig {
-    constexpr size_t BUDGET_BYTES = 96 * 1024;
+    constexpr size_t BUDGET_BYTES = 128 * 1024;
     /** malloc 失敗前に残しておく安全マージン */
     constexpr size_t RESERVE_BYTES = 8 * 1024;
 }

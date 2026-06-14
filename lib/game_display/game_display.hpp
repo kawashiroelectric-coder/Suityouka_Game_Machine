@@ -23,6 +23,7 @@
 #include <cstdint>
 
 class ST7789_LCD;
+class FontRenderer;
 
 /** フレームバッファへの描画と LCD への DMA 転送 */
 class GameDisplay {
@@ -103,8 +104,10 @@ public:
     /** タイル 1 枚を透過色付きで転写 */
     void drawTileKeyed(int dx, int dy, int tile_w, int tile_h, int sheet_cols, const uint16_t* tileset,
                        int sheet_w, int sheet_h, int tile_index, uint16_t key_color, bool key_enabled);
-    /** 8x8 フォントで背景付きテキスト描画 */
+    /** 8x8 フォントで背景付きテキスト描画（FontRenderer 読込済みなら UTF-8 美咲） */
     void drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bg_color);
+
+    static void setFontRenderer(FontRenderer* font) { font_renderer_ = font; }
 
     /** RGB888 を RGB565 に変換 */
     static uint16_t rgb(uint8_t r, uint8_t g, uint8_t b);
@@ -129,6 +132,7 @@ private:
     int dma_channel_;
     uint8_t* dma_buffer_;
     size_t dma_buffer_size_;
+    static FontRenderer* font_renderer_;
 };
 
 #endif // GAME_DISPLAY_HPP

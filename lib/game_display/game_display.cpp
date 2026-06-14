@@ -3,11 +3,14 @@
 // ============================================
 
 #include "game_display.hpp"
+#include "font_renderer.hpp"
 #include "st7789_lcd.hpp"
 
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+
+FontRenderer* GameDisplay::font_renderer_ = nullptr;
 
 // 8x8 ASCII (st7789_lcd と同じ簡易フォント)
 static const uint8_t kFont8x8[96][8] = {
@@ -475,6 +478,11 @@ void GameDisplay::fillRects(const FillRect* rects, size_t count) {
 /** 改行対応 8x8 テキスト（背景色あり、現在バンドへクリップ） */
 void GameDisplay::drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bg_color) {
     if (!work_buffer_ || !text) return;
+    if (font_renderer_ && font_renderer_->isLoaded()) {
+        font_renderer_->drawTextBg(work_buffer_, width_, band_rows_, band_y0_, x, y, text, color,
+                                   bg_color);
+        return;
+    }
     int cx = x;
     while (*text) {
         if (*text == '\n') {
