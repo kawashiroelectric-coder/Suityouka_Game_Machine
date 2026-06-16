@@ -152,7 +152,57 @@ Test_Lua/visual_novel/
 
 - 文字列 … `"hero"`（中央配置）
 
-- テーブル … `{ id = "hero", pos = "left" }`（`left` / `center` / `right`）
+- テーブル … `{ id = "hero", pos = "left" }` または `{ id = "hero", x = 20 }`
+
+
+
+`pos` は `left` / `center` / `right`。**`x` を指定すると `pos` より `x` が優先**されます。
+
+
+
+### 立ち絵 2 枚同時
+
+
+
+`characters` 配列で最大 2 枚指定できます（後から書いた方が手前）。
+
+
+
+```lua
+
+characters = {
+
+  { id = "hero", x = 8 },
+
+  { id = "mysterious", x = 184 },
+
+},
+
+```
+
+
+
+シーン全体または `lines` 内テーブルで指定可能です。1 ページだけ差し替える例:
+
+
+
+```lua
+
+{
+
+  text = "2 人が向かい合う。",
+
+  characters = {
+
+    { id = "hero", x = 8 },
+
+    { id = "mysterious", x = 184 },
+
+  },
+
+},
+
+```
 
 
 
@@ -246,7 +296,7 @@ python ../../tool/png_to_rgb565bin.py my_char.png --resize 128x168 -o images/cha
 
 
 
-立ち絵は **背景を #FF00FF（マゼンタ）** にすると透過されます（`machine.draw_image_keyed`）。
+立ち絵は **背景を #FF00FF（マゼンタ）** にすると透過されます（`draw_vn_stream` の `key` / `keyed`）。
 
 
 
@@ -280,10 +330,10 @@ return {
 
 
 
-> **背景のメモリ**  
-> 背景（320×168）は `machine.draw_bg_stream` で SD から **バンド単位** に描画します（RAM に全枚載せない）。  
-> ファームウェアは **次バンドを SD 先読み** し LCD 転送と並行処理します（SPI0=LCD / SPI1=SD）。  
-> 立ち絵だけ `load_image` を使います。ファームウェア更新後に `visual_novel.lua` も SD へコピーしてください。
+> **背景・立ち絵のメモリ**  
+> 背景（320×168）と立ち絵（128×168、最大 2 枚）は `machine.draw_vn_stream` で SD から **バンド単位** に合成描画します（RAM に全枚載せない）。  
+> 背景のみ使う場合は `machine.draw_bg_stream` も利用可能です。  
+> ファームウェア更新後に `visual_novel.lua` も SD へコピーしてください。
 
 
 

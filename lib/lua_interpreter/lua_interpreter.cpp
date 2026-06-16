@@ -12,10 +12,12 @@
 
 #include "audio_output.hpp"
 #include "config.hpp"
+#include "debug_overlay.hpp"
 #include "encoder_volume.hpp"
 #include "font_renderer.hpp"
 #include "game_display.hpp"
 #include "heap_budget.hpp"
+#include "bg_stream_util.hpp"
 #include "lua_api_internal.hpp"
 #include "pico/stdlib.h"
 #include "sd_path_util.hpp"
@@ -30,62 +32,6 @@ extern "C" {
 }
 
 namespace {
-
-uint16_t g_bg_stream_buf[2][GameConfig::BUFFER_WIDTH * GameConfig::BUFFER_HEIGHT];
-
-int bgBandTopY(int band_index) {
-    return band_index * static_cast<int>(GameConfig::BUFFER_HEIGHT);
-}
-
-int bgBandBottomY(int band_index) {
-    const int top = bgBandTopY(band_index);
-    const int remaining = static_cast<int>(GameConfig::SCREEN_HEIGHT) - top;
-    if (remaining <= 0) {
-        return top;
-    }
-    if (remaining > static_cast<int>(GameConfig::BUFFER_HEIGHT)) {
-        return top + static_cast<int>(GameConfig::BUFFER_HEIGHT);
-    }
-    return top + remaining;
-}
-
-bool bgStreamBandRegion(int band_index, int dx, int dy, uint16_t w, uint16_t h, int* draw_top,
-                        int* rows, int* src_y0) {
-    const int band_top = bgBandTopY(band_index);
-    const int band_bottom = bgBandBottomY(band_index);
-    const int img_top = dy;
-    const int img_bottom = dy + static_cast<int>(h);
-    const int top = img_top > band_top ? img_top : band_top;
-    const int bottom = img_bottom < band_bottom ? img_bottom : band_bottom;
-    if (top >= bottom) {
-        return false;
-    }
-    *draw_top = top;
-    *rows = bottom - top;
-    *src_y0 = top - dy;
-    return true;
-}
-
-bool readBgStreamChunk(FIL* file, uint16_t w, int src_y0, int rows, uint16_t* dst) {
-    if (!file || !dst || w == 0 || rows <= 0) {
-        return false;
-    }
-    const size_t row_bytes = static_cast<size_t>(w) * 2u;
-    const size_t chunk = row_bytes * static_cast<size_t>(rows);
-    if (chunk > sizeof(g_bg_stream_buf[0])) {
-        return false;
-    }
-    const FSIZE_t offset = static_cast<FSIZE_t>(src_y0) * static_cast<FSIZE_t>(row_bytes);
-    if (f_lseek(file, offset) != FR_OK) {
-        return false;
-    }
-    UINT br = 0;
-    if (f_read(file, dst, static_cast<UINT>(chunk), &br) != FR_OK ||
-        br != static_cast<UINT>(chunk)) {
-        return false;
-    }
-    return true;
-}
 
 static bool requireGameCallbacks(lua_State* L) {
     static const char* kRequired[] = {"game_init", "game_update", "game_draw"};
@@ -140,6 +86,7 @@ void LuaInterpreter::closeGameState() {
     freeAllImages();
     unloadFont();
     closeBgStream();
+    closeVnStreamCompose();
 }
 
 void LuaInterpreter::clearGameScriptDir() { game_script_dir_[0] = '\0'; }
@@ -705,15 +652,13 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
     uint32_t last_ms = to_ms_since_boot(get_absolute_time());
     bool running = true;
     bool failed = false;
-#ifdef GAME_MACHINE_DEBUG
-    luaApiFpsOverlayReset();
-#endif
+    debugOverlayReset();
 
+    // --- メインゲームループ（1 イテレーション = 1 フレーム）---
+    // update → [layers: composeBand] → game_draw×bandCount → DMA 待ち → SD ストリーム close
     while (running) {
         const uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-#ifdef GAME_MACHINE_DEBUG
-        luaApiFpsOverlayTick(now_ms);
-#endif
+        debugOverlayTick(now_ms);
         lua_Integer dt = static_cast<lua_Integer>(now_ms - last_ms);
         last_ms = now_ms;
         if (dt < 0) {
@@ -770,9 +715,6 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
                 lua_pop(game_lua_, 1);
             }
 
-#ifdef GAME_MACHINE_DEBUG
-            luaApiFpsOverlayDraw(hooks_.display);
-#endif
             hooks_.display->endBand();
             prefetchBgStreamBand(band + 1);
         }
@@ -781,10 +723,13 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
         }
         hooks_.display->waitForTransferComplete();
         closeBgStream();
+        closeVnStreamCompose();
+        debugOverlayDrawAfterFrame(hooks_.display->lcd(),
+                                   static_cast<int>(hooks_.display->width()));
 
         EncoderVolumeControl::service();
 
-        sleep_ms(16);
+        //sleep_ms(16);
     }
 
     if (failed) {

@@ -9,10 +9,11 @@
 #include <cstddef>
 #include <cstdint>
 
-/** malloc 系の使用量を追跡し、予算超過時は確保を拒否する */
+/** malloc 系の使用量を追跡し、予算超過時は確保を拒否する。
+ *  Lua の lua_Alloc と load_image / フォント / SE RAM 載せが共用。 */
 namespace HeapBudget {
 
-/** 予算内なら malloc し used_ を加算。成功時 *out に格納 */
+/** 予算内なら malloc し used_ を加算。Lua/画像確保の入口 */
 bool tryAlloc(size_t bytes, void** out);
 
 /** free し used_ を減算（ptr が nullptr のときは何もしない） */

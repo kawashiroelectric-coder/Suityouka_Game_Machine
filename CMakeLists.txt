@@ -30,6 +30,9 @@ include(pico_sdk_import.cmake)
 
 project(Suityouka_Game_Machine C CXX ASM)
 
+# Lua ゲーム中の FPS / RAM オーバーレイ（cmake -DGAME_MACHINE_DEBUG=ON）
+option(GAME_MACHINE_DEBUG "Enable FPS/RAM debug overlay during Lua games" ON)
+
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
@@ -50,6 +53,9 @@ add_executable(Suityouka_Game_Machine
     lib/encoder_input/encoder_input.cpp
     lib/input_test_mode/input_test_mode.cpp
     lib/file_explorer/file_explorer.cpp
+    lib/game_catalog/game_catalog.cpp
+    lib/game_select_menu/game_select_menu.cpp
+    lib/system_settings_menu/system_settings_menu.cpp
     lib/encoder_volume/encoder_volume.cpp
     
     # 音声出力管理
@@ -59,10 +65,14 @@ add_executable(Suityouka_Game_Machine
     # SD上 Lua スクリプト実行
     lib/heap_budget/heap_budget.cpp
     lib/lua_interpreter/lua_interpreter.cpp
+    lib/lua_interpreter/bg_stream_util.cpp
+    lib/lua_interpreter/vn_stream_compose.cpp
     lib/lua_interpreter/lua_api_internal.cpp
     lib/lua_interpreter/lua_api_draw.cpp
     lib/lua_interpreter/lua_api_audio.cpp
     lib/lua_interpreter/lua_api_machine.cpp
+    lib/lua_interpreter/lua_save_data.cpp
+    lib/lua_interpreter/debug_overlay.cpp
     lib/lua_interpreter/lua_audio.cpp
 
     # ゲーム描画 (RGB565 framebuffer)
@@ -108,6 +118,9 @@ target_include_directories(Suityouka_Game_Machine PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/lib/encoder_input  # ロータリーエンコーダ
     ${CMAKE_CURRENT_LIST_DIR}/lib/input_test_mode # SD 未検知時入力テスト
     ${CMAKE_CURRENT_LIST_DIR}/lib/file_explorer   # SD ファイルエクスプローラ
+    ${CMAKE_CURRENT_LIST_DIR}/lib/game_catalog    # /games ゲーム検出
+    ${CMAKE_CURRENT_LIST_DIR}/lib/game_select_menu # ゲーム選択メニュー
+    ${CMAKE_CURRENT_LIST_DIR}/lib/system_settings_menu # システム設定メニュー
     ${CMAKE_CURRENT_LIST_DIR}/lib/encoder_volume  # エンコーダ音量
     ${CMAKE_CURRENT_LIST_DIR}/lib/audio_output   # 音声出力ライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/battery_monitor # バッテリー ADC (Core1)
@@ -174,8 +187,10 @@ add_subdirectory(
 target_compile_definitions(Suityouka_Game_Machine PRIVATE
     USE_PRINTF
     USE_DBG_PRINTF
-    $<$<CONFIG:Debug>:GAME_MACHINE_DEBUG>
 )
+if(GAME_MACHINE_DEBUG)
+    target_compile_definitions(Suityouka_Game_Machine PRIVATE GAME_MACHINE_DEBUG)
+endif()
 
 target_link_libraries(Suityouka_Game_Machine 
     # Pico SDK基本ライブラリ
@@ -195,10 +210,6 @@ target_link_libraries(Suityouka_Game_Machine
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
     lua_static
 )
-target_compile_definitions(Suityouka_Game_Machine PRIVATE
-#  GAME_MACHINE_DEBUG   # 常に有効
-)
-
 
 target_link_options(Suityouka_Game_Machine PRIVATE "LINKER:--print-memory-usage")
 # ============================================

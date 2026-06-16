@@ -127,8 +127,7 @@ local KEY_COLOR = 0xF81F
 
 local scene_by_id = {}
 local state = {}
-local loaded_img = { char = nil }
-local bg_stream_fail = {}
+local vn_stream_fail = {}
 
 local function rgb_from_scene(bg)
   if type(bg) ~= "table" then
@@ -149,33 +148,34 @@ end
 
 local function parse_character(spec)
   if not spec or spec == "" or spec == false then
-    return nil, "center"
+    return nil, "center", nil
   end
   if type(spec) == "string" then
-    return spec, "center"
+    return spec, "center", nil
   end
   if type(spec) == "table" then
-    return spec.id or spec.sprite or spec.char, spec.pos or "center"
+    return spec.id or spec.sprite or spec.char, spec.pos or "center", spec.x
   end
-  return nil, "center"
+  return nil, "center", nil
 end
 
-local function get_line_page(scene, line_index)
-  local raw = scene.lines and scene.lines[line_index]
-  if type(raw) == "table" then
-    return {
-      text = raw.text or raw.line or "",
-      name = raw.name,
-      character = raw.character,
-      bg_image = raw.bg_image,
-    }
+local function char_x_from_spec(def, pos_name, explicit_x)
+  if explicit_x ~= nil then
+    return explicit_x
   end
-  return {
-    text = raw or "",
-    name = nil,
-    character = nil,
-    bg_image = nil,
-  }
+  local fn = CHAR_POS[pos_name] or CHAR_POS.center
+  return fn(def.w)
+end
+
+local function char_default_y(def, explicit_y)
+  if explicit_y ~= nil then
+    return explicit_y
+  end
+  local y = TEXT_BOX_Y - def.h
+  if y < 0 then
+    y = 0
+  end
+  return y
 end
 
 local function get_asset_def(category, asset_id)
@@ -189,100 +189,130 @@ local function get_asset_def(category, asset_id)
   return cat[asset_id]
 end
 
-local function release_loaded(category)
-  local entry = loaded_img[category]
-  if entry then
-    machine.free_image(entry.id)
-    loaded_img[category] = nil
+-- 立ち絵 0〜2 枚分の描画 spec を組み立てる
+local function build_char_specs(scene, page)
+  local specs = {}
+
+  local multi = page.characters or scene.characters
+  if type(multi) == "table" and #multi > 0 then
+    local limit = math.min(2, #multi)
+    for i = 1, limit do
+      local s = multi[i]
+      if type(s) == "table" then
+        local id = s.id or s.sprite or s.char
+        local def = get_asset_def("char", id)
+        if def then
+          specs[#specs + 1] = {
+            id = id,
+            x = char_x_from_spec(def, s.pos or "center", s.x),
+            y = char_default_y(def, s.y),
+            def = def,
+          }
+        end
+      elseif type(s) == "string" then
+        local def = get_asset_def("char", s)
+        if def then
+          specs[#specs + 1] = {
+            id = s,
+            x = char_x_from_spec(def, "center", nil),
+            y = char_default_y(def, nil),
+            def = def,
+          }
+        end
+      end
+    end
+    return specs
   end
+
+  local char_id, pos, explicit_x = parse_character(page.character or scene.character)
+  if char_id and char_id ~= "" then
+    local def = get_asset_def("char", char_id)
+    if def then
+      specs[1] = {
+        id = char_id,
+        x = char_x_from_spec(def, pos, explicit_x),
+        y = char_default_y(def, nil),
+        def = def,
+      }
+    end
+  end
+  return specs
 end
 
-local function ensure_image(category, asset_id)
-  if not asset_id or asset_id == "" then
-    return nil
+local function get_line_page(scene, line_index)
+  local raw = scene.lines and scene.lines[line_index]
+  if type(raw) == "table" then
+    return {
+      text = raw.text or raw.line or "",
+      name = raw.name,
+      character = raw.character,
+      characters = raw.characters,
+      bg_image = raw.bg_image,
+    }
   end
-  local cache_key = category .. ":" .. asset_id
-  local entry = loaded_img[category]
-  if entry and entry.key == cache_key then
-    return entry
-  end
-  release_loaded(category)
+  return {
+    text = raw or "",
+    name = nil,
+    character = nil,
+    characters = nil,
+    bg_image = nil,
+  }
+end
 
-  local def = get_asset_def(category, asset_id)
-  if not def then
-    print("VN: unknown asset: " .. category .. "/" .. tostring(asset_id))
-    return nil
-  end
+local function char_layer_entry(spec)
+  local def = spec.def
   local path = resolve_image_path(def.file)
   if not path then
     return nil
   end
-  local id = machine.load_image(path, def.w, def.h)
-  if not id then
-    print("VN: load_image failed: " .. path)
-    return nil
-  end
-  entry = {
-    key = cache_key,
-    id = id,
+  return {
+    path = path,
+    x = spec.x,
+    y = spec.y,
     w = def.w,
     h = def.h,
+    key = KEY_COLOR,
     keyed = def.keyed == true,
   }
-  loaded_img[category] = entry
-  return entry
 end
 
-local function char_draw_x(entry, pos_name)
-  local fn = CHAR_POS[pos_name] or CHAR_POS.center
-  return fn(entry.w)
-end
+local function draw_scene_stream(scene, page)
+  local compose = { chars = {} }
+  local char_specs = build_char_specs(scene, page)
+  for i = 1, #char_specs do
+    local layer = char_layer_entry(char_specs[i])
+    if layer then
+      compose.chars[#compose.chars + 1] = layer
+    end
+  end
 
-local function draw_background(scene, page)
   local bg_id = page.bg_image or scene.bg_image
-  if not bg_id or bg_id == "" then
+  if bg_id and bg_id ~= "" then
+    local def = get_asset_def("bg", bg_id)
+    if def then
+      local path = resolve_image_path(def.file)
+      if path then
+        compose.bg = { path = path, x = 0, y = 0, w = def.w, h = def.h }
+      end
+    else
+      print("VN: unknown bg: " .. tostring(bg_id))
+    end
+  end
+
+  if not compose.bg and #compose.chars == 0 then
     return false
   end
-  local def = get_asset_def("bg", bg_id)
-  if not def then
-    print("VN: unknown bg: " .. tostring(bg_id))
-    return false
+
+  if machine.draw_vn_stream(compose) then
+    return compose.bg ~= nil
   end
-  local path = resolve_image_path(def.file)
-  if not path then
-    return false
-  end
-  -- 背景は SD からバンド単位でストリーム描画（RAM に全枚載せない）
-  if machine.draw_bg_stream(path, 0, 0, def.w, def.h) then
-    return true
-  end
-  if not bg_stream_fail[path] then
-    bg_stream_fail[path] = true
-    print("VN: draw_bg_stream failed: " .. path)
+
+  local fail_key = (compose.bg and compose.bg.path or "") .. "|" .. #compose.chars
+  if not vn_stream_fail[fail_key] then
+    vn_stream_fail[fail_key] = true
+    print("VN: draw_vn_stream failed")
   end
   return false
-end
-
-local function draw_character(scene, page)
-  local char_id, pos = parse_character(page.character or scene.character)
-  if not char_id or char_id == "" then
-    release_loaded("char")
-    return
-  end
-  local img = ensure_image("char", char_id)
-  if not img then
-    return
-  end
-  local x = char_draw_x(img, pos)
-  local y = TEXT_BOX_Y - img.h
-  if y < 0 then
-    y = 0
-  end
-  if img.keyed then
-    machine.draw_image_keyed(img.id, x, y, KEY_COLOR)
-  else
-    machine.draw_image(img.id, x, y)
-  end
 end
 
 local function build_scene_index()
@@ -522,13 +552,9 @@ function game_draw()
 
   machine.clear(state.bg_color)
 
-  local has_bg_image = scene and draw_background(scene, page)
+  local has_bg_image = scene and draw_scene_stream(scene, page)
   if not has_bg_image and scene and scene.decor_stars ~= false then
     draw_stars(machine.time_ms())
-  end
-
-  if scene then
-    draw_character(scene, page)
   end
 
   draw_text_box()

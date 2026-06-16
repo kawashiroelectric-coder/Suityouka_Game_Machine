@@ -35,7 +35,7 @@
 #define CFG_LCD_PIN_RST       4
 #define CFG_LCD_PIN_DC        5
 #define CFG_LCD_PIN_BLK       14
-#define CFG_LCD_SPI_BAUD_HZ   (60u * 1000u * 1000u)
+#define CFG_LCD_SPI_BAUD_HZ   (625u * 1000u * 1000u)
 #define CFG_LCD_PHYSICAL_WIDTH   240
 #define CFG_LCD_PHYSICAL_HEIGHT  320
 #define CFG_LCD_DEFAULT_ROTATION 1
@@ -183,7 +183,7 @@ namespace BatteryLedConfig {
 
 /** 動的ヒープ（malloc / Lua）の全体予算。静的 RAM・スタックを除いた目安値 */
 namespace HeapConfig {
-    constexpr size_t BUDGET_BYTES = 128 * 1024;
+    constexpr size_t BUDGET_BYTES = 256 * 1024;
     /** malloc 失敗前に残しておく安全マージン */
     constexpr size_t RESERVE_BYTES = 8 * 1024;
 }

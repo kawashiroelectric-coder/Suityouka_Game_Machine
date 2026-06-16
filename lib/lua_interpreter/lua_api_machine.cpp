@@ -230,6 +230,47 @@ int luaHostResolvePath(lua_State* L) {
     return 1;
 }
 
+int luaHostFileExists(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (!interp) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const char* path = luaL_checkstring(L, 1);
+    lua_pushboolean(L, interp->sdFileExists(path));
+    return 1;
+}
+
+int luaHostSaveData(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (!interp) {
+        return luaL_error(L, "no active interpreter");
+    }
+    const char* path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    if (interp->saveDataToSd(L, 2, path)) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    lua_pushnil(L);
+    lua_pushstring(L, interp->lastError());
+    return 2;
+}
+
+int luaHostLoadData(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (!interp) {
+        return luaL_error(L, "no active interpreter");
+    }
+    const char* path = luaL_checkstring(L, 1);
+    if (interp->loadDataFromSd(L, path)) {
+        return 1;
+    }
+    lua_pushnil(L);
+    lua_pushstring(L, interp->lastError());
+    return 2;
+}
+
 void luaRegisterHostApi(lua_State* L) {
     lua_pushcfunction(L, luaHostPrint);
     lua_setglobal(L, "print");
@@ -287,6 +328,8 @@ void luaRegisterHostApi(lua_State* L) {
     lua_setfield(L, -2, "draw_image_keyed");
     lua_pushcfunction(L, luaHostDrawBgStream);
     lua_setfield(L, -2, "draw_bg_stream");
+    lua_pushcfunction(L, luaHostDrawVnStream);
+    lua_setfield(L, -2, "draw_vn_stream");
     lua_pushcfunction(L, luaHostFreeImage);
     lua_setfield(L, -2, "free_image");
     lua_pushcfunction(L, luaHostImageSize);
@@ -345,6 +388,12 @@ void luaRegisterHostApi(lua_State* L) {
     lua_setfield(L, -2, "script_dir");
     lua_pushcfunction(L, luaHostResolvePath);
     lua_setfield(L, -2, "resolve_path");
+    lua_pushcfunction(L, luaHostFileExists);
+    lua_setfield(L, -2, "file_exists");
+    lua_pushcfunction(L, luaHostSaveData);
+    lua_setfield(L, -2, "save_data");
+    lua_pushcfunction(L, luaHostLoadData);
+    lua_setfield(L, -2, "load_data");
     lua_setglobal(L, "machine");
 }
 

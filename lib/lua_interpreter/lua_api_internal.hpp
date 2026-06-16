@@ -1,6 +1,9 @@
 // ============================================
 // ファイル: lua_api_internal.hpp
 // Lua バインディング共通（アクティブ interpreter / 色パース等）
+//
+// machine.* の実装は lua_api_machine / draw / audio に分割。
+// 各 luaHost* は luaApiActiveInterpreter() 経由で LuaInterpreter / GameDisplay に触れる。
 // ============================================
 
 #ifndef LUA_API_INTERNAL_HPP
@@ -16,13 +19,6 @@ LuaInterpreter* luaApiActiveInterpreter();
 void luaApiSetActiveInterpreter(LuaInterpreter* interp);
 GameDisplay* luaApiActiveDisplay();
 uint16_t luaApiParseColor(lua_State* L, int idx);
-
-#ifdef GAME_MACHINE_DEBUG
-class GameDisplay;
-void luaApiFpsOverlayReset();
-void luaApiFpsOverlayTick(uint32_t now_ms);
-void luaApiFpsOverlayDraw(GameDisplay* disp);
-#endif
 
 // --- Lua C バインディング（lua_api_*.cpp で実装） ---
 int luaHostPrint(lua_State* L);
@@ -61,6 +57,7 @@ int luaHostDrawLine(lua_State* L);
 int luaHostDrawCircle(lua_State* L);
 int luaHostFillCircle(lua_State* L);
 int luaHostDrawBgStream(lua_State* L);
+int luaHostDrawVnStream(lua_State* L);
 int luaHostLoadSprite(lua_State* L);
 int luaHostDrawSprite(lua_State* L);
 int luaHostDrawSpriteKeyed(lua_State* L);

@@ -112,9 +112,13 @@ void sd_debug_run_diagnostics(void) {
                card_type_str(card->state.card_type),
                (unsigned long)card->state.sectors);
         if (st & STA_NOINIT) {
-            printf("[SD DBG] >>> FAIL in sd_init_medium or not SDHC (need SDCARD_V2HC)\n");
-        } else if (card->state.card_type != SDCARD_V2HC) {
-            printf("[SD DBG] >>> WARN: init OK but type is not V2HC (library requires SDHC)\n");
+            printf("[SD DBG] >>> FAIL in sd_init_medium\n");
+        } else if (card->state.card_type == SDCARD_V2HC) {
+            printf("[SD DBG] >>> init OK (SDHC/SDXC)\n");
+        } else if (card->state.card_type == SDCARD_V2 || card->state.card_type == SDCARD_V1) {
+            printf("[SD DBG] >>> init OK (SDSC, <=2 GiB)\n");
+        } else {
+            printf("[SD DBG] >>> WARN: init OK but card type unknown\n");
         }
     }
 
@@ -143,7 +147,7 @@ void sd_debug_run_diagnostics(void) {
     } else if (fr == FR_NOT_READY) {
         printf("[SD DBG] >>> FAIL: physical drive not ready (see steps 3-4)\n");
     } else if (fr == FR_NO_FILESYSTEM) {
-        printf("[SD DBG] >>> FAIL: no FAT volume (format as FAT32 on PC)\n");
+        printf("[SD DBG] >>> FAIL: no FAT/exFAT volume (format as FAT32 or exFAT on PC)\n");
     }
 
     /* --- Step 7: comm test --- */

@@ -18,9 +18,9 @@
 #include "lua_interpreter.hpp"
 #include "game_display.hpp"
 #include "input_test_mode.hpp"
-#include "file_explorer.hpp"
 #include "encoder_volume.hpp"
 #include "sd_service.hpp"
+#include "game_select_menu.hpp"
 
 #include <cstring>
 
@@ -49,13 +49,17 @@ static MainLuaHostContext g_luaHostCtx;
 
 void drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bgColor);
 void clearScreen(uint16_t color);
+void waitForButtonRelease();
 void waitForAnyButton();
 
 static void inputTestModeFrameService(void* user_data);
 static void runInputTestMode();
-static void runFileExplorer();
 static void runUntilSdReady();
 static void syncLuaSdMountState();
+static bool launchGameByPath(const char* path);
+static void onMenuFrame(void* user_data);
+static void onMenuRunGame(const char* path, void* user_data);
+static void onMenuRunInputTest(void* user_data);
 
 static void luaHostDrawText(void* user_data, int x, int y, const char* text, uint16_t color,
                             uint16_t bg_color) {
@@ -73,6 +77,7 @@ static bool luaHostButtonPressed(void* user_data, int button_index) {
 }
 
 static void setupLuaInterpreter() {
+    // GameDisplay ↔ バンド FB ↔ ST7789 DMA を束ね、LuaHostHooks で Lua に渡す
     g_luaHostCtx.buttons = buttons;
     g_gameDisplay.bind(framebuffer_a, framebuffer_b, GameConfig::SCREEN_WIDTH,
                        GameConfig::SCREEN_HEIGHT, GameConfig::BUFFER_HEIGHT, lcd, dma_channel,
@@ -86,46 +91,39 @@ static void setupLuaInterpreter() {
     g_luaInterpreter.setSdMounted(SdService::isMounted());
 }
 
-static void fileExplorerRunLua(const char* path, void* user_data) {
-    (void)user_data;
+static bool launchGameByPath(const char* path) {
     if (!path || path[0] == '\0') {
-        return;
+        return false;
     }
-    printf("FileExplorer: run %s\n", path);
+    printf("GameMenu: run %s\n", path);
     if (g_luaInterpreter.runGameLoopFromSd(path)) {
-        return;
+        return true;
     }
 
-    char line[64];
     clearScreen(Color::BLACK);
     drawTextBg(10, 80, "Game start failed", Color::RED, Color::BLACK);
-    snprintf(line, sizeof(line), "%s", path);
-    drawTextBg(10, 92, line, Color::WHITE, Color::BLACK);
+    drawTextBg(10, 92, path, Color::WHITE, Color::BLACK);
     const char* err = g_luaInterpreter.lastError();
     if (err && err[0] != '\0') {
         drawTextBg(10, 116, err, Color::ORANGE, Color::BLACK);
     }
     drawTextBg(10, 140, "Press any button", Color::YELLOW, Color::BLACK);
     waitForAnyButton();
+    return false;
 }
 
-static bool fileExplorerSdPresent(void* user_data) {
+static void onMenuFrame(void* user_data) {
+    inputTestModeFrameService(user_data);
+}
+
+static void onMenuRunGame(const char* path, void* user_data) {
     (void)user_data;
-    return SdService::isMounted() && SdService::isCardPresent();
+    launchGameByPath(path);
 }
 
-static void runFileExplorer() {
-    if (!lcd || !buttons || !SdService::isMounted()) {
-        return;
-    }
-    FileExplorer::Config config = {};
-    config.lcd = lcd;
-    config.buttons = buttons;
-    config.on_frame = inputTestModeFrameService;
-    config.on_run_lua = fileExplorerRunLua;
-    config.is_sd_present = fileExplorerSdPresent;
-    config.frame_interval_ms = 50;
-    FileExplorer::run(config);
+static void onMenuRunInputTest(void* user_data) {
+    (void)user_data;
+    runInputTestMode();
 }
 
 static void runUntilSdReady() {
@@ -247,6 +245,10 @@ void initDMA(ST7789_LCD& lcd_obj) {
 
 int main() {
     stdio_init_all();
+    //デバッグ時はここのコメントアウトを外して USB シリアル接続を待つと便利
+    //while (!stdio_usb_connected()) {
+    //    sleep_ms(10);
+    //}
     printf("=== ゲーム機初期化開始 ===\n");
 
     gpio_init(I2CConfig::RST);
@@ -308,13 +310,20 @@ int main() {
     }
 
     printf("=== 初期化完了 ===\n");
-    drawTextBg(10, 140, "File explorer", Color::WHITE, Color::BLACK);
+    drawTextBg(10, 140, "Game select menu", Color::WHITE, Color::BLACK);
 
     runUntilSdReady();
 
     while (true) {
         if (SdService::isMounted()) {
-            runFileExplorer();
+            GameSelectMenu::Config menu = {};
+            menu.lcd = lcd;
+            menu.buttons = buttons;
+            menu.games_dir = GameConfig::GAMES_DIR;
+            menu.on_frame = onMenuFrame;
+            menu.on_run_game = onMenuRunGame;
+            menu.on_run_input_test = onMenuRunInputTest;
+            GameSelectMenu::run(menu);
             SdService::unmount();
             syncLuaSdMountState();
         }

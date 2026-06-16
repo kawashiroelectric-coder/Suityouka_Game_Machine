@@ -6,7 +6,7 @@
 -- 実体は images/ 以下の .bin（generate_images.py で生成、または PNG 変換）。
 --
 -- 背景: 320 x 168（テキストボックス上の領域）
--- 立ち絵: 128 x 168（マゼンタ 0xF81F を透過キーとして draw_image_keyed で描画）
+-- 立ち絵: 128 x 168（マゼンタ 0xF81F を透過キー。draw_vn_stream / draw_image_keyed で使用）
 --
 return {
   bg = {

@@ -1,3 +1,11 @@
+// ============================================
+// ファイル: sd_path_util.hpp
+// FatFS 向けパス正規化（ヘッダのみ・インライン実装）
+//
+// LuaInterpreter::resolveGamePath / FileExplorer / SD 読込全般で使用。
+// script_dir は runGameLoopFromSd 開始時に extractScriptDir で設定される。
+// ============================================
+
 #pragma once
 
 #include <cstddef>

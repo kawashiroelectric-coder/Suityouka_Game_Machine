@@ -68,11 +68,12 @@ public:
     /** 論理矩形 [y, y+h) が現在バンドと交差するか */
     bool rectIntersectsBand(int y, int h) const;
 
-    /** バンド描画開始: 描画先バッファ・y 原点・行数を設定する */
+    /** バンド描画開始: 描画先バッファ・y 原点・行数を設定する。
+     *  Lua の game_draw 1 回 = 1 バンド分。論理 y は bandTopY..bandBottomY。 */
     void beginBand(int band);
-    /** 現在のバンドを LCD へ転送（非ブロッキング DMA をキック） */
+    /** 現在バンドを LCD へ転送（非ブロッキング DMA をキック）。buffer_a/b を交互使用 */
     void endBand();
-    /** 進行中 DMA の完了待ち（フレーム末尾で呼ぶ） */
+    /** 進行中 DMA の完了待ち（1 フレーム末尾で runGameLoopFromSd が呼ぶ） */
     void waitForTransferComplete();
 
     /** 全画面を単色で塗る（起動画面など game_draw を介さない用途） */
@@ -106,6 +107,8 @@ public:
                        int sheet_w, int sheet_h, int tile_index, uint16_t key_color, bool key_enabled);
     /** 8x8 フォントで背景付きテキスト描画（FontRenderer 読込済みなら UTF-8 美咲） */
     void drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bg_color);
+
+    ST7789_LCD* lcd() const { return lcd_; }
 
     static void setFontRenderer(FontRenderer* font) { font_renderer_ = font; }
 

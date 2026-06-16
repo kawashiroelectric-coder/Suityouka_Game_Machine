@@ -24,11 +24,25 @@
 
 --   bg_image   … 背景画像 id（assets.lua の bg テーブルで定義）
 
---   character  … 立ち絵（文字列 id または { id = "...", pos = "left|center|right" }）
+--   character  … 立ち絵1枚（文字列 id または { id, pos = "left|center|right", x = 数値 }）
+
+--   characters … 立ち絵最大2枚（配列）。例:
+
+--     characters = {
+
+--       { id = "hero", x = 8 },
+
+--       { id = "mysterious", x = 184 },
+
+--     }
+
+--     pos は left/center/right、x を指定すると pos より x が優先されます。
+
+--
 
 --   name       … 話者名（空文字 "" で名前枠を非表示）
 
---   lines      … セリフ（文字列、または下記テーブル形式）
+--
 
 --   next       … 全セリフ表示後に進む次シーン id（choices が無いとき）
 
@@ -136,20 +150,21 @@ return {
 
     bg_image = "street",
 
-    character = { id = "mysterious", pos = "right" },
+    characters = {
+      { id = "hero", pos = "left" },
+      { id = "mysterious", pos = "right" },
+    },
 
     name = "八雲",
 
     lines = {
 
       "…ねえ、聞こえる？",
-
       {
-
         text = "この先に、まだ見ぬ物語があるの。",
-
-        character = { id = "mysterious", pos = "center" },
-
+        characters = {
+          { id = "mysterious", pos = "center" },
+        },
       },
 
     },
@@ -174,7 +189,10 @@ return {
 
     bg_image = "street",
 
-    character = { id = "mysterious", pos = "center" },
+    characters = {
+      { id = "hero", pos = "left" },
+      { id = "mysterious", pos = "right" },
+    },
 
     name = "？？？",
 

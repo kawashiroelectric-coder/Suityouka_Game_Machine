@@ -45,7 +45,9 @@ public:
     void setBackdropColor(uint16_t color) { backdrop_color_ = color; }
     uint16_t backdropColor() const { return backdrop_color_; }
 
-    /** 現在バンドへ下層→上層の順に合成（layers 描画モード用） */
+    /** 現在バンドへ下層→上層の順に合成（layers 描画モード用）。
+     *  runGameLoopFromSd が各バンドの game_draw 前に呼ぶ。
+     *  get_image: load_image スロット id → ピクセル列（LuaInterpreter が提供） */
     void composeBand(GameDisplay* disp, const TileLayerImageView* (*get_image)(int id, void* ctx),
                      void* ctx);
 

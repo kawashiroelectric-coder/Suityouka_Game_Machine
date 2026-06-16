@@ -1,6 +1,16 @@
 // ============================================
 // ファイル: lua_interpreter.hpp
-// SDカード上の Lua スクリプト読み込み・実行
+// SD 上 Lua 5.4 の読み込み・実行と machine.* API の中核。
+//
+// 依存: GameDisplay（描画）, TileLayerSystem（layers モード）,
+//       LuaAudio→AudioOutput（音声）, FontRenderer, HeapBudget, FatFS
+//
+// 実装分割:
+//   lua_api_machine.cpp … machine 登録・パス
+//   lua_api_draw.cpp    … 描画・バンド・画像
+//   lua_api_audio.cpp   … 音声
+//   vn_stream_compose   … draw_vn_stream
+//   bg_stream_util      … SD バンド行読み込み（BG/VN 共用）
 // ============================================
 
 #ifndef LUA_INTERPRETER_HPP
@@ -12,6 +22,7 @@
 #include "lua_audio.hpp"
 #include "tile_layers.hpp"
 #include "font_renderer.hpp"
+#include "vn_stream_compose.hpp"
 
 extern "C" {
 #include "ff.h"
@@ -69,7 +80,10 @@ public:
     /** SD ルートの main.lua / game.lua / boot.lua、無ければ最初の .lua（1回実行） */
     bool executeOnSdRoot();
 
-    /** game_update / game_draw ループ付きゲーム実行 */
+    /** game_update / game_draw ループ付きゲーム実行。
+     *  FileExplorer::on_run_lua から呼ばれるメインエントリ。
+     *  各フレーム: update → 全バンドで draw（layers 時は composeBand 先行）
+     *  → DMA 完了待ち → SD ストリーム FD クローズ。 */
     bool runGameLoopFromSd(const char* path);
 
     /** 指定パスの .lua を読み込んで1回実行 */
@@ -103,9 +117,17 @@ public:
     void freeImage(int id);
     void freeAllImages();
 
-    /** 背景用: SD から現在バンド分だけ RGB565 を読み描画（RAM に全枚載せない） */
+    /** 背景 1 枚: SD から現在バンド行だけ読み drawImageSub（RAM に全枚載せない）。
+     *  フレーム中 FIL を保持し、次バンドを prefetchBgStreamBand で先読み可能。 */
     bool drawBgStreamFromSd(const char* path, int dx, int dy, uint16_t w, uint16_t h);
+    /** フレーム末・ゲーム終了時に bg_stream_ の FIL を閉じる */
     void closeBgStream();
+
+    /** VN: 背景 + 立ち絵最大 2 枚を SD バンド合成（vn_stream_compose.cpp）。
+     *  machine.draw_vn_stream から呼ばれる。 */
+    bool drawVnStreamCompose(lua_State* L, int table_index);
+    /** vn_stream_ の全 FIL を閉じる（フレーム末に runGameLoopFromSd が呼ぶ） */
+    void closeVnStreamCompose();
 
     /** MISF サブセットフォント（美咲）を SD から読み込む */
     bool loadFont(const char* path);
@@ -113,11 +135,19 @@ public:
     FontRenderer* fontRenderer() { return &font_renderer_; }
     const FontRenderer* fontRenderer() const { return &font_renderer_; }
 
-    /** 実行中ゲームスクリプトのディレクトリ（未実行時は ""） */
+    /** 実行中 .lua のディレクトリ（例: "/visual_novel"）。resolveGamePath の基準。 */
     const char* gameScriptDir() const { return game_script_dir_; }
 
-    /** 相対パスを SD 絶対パスに解決（スクリプトディレクトリ基準） */
+    /** 相対パス → SD 絶対パス（sd_path_util::resolveSdPath 経由） */
     void resolveGamePath(const char* path, char* out, size_t out_len) const;
+
+    /** テーブルを SD に保存（Lua リテラル形式、最大 16KB） */
+    bool saveDataToSd(lua_State* L, int table_index, const char* path);
+    /** SD からテーブルを読み込み L に push（失敗時 stack 変更なし） */
+    bool loadDataFromSd(lua_State* L, const char* path);
+
+    friend bool vnStreamComposeDraw(LuaInterpreter* interp, lua_State* L, int table_index);
+    friend void vnStreamComposeClose(LuaInterpreter* interp);
 
 private:
     LuaHostHooks hooks_;
@@ -152,6 +182,8 @@ private:
             uint8_t buf_slot = 0;
         } prefetch;
     } bg_stream_;
+
+    VnStreamComposeState vn_stream_;
 
     void prefetchBgStreamBand(int display_band);
 

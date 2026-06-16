@@ -1,7 +1,7 @@
 # Lua API リファレンス（Suityouka Game Machine）
 
 SD カード上の Lua ゲームから使える API の一覧です。  
-実装: `lib/lua_interpreter/lua_interpreter.cpp`（`registerLuaHostApi` / `runGameLoopFromSd`）。
+実装: `lib/lua_interpreter/`（`lua_api_machine.cpp` / `lua_api_draw.cpp` / `lua_api_audio.cpp`、`lua_interpreter.cpp`、`vn_stream_compose.cpp` 等）。
 
 標準 Lua 5.4 ライブラリ（`luaL_openlibs`）も利用可能です（`string`, `math`, `table` など）。
 
@@ -20,10 +20,9 @@ SD カード上の Lua ゲームから使える API の一覧です。
 ### 描画ループの流れ（ホスト側）
 
 1. `game_update(dt)` を 1 回実行  
-2. 画面を高さ 20 ドットのバンドに分割（例: 240 行 → 12 バンド）  
+2. 画面を高さ 20 ドットのバンドに分割（例: 240 行 → 12 バンド。`GameConfig::BUFFER_HEIGHT`）  
 3. 各バンドで `beginBand` → **`game_draw()`** → LCD へ DMA 転送  
-4. フレーム末尾で転送完了待ち  
-5. 約 16 ms スリープ（簡易フレームレート制御）  
+4. フレーム末尾で転送完了待ち・SD ストリーム用ファイルを閉じる  
 
 そのため **`machine.present()` は呼ばなくてよい**（呼んでも無視される）。
 
@@ -162,7 +161,7 @@ SD カード上の Lua ゲームから使える API の一覧です。
 | `machine.heap_used()` | なし | `integer` | 動的ヒープ使用量（バイト）。 |
 | `machine.heap_available()` | なし | `integer` | 残り確保可能バイト（予算−使用中−予備）。 |
 
-動的確保は `config.hpp` の `HeapConfig::BUDGET_BYTES`（既定 96KB）を超えないよう拒否されます。
+動的確保は `config.hpp` の `HeapConfig::BUDGET_BYTES`（既定 **256KB**、`RESERVE_BYTES` 8KB を除いた分が実質上限）を超えないよう拒否されます。
 
 ### 画面更新（互換用・実質 no-op）
 
@@ -181,6 +180,7 @@ SD カード上の Lua ゲームから使える API の一覧です。
 | `machine.draw_image(id, x, y [, sx, sy, sw, sh])` | `id` … `load_image` の戻り値<br>`x`, `y` … 描画先左上<br>省略時: 画像全体<br>7 引数時: ソース矩形 `(sx,sy,sw,sh)` を指定して部分転写 | なし | RGB565 画像を画面に描画（クリッピング付き）。 |
 | `machine.draw_image_keyed(id, x, y [, key_color] \| id, x, y, sx, sy, sw, sh [, key_color])` | 透過色（RGB565）のピクセルをスキップして描画。`key_color` 省略時は **0xF81F**（マゼンタ） | なし | 立ち絵など透過 PNG を `.bin` 化した画像向け。 |
 | `machine.draw_bg_stream(path, x, y, width, height)` | SD 上の RGB565 `.bin` を **現在バンド分だけ** 読み込んで描画 | `boolean` | 背景など大きい画像向け。RAM に全枚載せない。次バンド分を **SD 先読み** し LCD DMA と重ねる（VN 背景 320×168 等）。 |
+| `machine.draw_vn_stream(config)` | 設定テーブル `config` に従い、背景 + 立ち絵（最大 **2 枚**）を SD から **現在バンド分だけ** 合成描画 | `boolean` | VN 向け。`load_image` なしで背景・立ち絵を SD ストリーム合成。下記 `config` 参照。 |
 | `machine.free_image(id)` | `id` | なし | 画像スロットを解放。 |
 | `machine.image_size(id)` | `id` | `width`, `height` | 読み込み済み画像のサイズを返す。無効 `id` はエラー。 |
 | `machine.load_sprite(...)` | `load_image` と同じ | 同左 | 画像 API の別名（スプライト／タイルセット用）。 |
@@ -190,6 +190,66 @@ SD カード上の Lua ゲームから使える API の一覧です。
 | `machine.draw_tilemap(id, map_x, map_y, cols, rows, tile_w, tile_h, sheet_cols, data)` | `id` … タイルセット画像<br>`map_x`, `map_y` … マップ左上<br>`cols`, `rows` … マップのタイル数<br>`tile_w`, `tile_h` … 1 タイルのピクセルサイズ<br>`sheet_cols` … タイルセット画像内の横タイル数<br>`data` … **1 始まり**のタイル番号配列（行優先、最大 2048 セル）。**負の値はスキップ** | なし | タイルマップを描画。現在バンドと交差する行のみ処理。 |
 
 **ファイルサイズ**: `width * height * 2` バイト（RGB565）と一致している必要があります。
+
+**`draw_vn_stream` の config テーブル**
+
+| キー | 必須 | 意味 |
+|------|------|------|
+| `bg` | — | 背景レイヤー。省略可。テーブル: `{ path, x, y, w, h }` |
+| `chars` | — | 立ち絵レイヤー配列（**最大 2 要素**）。後から書いた方が手前。各要素: `{ path, x, y, w, h [, key] [, keyed] }` |
+
+- `path` … SD 上の `.bin` パス（実行中スクリプト基準の相対パス可）
+- `key` … 透過色 RGB565（省略時 **0xF81F**）
+- `keyed` … 透過を有効にするか（立ち絵は通常 `true`。背景は内部で非透過）
+
+```lua
+machine.draw_vn_stream({
+  bg = { path = "images/bg/classroom.bin", x = 0, y = 0, w = 320, h = 168 },
+  chars = {
+    { path = "images/chars/hero.bin", x = 8,  y = 72, w = 128, h = 168, key = 0xF81F },
+    { path = "images/chars/mysterious.bin", x = 184, y = 72, w = 128, h = 168 },
+  },
+})
+```
+
+### SD パス・外部 Lua 読み込み
+
+| 関数 | 引数 | 戻り値 | 意味 |
+|------|------|--------|------|
+| `machine.load_return(path)` | SD 上の `.lua` パス | 成功: `return` 値 1 個<br>失敗: `nil`, errmsg | 別ファイルを読み込み **1 回だけ** 実行して戻り値を得る（`scenario.lua` / `assets.lua` 向け）。 |
+| `machine.script_dir()` | なし | `string` | 実行中 `.lua` のディレクトリ（末尾 `/` 付き）。未実行時は `"/"`。 |
+| `machine.resolve_path(rel)` | 相対パス | `string` | スクリプトディレクトリ基準で SD 絶対パスに解決。 |
+
+### セーブデータ（SD 上の Lua リテラル）
+
+ゲーム進行をテーブルとして SD に保存・読み込みします。ファイル形式は `return { ... }`（先頭に `-- game_machine save v1` コメント）。
+
+| 関数 | 引数 | 戻り値 | 意味 |
+|------|------|--------|------|
+| `machine.save_data(path, table)` | `path` … SD 上の相対パス<br>`table` … 保存する Lua テーブル | 成功: `true`<br>失敗: `nil`, errmsg | テーブルをシリアライズして SD に書き込み。**最大 16KB**。 |
+| `machine.load_data(path)` | `path` … SD 上の相対パス | 成功: テーブル 1 個<br>失敗: `nil`, errmsg | セーブファイルを読み込みテーブルを返す。 |
+| `machine.file_exists(path)` | `path` … SD 上の相対パス | `boolean` | ファイルが存在すれば `true`。 |
+
+**保存可能な型**: `nil` / `boolean` / `number` / `string` / `table`（ネスト最大 **16** 段）。  
+**不可**: `function` / `userdata` など。キーは **整数** または **文字列** のみ。
+
+**例**:
+
+```lua
+local ok, err = machine.save_data("save.dat", {
+  score = score,
+  x = player_x,
+  y = player_y,
+})
+if not ok then print("save failed:", err) end
+
+local data, err = machine.load_data("save.dat")
+if data then
+  score = data.score or 0
+  player_x = data.x or 0
+  player_y = data.y or 0
+end
+```
 
 **タイルマップ例**（2×2 マップ、16×16 タイル、シート横 4 タイル）:
 
@@ -269,8 +329,13 @@ end
 
 | ファイル | 内容 |
 |----------|------|
-| `lib/lua_interpreter/lua_interpreter.cpp` | API 実装・ゲームループ |
+| `lib/lua_interpreter/lua_interpreter.cpp` | ゲームループ・画像スロット・`draw_bg_stream` |
+| `lib/lua_interpreter/lua_api_machine.cpp` | `machine.*` 登録・パス API |
+| `lib/lua_interpreter/lua_api_draw.cpp` | 描画・バンド・`draw_vn_stream` バインディング |
+| `lib/lua_interpreter/vn_stream_compose.cpp` | VN 用 SD ストリーム合成 |
+| `lib/lua_interpreter/bg_stream_util.cpp` | バンド単位 SD 行読み込み |
 | `lib/lua_interpreter/lua_interpreter.hpp` | 画像スロット上限など |
-| `config.hpp` | 画面サイズ・ボタン定義 |
-| `dino.lua` / `stg.lua` | サンプルゲーム |
+| `config.hpp` | 画面サイズ・ボタン定義・ヒープ予算 |
+| [lib/README.md](lib/README.md) | lib 配下の構成・依存関係 |
+| `Test_Lua/visual_novel/` | VN サンプル（`draw_vn_stream` 使用） |
 | `tool/png_to_rgb565bin.py` | PNG 等 → RGB565 `.bin` 変換 |

@@ -5,12 +5,8 @@
 
 #include "lua_api_internal.hpp"
 
-#include <cstdio>
-#include <cstring>
-
 #include "game_display.hpp"
 #include "lua_interpreter.hpp"
-#include "pico/stdlib.h"
 
 extern "C" {
 #include "lua.h"
@@ -20,53 +16,6 @@ extern "C" {
 namespace {
 
 LuaInterpreter* g_active_interpreter = nullptr;
-
-#ifdef GAME_MACHINE_DEBUG
-class FpsOverlay {
-public:
-    void reset() {
-        last_ms_ = 0;
-        accum_ms_ = 0;
-        frames_ = 0;
-        displayed_fps_ = 0;
-    }
-
-    void tick(uint32_t now_ms) {
-        if (last_ms_ == 0) {
-            last_ms_ = now_ms;
-            return;
-        }
-        const uint32_t dt = now_ms - last_ms_;
-        last_ms_ = now_ms;
-        accum_ms_ += dt;
-        frames_++;
-        if (accum_ms_ >= 250) {
-            displayed_fps_ = static_cast<uint16_t>((frames_ * 1000u + accum_ms_ / 2) / accum_ms_);
-            accum_ms_ = 0;
-            frames_ = 0;
-        }
-    }
-
-    void draw(GameDisplay* disp) const {
-        if (!disp) {
-            return;
-        }
-        char buf[16];
-        snprintf(buf, sizeof(buf), "FPS:%u", static_cast<unsigned>(displayed_fps_));
-        const int text_w = static_cast<int>(strlen(buf)) * 8;
-        const int x = static_cast<int>(disp->width()) - text_w;
-        disp->drawTextBg(x, 0, buf, Color::WHITE, Color::BLACK);
-    }
-
-private:
-    uint32_t last_ms_ = 0;
-    uint32_t accum_ms_ = 0;
-    uint32_t frames_ = 0;
-    uint16_t displayed_fps_ = 0;
-};
-
-FpsOverlay g_fps_overlay;
-#endif
 
 }  // namespace
 
@@ -99,11 +48,3 @@ uint16_t luaApiParseColor(lua_State* L, int idx) {
     }
     return static_cast<uint16_t>(luaL_checkinteger(L, idx));
 }
-
-#ifdef GAME_MACHINE_DEBUG
-void luaApiFpsOverlayReset() { g_fps_overlay.reset(); }
-
-void luaApiFpsOverlayTick(uint32_t now_ms) { g_fps_overlay.tick(now_ms); }
-
-void luaApiFpsOverlayDraw(GameDisplay* disp) { g_fps_overlay.draw(disp); }
-#endif

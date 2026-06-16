@@ -324,6 +324,17 @@ int luaHostDrawBgStream(lua_State* L) {
     return 1;
 }
 
+int luaHostDrawVnStream(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (!interp) {
+        return luaL_error(L, "no active interpreter");
+    }
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const bool ok = interp->drawVnStreamCompose(L, 1);
+    lua_pushboolean(L, ok);
+    return 1;
+}
+
 int luaHostLoadSprite(lua_State* L) { return luaHostLoadImage(L); }
 int luaHostDrawSprite(lua_State* L) { return luaHostDrawImage(L); }
 int luaHostDrawSpriteKeyed(lua_State* L) { return luaHostDrawImageKeyed(L); }

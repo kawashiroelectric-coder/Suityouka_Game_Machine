@@ -5,12 +5,14 @@
 
 #include "sd_service.hpp"
 
+#include <cstdint>
 #include <cstdio>
 
 extern "C" {
 #include "f_util.h"
 #include "ff.h"
 #include "hw_config.h"
+#include "sd_card.h"
 }
 
 namespace {
@@ -38,6 +40,20 @@ bool SdService::mount() {
         return false;
     }
     g_sd_mounted = true;
+
+    sd_card_t* card = sd_get_by_num(0);
+    if (card) {
+        const uint32_t sectors = card->get_num_sectors ? card->get_num_sectors(card) : 0;
+        const unsigned long mib =
+            sectors ? static_cast<unsigned long>((static_cast<uint64_t>(sectors) * 512ULL) / (1024ULL * 1024ULL))
+                    : 0UL;
+        printf("SD mounted: %s, %lu sectors (~%lu MiB)\n",
+               card->state.card_type == SDCARD_V2HC   ? "SDHC/SDXC"
+               : card->state.card_type == SDCARD_V2 ? "SDSC v2"
+               : card->state.card_type == SDCARD_V1 ? "SDSC v1"
+                                                    : "SD",
+               static_cast<unsigned long>(sectors), mib);
+    }
     return true;
 }
 

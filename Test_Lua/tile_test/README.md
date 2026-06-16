@@ -31,15 +31,14 @@ Test_Lua/（親フォルダ）
 
 ### 起動方法
 
-ホストは次の順で `.lua` を探します（`game_machine_main.cpp`）。
+ファイルエクスプローラから **`layers_test.lua`** を選択して起動します（推奨）。
 
-1. `dino.lua` / `stg.lua` / `visual_novel.lua` などが **無い** こと
-2. SD ルートに `layers_test.lua` があること
+SD ルート自動実行（`main.lua` → `game.lua` → `boot.lua` → 最初の `.lua`）を使う場合は、ルートに `layers_test.lua` を置き、他の `.lua` より先に検出されないよう注意してください。
 
 確実に試す場合:
 
-- `layers_test.lua` を SD ルートへコピー
-- または `game.lua` にリネーム（他のゲーム用 `.lua` より優先度は `dino` / `stg` / `visual_novel` より低い）
+- `layers_test.lua` と `tiles/` を SD ルートへコピー
+- または `game.lua` にリネーム（`main.lua` より優先度は低い）
 
 > `tiles/` だけでは起動しません。**`layers_test.lua` + `tiles/*.bin`** の両方が必要です。
 
@@ -212,7 +211,7 @@ player_id = machine.load_sprite("tiles/player.bin", 16, 16)
 | タイルがずれる | `sheet_cols`（8）と `tiles.bin` の横タイル数が不一致 |
 | マップがおかしい | `map_cols * map_rows` と配列長が不一致 |
 | 透過部分が黒 | レイヤーに `transparent = true` 未設定、またはキー色がマゼンタでない |
-| 起動しない | SD ルートに `layers_test.lua` が無い、または `dino.lua` 等が先に検出されている |
+| 起動しない | SD ルートに `layers_test.lua` が無い、または `main.lua` 等が先に実行されている |
 
 シリアルログに `layers_test: load tiles/tiles.bin failed` と出た場合は、SD 上の `tiles/` 配置を確認してください。
 

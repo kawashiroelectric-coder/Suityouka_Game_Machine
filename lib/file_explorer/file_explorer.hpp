@@ -29,7 +29,8 @@ public:
         uint32_t frame_interval_ms = 50;
     };
 
-    /** SD マウント済みであること。is_sd_present が false を返したら終了 */
+    /** SD 上のファイルを一覧・選択し .lua のみ実行する。
+     *  on_run_lua で LuaInterpreter::runGameLoopFromSd を呼ぶ想定（ゲーム終了までブロック）。 */
     static void run(const Config& config);
 };
 
