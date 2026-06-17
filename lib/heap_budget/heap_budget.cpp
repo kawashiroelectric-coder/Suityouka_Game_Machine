@@ -71,8 +71,18 @@ void release(void* ptr, size_t bytes) {
     free(ptr);
 
     uint32_t irq = save_and_disable_interrupts();
-    subUsed(bytes);
+    const size_t prev_used = s_used;
+    const bool underflow = bytes > s_used;
+    if (!underflow) {
+        s_used -= bytes;
+    } else {
+        s_used = 0;
+    }
     restore_interrupts(irq);
+
+    if (underflow) {
+        printf("HeapBudget: underflow (used=%u, free=%u)\n", (unsigned)prev_used, (unsigned)bytes);
+    }
 }
 
 void* reallocBlock(void* ptr, size_t osize, size_t nsize) {
@@ -107,7 +117,14 @@ void* reallocBlock(void* ptr, size_t osize, size_t nsize) {
     if (nsize >= osize) {
         addUsed(nsize - osize);
     } else {
-        subUsed(osize - nsize);
+        const size_t delta = osize - nsize;
+        if (delta > s_used) {
+            restore_interrupts(irq);
+            printf("HeapBudget: underflow (used=%u, free=%u)\n", (unsigned)s_used, (unsigned)delta);
+            s_used = 0;
+            return np;
+        }
+        s_used -= delta;
     }
     restore_interrupts(irq);
 

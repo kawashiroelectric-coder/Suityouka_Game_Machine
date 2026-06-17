@@ -11,6 +11,7 @@
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
 #include "hardware/dma.h"
+#include "hardware/pwm.h"
 #include "config.hpp"
 
 /** RGB565 定数と rgb() 変換 */
@@ -41,6 +42,10 @@ enum class FontSize {
 
 /** ST7789 240x320 液晶（SPI0、回転対応） */
 class ST7789_LCD {
+public:
+    static constexpr int kBacklightMinPercent = 10;
+    static constexpr int kBacklightMaxPercent = 100;
+
 private:
     uint16_t _width;
     uint16_t _height;
@@ -103,6 +108,12 @@ private:
     };
     AsyncDmaState dma_async_;
 
+    static constexpr uint16_t kBacklightPwmWrap = 255;
+    int _backlight_percent = 80;
+    bool _backlight_pwm_ready = false;
+
+    void initBacklightPwm();
+    void applyBacklightPwm();
     void dmaAsyncStartChunk();
     void dmaAsyncFinish();
 
@@ -125,8 +136,11 @@ public:
     /** GPIO / SPI 初期化と ST7789 レジスタ設定 */
     void init();
     
-    /** バックライト ON/OFF */
+    /** バックライト ON/OFF（OFF 時は最小輝度 10%） */
     void setBacklight(bool on);
+    /** バックライト輝度 10〜100%（BLK ピン PWM） */
+    void setBacklightPercent(int percent);
+    int backlightPercent() const { return _backlight_percent; }
     /** 表示の色反転 ON/OFF */
     void invertDisplay(bool i);
 
@@ -184,6 +198,8 @@ public:
     void pumpDrawRawImageDMA();
     /** 非ブロッキング DMA が動作中か */
     bool isDrawRawImageDMABusy() const { return dma_async_.active; }
+    /** 進行中 DMA を完了させ SPI をアイドルにする（メニュー描画前など） */
+    void finishDrawRawImageDMA();
 
     /** 現在の論理幅（回転後） */
     uint16_t width() const { return _width; }

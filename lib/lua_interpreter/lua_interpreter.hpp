@@ -81,10 +81,22 @@ public:
     bool executeOnSdRoot();
 
     /** game_update / game_draw ループ付きゲーム実行。
-     *  FileExplorer::on_run_lua から呼ばれるメインエントリ。
+     *  game_machine_main の runGameFromMenuAndTeardown から呼ばれるメインエントリ。
      *  各フレーム: update → 全バンドで draw（layers 時は composeBand 先行）
-     *  → DMA 完了待ち → SD ストリーム FD クローズ。 */
+     *  → DMA 完了待ち → SD ストリーム FD クローズ。
+     *  戻り後は finishGameSession / closePendingGameSession で片付けること。 */
     bool runGameLoopFromSd(const char* path);
+
+    /** ゲームループ直後の軽量終了（音声停止・BG ストリーム・Lua 大グローバル trim）。
+     *  lua_close は行わない。メニューへ戻る前に必ず呼ぶ。 */
+    void finishGameSession();
+
+    /** finishGameSession 後も Lua VM やフォントが残っているか（遅延解放が必要か） */
+    bool hasPendingGameSession() const;
+
+    /** 遅延していた Lua VM・画像・フォント等を完全解放。
+     *  前回ゲームの残骸がある状態で次の runGameLoopFromSd を呼ぶ前にも使用される。 */
+    void closePendingGameSession();
 
     /** 指定パスの .lua を読み込んで1回実行 */
     bool runScriptFromSd(const char* path);
@@ -127,7 +139,7 @@ public:
      *  machine.draw_vn_stream から呼ばれる。 */
     bool drawVnStreamCompose(lua_State* L, int table_index);
     /** vn_stream_ の全 FIL を閉じる（フレーム末に runGameLoopFromSd が呼ぶ） */
-    void closeVnStreamCompose();
+    void closeVnStreamCompose(bool abandon_open_files = false);
 
     /** MISF サブセットフォント（美咲）を SD から読み込む */
     bool loadFont(const char* path);
@@ -147,7 +159,7 @@ public:
     bool loadDataFromSd(lua_State* L, const char* path);
 
     friend bool vnStreamComposeDraw(LuaInterpreter* interp, lua_State* L, int table_index);
-    friend void vnStreamComposeClose(LuaInterpreter* interp);
+    friend void vnStreamComposeClose(LuaInterpreter* interp, bool abandon_open_files);
 
 private:
     LuaHostHooks hooks_;
@@ -199,6 +211,12 @@ private:
     /** print / sleep_ms / machine.* を Lua に登録 */
     void registerLuaHostApi(lua_State* L);
     void closeGameState();
+    /** フォント / Lua VM / タイル等のみ解放（finishGameSession 後） */
+    void closeDeferredSession();
+    /** 画像・フォント・SD ストリーム等（Lua VM 以外）を解放 */
+    void releaseGameAssets();
+    /** trim 済み Lua VM を lua_close する */
+    void releaseGameLuaVm();
     static const TileLayerImageView* tileLayerLookupImage(int id, void* ctx);
 };
 

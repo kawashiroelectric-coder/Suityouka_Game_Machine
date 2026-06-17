@@ -48,6 +48,6 @@ struct VnStreamComposeState {
 bool vnStreamComposeDraw(LuaInterpreter* interp, lua_State* L, int table_index);
 
 /** オープン中の合成用 SD ファイルをすべて閉じ、状態をリセット */
-void vnStreamComposeClose(LuaInterpreter* interp);
+void vnStreamComposeClose(LuaInterpreter* interp, bool abandon_open_files = false);
 
 #endif  // VN_STREAM_COMPOSE_HPP

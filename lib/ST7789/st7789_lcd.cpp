@@ -5,6 +5,7 @@
 
 #include "st7789_lcd.hpp"
 #include <cstring>
+#include "hardware/pwm.h"
 
 // 8x8 ASCIIフォント (簡易版)
 static const uint8_t font8x8[96][8] = {
@@ -176,15 +177,13 @@ void ST7789_LCD::init() {
     gpio_init(LCDConfig::PIN_CS);
     gpio_init(LCDConfig::PIN_RST);
     gpio_init(LCDConfig::PIN_DC);
-    gpio_init(LCDConfig::PIN_BLK);
-    
+
     gpio_set_dir(LCDConfig::PIN_CS, GPIO_OUT);
     gpio_set_dir(LCDConfig::PIN_RST, GPIO_OUT);
     gpio_set_dir(LCDConfig::PIN_DC, GPIO_OUT);
-    gpio_set_dir(LCDConfig::PIN_BLK, GPIO_OUT);
-    
+
     gpio_put(LCDConfig::PIN_CS, 1);
-    gpio_put(LCDConfig::PIN_BLK, 1);  // バックライトON
+    initBacklightPwm();
     
     // SPI初期化
     spi_init(spi_port, LCDConfig::SPI_BAUD_HZ);
@@ -217,8 +216,50 @@ void ST7789_LCD::init() {
     sleep_ms(100);
 }
 
+void ST7789_LCD::initBacklightPwm() {
+    gpio_set_function(LCDConfig::PIN_BLK, GPIO_FUNC_PWM);
+    const uint slice = pwm_gpio_to_slice_num(LCDConfig::PIN_BLK);
+    pwm_config cfg = pwm_get_default_config();
+    pwm_config_set_clkdiv(&cfg, 4.0f);
+    pwm_config_set_wrap(&cfg, kBacklightPwmWrap);
+    pwm_init(slice, &cfg, true);
+    _backlight_pwm_ready = true;
+    setBacklightPercent(_backlight_percent);
+}
+
+void ST7789_LCD::applyBacklightPwm() {
+    if (!_backlight_pwm_ready) {
+        gpio_init(LCDConfig::PIN_BLK);
+        gpio_set_dir(LCDConfig::PIN_BLK, GPIO_OUT);
+        gpio_put(LCDConfig::PIN_BLK, _backlight_percent >= 50 ? 1 : 0);
+        return;
+    }
+    const uint32_t level =
+        (static_cast<uint32_t>(_backlight_percent) * static_cast<uint32_t>(kBacklightPwmWrap)) /
+        100u;
+    pwm_set_gpio_level(LCDConfig::PIN_BLK, level);
+}
+
+void ST7789_LCD::setBacklightPercent(int percent) {
+    if (percent < kBacklightMinPercent) {
+        percent = kBacklightMinPercent;
+    } else if (percent > kBacklightMaxPercent) {
+        percent = kBacklightMaxPercent;
+    }
+    _backlight_percent = percent;
+    applyBacklightPwm();
+}
+
 void ST7789_LCD::setBacklight(bool on) {
-    gpio_put(LCDConfig::PIN_BLK, on ? 1 : 0);
+    if (on) {
+        if (_backlight_percent < kBacklightMinPercent) {
+            setBacklightPercent(80);
+        } else {
+            applyBacklightPwm();
+        }
+    } else {
+        setBacklightPercent(kBacklightMinPercent);
+    }
 }
 
 
@@ -230,6 +271,16 @@ void ST7789_LCD::invertDisplay(bool i){
     }
 }
 
+
+/** SPI 送信完了まで待機 */
+static void spiWaitIdle(spi_inst_t* spi_port) {
+    while (!(spi_get_hw(spi_port)->sr & SPI_SSPSR_TFE_BITS)) {
+        tight_loop_contents();
+    }
+    while (spi_get_hw(spi_port)->sr & SPI_SSPSR_BSY_BITS) {
+        tight_loop_contents();
+    }
+}
 
 void ST7789_LCD::fill(uint16_t color) {
         fillRect(0, 0, _width, _height, color);
@@ -252,6 +303,7 @@ void ST7789_LCD::fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16
         spi_write_blocking(spi_port, colorBuf, 2);
     }
     
+    spiWaitIdle(spi_port);
     gpio_put(LCDConfig::PIN_CS, 1);
 }
 
@@ -500,22 +552,70 @@ void ST7789_LCD::drawTextBg(uint16_t x, uint16_t y, const char* text, uint16_t c
 }
 
 void ST7789_LCD::drawRawImage(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t* data) {
-    if (x >= _width || y >= _height) return;
-    if (x + w > _width) w = _width - x;
-    if (y + h > _height) h = _height - y;
-    
+    if (x >= _width || y >= _height || !data) {
+        return;
+    }
+    if (x + w > _width) {
+        w = _width - x;
+    }
+    if (y + h > _height) {
+        h = _height - y;
+    }
+    if (w == 0 || h == 0) {
+        return;
+    }
+
     setWindow(x, y, x + w - 1, y + h - 1);
-    
+
     gpio_put(LCDConfig::PIN_DC, 1);
     gpio_put(LCDConfig::PIN_CS, 0);
-    
-    for (uint32_t i = 0; i < w * h; i++) {
-        uint16_t color = data[i];
-        uint8_t colorBuf[2] = {static_cast<uint8_t>(color >> 8), 
-                                static_cast<uint8_t>(color & 0xFF)};
-        spi_write_blocking(spi_port, colorBuf, 2);
+
+    uint8_t row_bytes[GameConfig::SCREEN_WIDTH * 2];
+    for (uint16_t row = 0; row < h; row++) {
+        const uint16_t* src = data + static_cast<size_t>(row) * w;
+        for (uint16_t col = 0; col < w; col++) {
+            const uint16_t color = src[col];
+            row_bytes[col * 2] = static_cast<uint8_t>(color >> 8);
+            row_bytes[col * 2 + 1] = static_cast<uint8_t>(color & 0xFF);
+        }
+        spi_write_blocking(spi_port, row_bytes, static_cast<size_t>(w) * 2u);
     }
-    
+
+    spiWaitIdle(spi_port);
+    gpio_put(LCDConfig::PIN_CS, 1);
+}
+/*
+void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
+    if (x >= _width || y >= _height || !data) {
+        return;
+    }
+    if (x + w > _width) {
+        w = _width - x;
+    }
+    if (y + h > _height) {
+        h = _height - y;
+    }
+    if (w == 0 || h == 0) {
+        return;
+    }
+
+    setWindow(x, y, x + w - 1, y + h - 1);
+
+    gpio_put(LCDConfig::PIN_DC, 1);
+    gpio_put(LCDConfig::PIN_CS, 0);
+
+    uint8_t row_bytes[GameConfig::SCREEN_WIDTH * 2];
+    for (uint16_t row = 0; row < h; row++) {
+        const uint16_t* src = data + static_cast<size_t>(row) * w;
+        for (uint16_t col = 0; col < w; col++) {
+            const uint16_t color = src[col];
+            row_bytes[col * 2] = static_cast<uint8_t>(color >> 8);
+            row_bytes[col * 2 + 1] = static_cast<uint8_t>(color & 0xFF);
+        }
+        spi_write_blocking(spi_port, row_bytes, static_cast<size_t>(w) * 2u);
+    }
+
+    spiWaitIdle(spi_port);
     gpio_put(LCDConfig::PIN_CS, 1);
 }
 /*
@@ -579,15 +679,6 @@ void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     gpio_put(LCDConfig::PIN_CS, 1);
 }
 */
-/** SPI 送信完了まで待機 */
-static void spiWaitIdle(spi_inst_t* spi_port) {
-    while (!(spi_get_hw(spi_port)->sr & SPI_SSPSR_TFE_BITS)) {
-        tight_loop_contents();
-    }
-    while (spi_get_hw(spi_port)->sr & SPI_SSPSR_BSY_BITS) {
-        tight_loop_contents();
-    }
-}
 
 void ST7789_LCD::dmaAsyncFinish() {
     gpio_put(LCDConfig::PIN_CS, 1);
@@ -677,6 +768,17 @@ void ST7789_LCD::pumpDrawRawImageDMA() {
     if (!dma_async_.active) return;
     if (dma_channel_is_busy(dma_async_.dma_channel)) return;
     dmaAsyncStartChunk();
+}
+
+void ST7789_LCD::finishDrawRawImageDMA() {
+    while (isDrawRawImageDMABusy()) {
+        if (dma_channel_is_busy(dma_async_.dma_channel)) {
+            tight_loop_contents();
+            continue;
+        }
+        pumpDrawRawImageDMA();
+    }
+    spiWaitIdle(spi_port);
 }
 
 void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,

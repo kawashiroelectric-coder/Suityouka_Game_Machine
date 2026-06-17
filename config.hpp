@@ -182,6 +182,12 @@ namespace BatteryLedConfig {
 }
 
 /** 動的ヒープ（malloc / Lua）の全体予算。静的 RAM・スタックを除いた目安値 */
+/*数値の目安表
+BUDGET_BYTES	評価
+256KB（現状）    安全側。実運用でクラッシュしにくい
+280〜300KB      ゲーム専用なら試す価値あり。実機で machine.heap_used() と長時間プレイで確認が必要
+320KB 以上      スタック・予算外・断片化で危険域
+384KB           物理上限を超えやすく、現実的には不可に近い*/
 namespace HeapConfig {
     constexpr size_t BUDGET_BYTES = 256 * 1024;
     /** malloc 失敗前に残しておく安全マージン */

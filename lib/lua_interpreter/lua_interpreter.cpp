@@ -47,8 +47,26 @@ static bool requireGameCallbacks(lua_State* L) {
     return true;
 }
 
+static bool g_lua_teardown = false;
+static bool g_session_teardown = false;
+
+static void trimLargeLuaGlobals(lua_State* L) {
+    static const char* kKeys[] = {"SCENES", "ASSETS", "state", "SCENARIO_PATHS", "ASSET_PATHS"};
+    for (const char* key : kKeys) {
+        lua_pushnil(L);
+        lua_setglobal(L, key);
+    }
+}
+
 static void* luaHeapAlloc(void* ud, void* ptr, size_t osize, size_t nsize) {
     (void)ud;
+    if (g_lua_teardown) {
+        if (nsize == 0) {
+            free(ptr);
+            return nullptr;
+        }
+        return realloc(ptr, nsize);
+    }
     return HeapBudget::reallocBlock(ptr, osize, nsize);
 }
 
@@ -72,21 +90,132 @@ LuaInterpreter::~LuaInterpreter() {
     freeAllImages();
 }
 
-void LuaInterpreter::closeGameState() {
-    audio_engine_.stop();
+void LuaInterpreter::releaseGameAssets() {
+    printf("[MENU-DBG] releaseGameAssets begin\n");
+    fflush(stdout);
+    closeBgStream();
+    printf("[MENU-DBG] releaseGameAssets: after closeBgStream\n");
+    fflush(stdout);
+    closeVnStreamCompose(true);
+    printf("[MENU-DBG] releaseGameAssets: after closeVnStreamCompose\n");
+    fflush(stdout);
+    freeAllImages();
+    printf("[MENU-DBG] releaseGameAssets: after freeAllImages\n");
+    fflush(stdout);
+    unloadFont();
+    printf("[MENU-DBG] releaseGameAssets: after unloadFont\n");
+    fflush(stdout);
     draw_mode_ = LuaDrawMode::Direct;
     layer_backdrop_color_ = 0;
     tile_layers_.reset();
-    clearGameScriptDir();
-    if (game_lua_) {
-        luaApiSetActiveInterpreter(nullptr);
-        lua_close(game_lua_);
-        game_lua_ = nullptr;
+    printf("[MENU-DBG] releaseGameAssets done\n");
+    fflush(stdout);
+}
+
+void LuaInterpreter::releaseGameLuaVm() {
+    if (!game_lua_) {
+        return;
     }
-    freeAllImages();
-    unloadFont();
+    luaApiSetActiveInterpreter(nullptr);
+    clearGameScriptDir();
+    trimLargeLuaGlobals(game_lua_);
+    g_lua_teardown = true;
+    printf("[MENU-DBG] releaseGameLuaVm: before lua_close\n");
+    fflush(stdout);
+    lua_close(game_lua_);
+    g_lua_teardown = false;
+    game_lua_ = nullptr;
+    printf("[MENU-DBG] releaseGameLuaVm: after lua_close\n");
+    fflush(stdout);
+}
+
+// ---------------------------------------------------------------------------
+// ゲームセッション終了（game_machine_main::teardownLuaSessionAfterGame から呼ばれる）
+//   1. finishGameSession      … 軽量終了（メニュー復帰を阻害しない）
+//   2. closePendingGameSession … lua_close / 画像 / フォントの完全解放
+// ---------------------------------------------------------------------------
+
+void LuaInterpreter::finishGameSession() {
+    audio_engine_.stop();
     closeBgStream();
-    closeVnStreamCompose();
+    if (game_lua_) {
+        printf("[MENU-DBG] finishGameSession: trimming lua globals\n");
+        fflush(stdout);
+        trimLargeLuaGlobals(game_lua_);
+    }
+    luaApiSetActiveInterpreter(nullptr);
+    vn_stream_.bg.open = false;
+    vn_stream_.bg.active = false;
+    for (int i = 0; i < kVnStreamCharLayers; ++i) {
+        vn_stream_.chars[i].open = false;
+        vn_stream_.chars[i].active = false;
+    }
+    vn_stream_.char_count = 0;
+    printf("[MENU-DBG] finishGameSession done (lua deferred)\n");
+    fflush(stdout);
+}
+
+bool LuaInterpreter::hasPendingGameSession() const {
+    if (game_lua_ != nullptr) {
+        return true;
+    }
+    return FontRenderer::active() == &font_renderer_;
+}
+
+void LuaInterpreter::closeDeferredSession() {
+    printf("[MENU-DBG] closeDeferredSession begin\n");
+    fflush(stdout);
+    g_session_teardown = true;
+    if (game_lua_) {
+        releaseGameLuaVm();
+    }
+    releaseGameAssets();
+    g_session_teardown = false;
+    HeapBudget::resetAccounting();
+    vn_stream_.bg.open = false;
+    vn_stream_.bg.active = false;
+    vn_stream_.bg.path[0] = '\0';
+    vn_stream_.bg.fail_path[0] = '\0';
+    for (int i = 0; i < kVnStreamCharLayers; ++i) {
+        vn_stream_.chars[i].open = false;
+        vn_stream_.chars[i].active = false;
+        vn_stream_.chars[i].path[0] = '\0';
+        vn_stream_.chars[i].fail_path[0] = '\0';
+    }
+    vn_stream_.char_count = 0;
+    printf("[MENU-DBG] closeDeferredSession done\n");
+    fflush(stdout);
+}
+
+void LuaInterpreter::closePendingGameSession() {
+    printf("[MENU-DBG] closePendingGameSession begin\n");
+    fflush(stdout);
+    g_session_teardown = true;
+    if (game_lua_) {
+        releaseGameLuaVm();
+    }
+    releaseGameAssets();
+    g_session_teardown = false;
+    HeapBudget::resetAccounting();
+    vn_stream_.bg.open = false;
+    vn_stream_.bg.active = false;
+    vn_stream_.bg.path[0] = '\0';
+    vn_stream_.bg.fail_path[0] = '\0';
+    for (int i = 0; i < kVnStreamCharLayers; ++i) {
+        vn_stream_.chars[i].open = false;
+        vn_stream_.chars[i].active = false;
+        vn_stream_.chars[i].path[0] = '\0';
+        vn_stream_.chars[i].fail_path[0] = '\0';
+    }
+    vn_stream_.char_count = 0;
+    printf("[MENU-DBG] closePendingGameSession done\n");
+    fflush(stdout);
+}
+
+void LuaInterpreter::closeGameState() {
+    audio_engine_.stop();
+    closeBgStream();
+    closeDeferredSession();
 }
 
 void LuaInterpreter::clearGameScriptDir() { game_script_dir_[0] = '\0'; }
@@ -125,7 +254,11 @@ bool LuaInterpreter::loadFont(const char* path) {
 }
 
 void LuaInterpreter::unloadFont() {
-    font_renderer_.unload();
+    if (g_session_teardown) {
+        font_renderer_.unloadRaw();
+    } else {
+        font_renderer_.unload();
+    }
     if (FontRenderer::active() == &font_renderer_) {
         FontRenderer::setActive(nullptr);
     }
@@ -355,14 +488,26 @@ void LuaInterpreter::freeImage(int id) {
     if (id < 0 || id >= kMaxImageSlots) {
         return;
     }
-    if (images_[id].used) {
-        HeapBudget::release(images_[id].pixels, images_[id].byte_size);
-        images_[id] = ImageSlot();
+    if (!images_[id].used) {
+        return;
     }
+    if (images_[id].pixels) {
+        if (g_session_teardown) {
+            free(images_[id].pixels);
+        } else {
+            HeapBudget::release(images_[id].pixels, images_[id].byte_size);
+        }
+    }
+    images_[id] = ImageSlot();
 }
 
 void LuaInterpreter::freeAllImages() {
     for (int i = 0; i < kMaxImageSlots; i++) {
+        if (images_[i].used) {
+            printf("[MENU-DBG] freeImage slot=%d bytes=%u\n", i,
+                   static_cast<unsigned>(images_[i].byte_size));
+            fflush(stdout);
+        }
         freeImage(i);
     }
 }
@@ -602,9 +747,16 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
         return false;
     }
 
+    if (hasPendingGameSession()) {
+        printf("[MENU-DBG] runGameLoopFromSd: closing pending session\n");
+        fflush(stdout);
+        closePendingGameSession();
+        printf("[MENU-DBG] runGameLoopFromSd: pending session closed\n");
+        fflush(stdout);
+    }
+
     char* source = nullptr;
     size_t len = 0;
-    closeGameState();
     if (!readSdFileToBuffer(path, &source, &len)) {
         showStatus("Read failed", path, Color::RED, Color::BLACK);
         return false;
@@ -688,6 +840,8 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
         }
         if (lua_toboolean(game_lua_, -1)) {
             lua_pop(game_lua_, 1);
+            printf("[MENU-DBG] runGameLoop: game_update returned true (exit request)\n");
+            fflush(stdout);
             break;
         }
         lua_pop(game_lua_, 1);
@@ -737,7 +891,16 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
     } else {
         printf("Lua game ended: %s\n", path);
     }
-    closeGameState();
+    fflush(stdout);
+    printf("[MENU-DBG] runGameLoop: loop finished failed=%d\n", failed ? 1 : 0);
+    fflush(stdout);
+    closeBgStream();
+    closeVnStreamCompose(true);
+    if (hooks_.display) {
+        hooks_.display->releaseForDirectDraw();
+    }
+    printf("[MENU-DBG] runGameLoop: returning %d (defer finishGameSession)\n", failed ? 0 : 1);
+    fflush(stdout);
     return !failed;
 }
 

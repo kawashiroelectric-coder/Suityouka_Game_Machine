@@ -75,6 +75,8 @@ int luaHostClearAllLayers(lua_State* L);
 int luaHostLoadFont(lua_State* L);
 int luaHostFontLoaded(lua_State* L);
 int luaHostFontHeight(lua_State* L);
+int luaHostFontAdvance(lua_State* L);
+int luaHostSetFontScale(lua_State* L);
 int luaHostLoadReturn(lua_State* L);
 int luaHostScriptDir(lua_State* L);
 int luaHostResolvePath(lua_State* L);

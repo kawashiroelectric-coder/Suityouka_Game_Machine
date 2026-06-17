@@ -52,11 +52,11 @@ add_executable(Suityouka_Game_Machine
     lib/button_input/button_input.cpp
     lib/encoder_input/encoder_input.cpp
     lib/input_test_mode/input_test_mode.cpp
-    lib/file_explorer/file_explorer.cpp
     lib/game_catalog/game_catalog.cpp
     lib/game_select_menu/game_select_menu.cpp
     lib/system_settings_menu/system_settings_menu.cpp
     lib/encoder_volume/encoder_volume.cpp
+    lib/device_settings/device_settings.cpp
     
     # 音声出力管理
     lib/audio_output/audio_output.cpp
@@ -117,11 +117,11 @@ target_include_directories(Suityouka_Game_Machine PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/lib/button_input   # ボタン入力ライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/encoder_input  # ロータリーエンコーダ
     ${CMAKE_CURRENT_LIST_DIR}/lib/input_test_mode # SD 未検知時入力テスト
-    ${CMAKE_CURRENT_LIST_DIR}/lib/file_explorer   # SD ファイルエクスプローラ
     ${CMAKE_CURRENT_LIST_DIR}/lib/game_catalog    # /games ゲーム検出
     ${CMAKE_CURRENT_LIST_DIR}/lib/game_select_menu # ゲーム選択メニュー
     ${CMAKE_CURRENT_LIST_DIR}/lib/system_settings_menu # システム設定メニュー
     ${CMAKE_CURRENT_LIST_DIR}/lib/encoder_volume  # エンコーダ音量
+    ${CMAKE_CURRENT_LIST_DIR}/lib/device_settings # フラッシュ永続設定
     ${CMAKE_CURRENT_LIST_DIR}/lib/audio_output   # 音声出力ライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/battery_monitor # バッテリー ADC (Core1)
     ${CMAKE_CURRENT_LIST_DIR}/lib/heap_budget      # 動的ヒープ予算
@@ -130,7 +130,6 @@ target_include_directories(Suityouka_Game_Machine PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/lib/font_renderer   # UTF-8 サブセットフォント
     ${CMAKE_CURRENT_LIST_DIR}/lib/sd_path_util    # FatFS パス正規化
     ${CMAKE_CURRENT_LIST_DIR}/lib/tile_layers     # タイル背景レイヤー
-    #${CMAKE_CURRENT_LIST_DIR}/lib/game_loader    # ゲームローダーライブラリのヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/ST7789         # ST7789 LCD ドライバヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/pcm5102_i2s    # PCM5102 32bit I2S PIO
     ${CMAKE_CURRENT_LIST_DIR}/lib/sd_service       # SD マウント管理
@@ -201,10 +200,11 @@ target_link_libraries(Suityouka_Game_Machine
     hardware_spi      # SPI通信（LCD、SDカード用）
     hardware_i2c      # I2C通信（ボタン入力用）
     hardware_dma      # DMA転送（LCD、音声出力用）
-    hardware_adc        # バッテリー電圧 (Core1)
+    hardware_adc      # バッテリー電圧 (Core1)
     hardware_pio      # PCM5102 I2S（音声 PIO）
     hardware_gpio     # GPIO制御
-    hardware_adc      # ADC（バッテリーモニター用）
+    hardware_pwm      # LCD バックライト (BLK)
+    hardware_flash    # 音量・輝度の永続化
 
     # SDカード/FatFSライブラリ
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico

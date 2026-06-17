@@ -76,6 +76,9 @@ public:
     /** 進行中 DMA の完了待ち（1 フレーム末尾で runGameLoopFromSd が呼ぶ） */
     void waitForTransferComplete();
 
+    /** ゲーム終了後に ST7789 直描画（メニュー等）へ戻る前の DMA 解放 */
+    void releaseForDirectDraw();
+
     /** 全画面を単色で塗る（起動画面など game_draw を介さない用途） */
     void fillScreen(uint16_t color);
 

@@ -1,6 +1,6 @@
 // ============================================
 // ファイル: encoder_volume.cpp
-// エンコーダによるマスター音量（15 段階）とデバッグ表示
+// エンコーダによるマスター音量（15 段階）
 // ============================================
 
 #include "encoder_volume.hpp"
@@ -8,23 +8,19 @@
 #include <cstdio>
 
 #include "audio_output.hpp"
-#include "config.hpp"
+#include "device_settings.hpp"
 #include "encoder_input.hpp"
 #include "lua_audio.hpp"
 #include "pico/stdlib.h"
-#include "st7789_lcd.hpp"
 
 namespace {
 
 AudioOutput* g_audio = nullptr;
 LuaAudio* g_lua_audio = nullptr;
-ST7789_LCD* g_lcd = nullptr;
 EncoderInput g_encoder;
 bool g_encoder_ready = false;
 
 int g_volume_step = EncoderVolumeControl::kVolumeStepMax;
-uint32_t g_overlay_until_ms = 0;
-bool g_overlay_clear_pending = false;
 /** 1 デテント = 4 カウント（クアッドエンコーダ） */
 constexpr int kEncoderCountsPerDetent = 4;
 int32_t g_volume_encoder_base = 0;
@@ -51,8 +47,6 @@ bool EncoderVolumeControl::initEncoder() {
     return true;
 }
 
-void EncoderVolumeControl::setDisplay(ST7789_LCD* lcd) { g_lcd = lcd; }
-
 EncoderInput& EncoderVolumeControl::encoder() { return g_encoder; }
 
 int EncoderVolumeControl::volumeStep() { return g_volume_step; }
@@ -75,30 +69,19 @@ void EncoderVolumeControl::applyVolume() {
 
 void EncoderVolumeControl::onVolumeChanged() {
     applyVolume();
-    g_overlay_until_ms = to_ms_since_boot(get_absolute_time()) + kOverlayMs;
-    g_overlay_clear_pending = true;
+    DeviceSettings::setVolumeStep(g_volume_step);
     printf("Volume: step %d/%d (%.2f)\n", g_volume_step + 1, kVolumeSteps, volumeFloat());
 }
 
-void EncoderVolumeControl::drawOverlayIfNeeded() {
-    if (!g_lcd) {
-        return;
+void EncoderVolumeControl::restoreVolumeStep(int step) {
+    if (step < 0) {
+        step = 0;
     }
-
-    const uint32_t now = to_ms_since_boot(get_absolute_time());
-    if (now < g_overlay_until_ms) {
-        char line[20];
-        std::snprintf(line, sizeof(line), "VOL %2d/15", g_volume_step + 1);
-        g_lcd->fillRect(0, 0, 96, 10, Color::BLACK);
-        g_lcd->drawTextBg(4, 4, line, Color::YELLOW, Color::BLACK);
-        g_overlay_clear_pending = true;
-        return;
+    if (step > kVolumeStepMax) {
+        step = kVolumeStepMax;
     }
-
-    if (g_overlay_clear_pending) {
-        g_lcd->fillRect(0, 0, 96, 10, Color::BLACK);
-        g_overlay_clear_pending = false;
-    }
+    g_volume_step = step;
+    applyVolume();
 }
 
 void EncoderVolumeControl::service() {
@@ -126,5 +109,5 @@ void EncoderVolumeControl::service() {
         }
     }
 
-    drawOverlayIfNeeded();
+    DeviceSettings::service();
 }

@@ -1,11 +1,12 @@
 // ============================================
 // ファイル: font_renderer.cpp
-// MISF サブセットフォント（美咲 8x8）UTF-8 描画
+// MISF サブセットフォント（8x8 / 12x12 等）UTF-8 描画
 // ============================================
 
 #include "font_renderer.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 extern "C" {
@@ -28,13 +29,66 @@ FontRenderer::~FontRenderer() {
 }
 
 void FontRenderer::unload() {
-    if (glyph_data_) {
-        HeapBudget::release(glyph_data_, alloc_bytes_);
+    if (index_) {
+        auto* base = reinterpret_cast<uint8_t*>(index_) - 16;
+        HeapBudget::release(base, alloc_bytes_);
     }
     glyph_data_ = nullptr;
     index_ = nullptr;
     glyph_count_ = 0;
     alloc_bytes_ = 0;
+    scale_num_ = 1;
+    scale_den_ = 1;
+}
+
+void FontRenderer::unloadRaw() {
+    if (index_) {
+        auto* base = reinterpret_cast<uint8_t*>(index_) - 16;
+        free(base);
+    }
+    glyph_data_ = nullptr;
+    index_ = nullptr;
+    glyph_count_ = 0;
+    alloc_bytes_ = 0;
+    scale_num_ = 1;
+    scale_den_ = 1;
+}
+
+void FontRenderer::setScale(uint8_t num, uint8_t den) {
+    if (num == 0 || den == 0) {
+        scale_num_ = 1;
+        scale_den_ = 1;
+        return;
+    }
+    scale_num_ = num;
+    scale_den_ = den;
+}
+
+uint8_t FontRenderer::scaleValue(uint8_t value) const {
+    if (scale_num_ == scale_den_) {
+        return value;
+    }
+    return static_cast<uint8_t>((static_cast<unsigned>(value) * scale_num_) / scale_den_);
+}
+
+uint8_t FontRenderer::bytesPerRow() const {
+    if (glyph_h_ == 0) {
+        return 0;
+    }
+    return static_cast<uint8_t>(bytes_per_glyph_ / glyph_h_);
+}
+
+bool FontRenderer::glyphPixel(const uint8_t* glyph, int row, int col) const {
+    if (!glyph || row < 0 || col < 0 || row >= glyph_h_ || col >= glyph_w_) {
+        return false;
+    }
+    const uint8_t bytes_per_row = bytesPerRow();
+    if (bytes_per_row == 0) {
+        return false;
+    }
+    const uint8_t bits = glyph[static_cast<size_t>(row) * bytes_per_row + static_cast<size_t>(col / 8)];
+    const uint8_t mask = static_cast<uint8_t>(0x80u >> (col % 8));
+    return (bits & mask) != 0;
 }
 
 bool FontRenderer::loadFromSd(const char* path) {
@@ -147,20 +201,46 @@ void FontRenderer::drawGlyph(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, in
     if (!fb || !glyph) {
         return;
     }
-    for (int row = 0; row < glyph_h_; ++row) {
-        const int py = y + row;
+
+    const int out_w = scaleValue(glyph_w_);
+    const int out_h = scaleValue(glyph_h_);
+    if (out_w <= 0 || out_h <= 0) {
+        return;
+    }
+
+    if (scale_num_ == scale_den_) {
+        for (int row = 0; row < glyph_h_; ++row) {
+            const int py = y + row;
+            const int local_y = py - band_y0;
+            if (local_y < 0 || local_y >= static_cast<int>(band_rows)) {
+                continue;
+            }
+            for (int col = 0; col < glyph_w_; ++col) {
+                const int px = x + col;
+                if (px < 0 || px >= static_cast<int>(fb_w)) {
+                    continue;
+                }
+                const uint16_t color = glyphPixel(glyph, row, col) ? fg : bg;
+                fb[static_cast<uint32_t>(local_y) * fb_w + static_cast<uint32_t>(px)] = color;
+            }
+        }
+        return;
+    }
+
+    for (int oy = 0; oy < out_h; ++oy) {
+        const int py = y + oy;
         const int local_y = py - band_y0;
         if (local_y < 0 || local_y >= static_cast<int>(band_rows)) {
             continue;
         }
-        const uint8_t bits = glyph[row];
-        for (int col = 0; col < glyph_w_; ++col) {
-            const int px = x + col;
+        const int src_row = (oy * static_cast<int>(glyph_h_)) / out_h;
+        for (int ox = 0; ox < out_w; ++ox) {
+            const int px = x + ox;
             if (px < 0 || px >= static_cast<int>(fb_w)) {
                 continue;
             }
-            const uint8_t mask = static_cast<uint8_t>(0x80u >> col);
-            const uint16_t color = (bits & mask) ? fg : bg;
+            const int src_col = (ox * static_cast<int>(glyph_w_)) / out_w;
+            const uint16_t color = glyphPixel(glyph, src_row, src_col) ? fg : bg;
             fb[static_cast<uint32_t>(local_y) * fb_w + static_cast<uint32_t>(px)] = color;
         }
     }
@@ -234,7 +314,7 @@ void FontRenderer::drawTextBg(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, i
     while (*p) {
         if (*p == '\n') {
             cx = x;
-            cy += glyph_h_;
+            cy += scaleValue(glyph_h_);
             ++p;
             continue;
         }
@@ -252,12 +332,12 @@ void FontRenderer::drawTextBg(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, i
             advance = entry->advance ? entry->advance : default_advance_;
             glyph = glyph_data_ + static_cast<size_t>(entry->glyph_index) * bytes_per_glyph_;
         } else if (codepoint == ' ') {
-            cx += advance;
+            cx += scaleValue(advance);
             continue;
         } else {
             const IndexEntry* fallback = findGlyph(static_cast<uint32_t>('?'));
             if (!fallback) {
-                cx += advance;
+                cx += scaleValue(advance);
                 continue;
             }
             advance = fallback->advance ? fallback->advance : default_advance_;
@@ -265,6 +345,6 @@ void FontRenderer::drawTextBg(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, i
         }
 
         drawGlyph(fb, fb_w, band_rows, band_y0, cx, cy, glyph, fg, bg);
-        cx += advance;
+        cx += scaleValue(advance);
     }
 }

@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <cstdio>
 
+#include "pico/stdlib.h"
+
 extern "C" {
 #include "f_util.h"
 #include "ff.h"
@@ -62,6 +64,16 @@ void SdService::unmount() {
         f_unmount("");
         g_sd_mounted = false;
     }
+}
+
+bool SdService::remount() {
+    const bool was_mounted = g_sd_mounted;
+    unmount();
+    if (!was_mounted) {
+        return false;
+    }
+    sleep_ms(20);
+    return mount();
 }
 
 void SdService::listRoot() {

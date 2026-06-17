@@ -7,6 +7,108 @@ SD カード上の Lua ゲームから使える API の一覧です。
 
 ---
 
+## SD 配置とゲーム選択メニュー
+
+ファームウェア起動後は **Game Select Menu**（ゲーム選択画面）が表示されます。SD 未挿入でも起動し、**ホットプラグ**（挿抜検知・自動マウント）に対応しています。  
+ゲームの起動はメニューから行い、終了後は再びゲーム選択画面に戻ります。
+
+### `/games` ディレクトリ
+
+検出対象は SD 上の **`/games`**（`GameConfig::GAMES_DIR`）です。ルート直下の `.lua` は一覧に出ません。`/games` フォルダを作成し、その中にゲームを置いてください。
+
+### 一覧に載る条件
+
+| 配置 | タイトル表示 | 起動スクリプト |
+|------|-------------|----------------|
+| **`/games/フォルダ名/`**（サブフォルダ） | フォルダ名 | 下記「フォルダ内の決め方」 |
+| **`/games/名前.lua`**（直下の `.lua`） | ファイル名（`_` → スペース、拡張子除去） | その `.lua` 自体 |
+
+- 先頭が `.` の名前は無視します。
+- 最大 **32** 件まで登録（`GameCatalog::kMaxEntries`）。
+- 補助スクリプトだけのフォルダ（起動用 `.lua` が解決できない）は一覧に出ません。
+
+### フォルダ内の起動スクリプトの決め方
+
+フォルダ内では次の優先順位で 1 本を選びます（`lib/game_catalog/game_catalog.cpp`）。
+
+1. `game.lua` → `main.lua` → `boot.lua`
+2. **`フォルダ名.lua`**（例: `/games/dino/dino.lua`）
+3. ソース先頭付近に **`game_init` の定義**がある `.lua`（補助ファイル名を除く）
+4. 上記以外の `.lua`（補助ファイルを除く）
+5. どれも該当しなければ補助 `.lua` を含む候補
+
+**補助スクリプト**（単体では起動候補にしにくい名前）:  
+`assets.lua`, `scenario.lua`, `config.lua`, `data.lua`, `constants.lua`, `level_data.lua`, `levels.lua`
+
+VN のように `visual_novel.lua` + `scenario.lua` 構成の場合、**`game_init` を定義した方**が起動スクリプトになります。
+
+### メニュー用プレビュー画像（`.bin`）
+
+右パネルに **100×100** の RGB565 プレビューを表示します。  
+`tool/png_to_rgb565bin.py` 等で `.bin` を用意してください。
+
+- **推奨**: `100×100`（`20,000` バイト）— パネル全体を使用
+- **対応**: 幅・高さとも **1〜100** で、`幅 × 高さ × 2` バイトとファイルサイズが一致する RGB565（例: **64×64** = `8,192` バイト）。小さい画像はパネル中央に配置されます
+- **不可**: `20,000` バイト超、または上記の寸法に解釈できないサイズ
+
+**プレビューファイルの探索順**（最初に見つかったものを使用）:
+
+| 優先 | パス（フォルダ内ゲームの例） |
+|------|------------------------------|
+| 1 | `title.bin` |
+| 2 | `preview.bin` |
+| 3 | **起動スクリプトと同名の `.bin`**（拡張子だけ `.lua` → `.bin`） |
+
+例:
+
+| 起動スクリプト | プレビュー候補（この順で探索） |
+|----------------|-------------------------------|
+| `/games/dino/dino.lua` | `dino/title.bin` → `dino/preview.bin` → **`dino/dino.bin`** |
+| `/games/puzzle.lua` | `/games/title.bin` → `/games/preview.bin` → **`/games/puzzle.bin`** |
+
+プレビュー用 `.bin` の変換例（100×100）:
+
+```bash
+python tool/png_to_rgb565bin.py artwork.png --resize 100x100 -o games/dino/dino.bin
+```
+
+64×64 など小さい `.bin` も表示できます（中央配置）。`tool/dino.bin` は 64×64（8,192 バイト）です。
+
+プレビューが無い、またはサイズ不足の場合は `NO IMAGE` と表示されます（ゲーム起動には影響しません）。
+
+### SD 配置例
+
+```
+/games/
+├── dino/
+│   ├── dino.lua          # 起動（フォルダ名と同名）
+│   ├── dino.bin          # メニュー右のプレビュー
+│   └── tiles/
+├── puzzle.lua            # /games 直下のゲーム
+├── puzzle.bin            # puzzle.lua のプレビュー
+└── visual_novel/
+    ├── visual_novel.lua  # game_init あり → 起動スクリプト
+    ├── scenario.lua      # 補助（一覧の起動には使わない）
+    ├── title.bin         # プレビュー（最優先）
+    ├── fonts/
+    └── images/
+```
+
+ゲーム内アセットのパスは、**実行中の起動スクリプトのディレクトリ**基準で解決します（`machine.script_dir()` / `machine.resolve_path()`）。
+
+### ゲーム選択メニューの操作
+
+| 操作 | ボタン |
+|------|--------|
+| カーソル移動 | UP / DOWN |
+| ゲーム起動 | NEAR または OP_RIGHT |
+| システム設定 | LEFT（輝度・音量・Input Test 等） |
+| 一覧の再読み込み | ゲーム 0 件時に NEAR（SD マウント済み） |
+
+設定画面の **Input Test** からは LEFT / OP_LEFT で設定に戻ります。エンコーダの音量は設定画面で確認・調整します（ゲーム中の `machine.set_volume` とは別に、デバイス設定としてフラッシュ保存されます）。
+
+---
+
 ## ゲーム用コールバック（ホストが呼ぶ）
 
 `runGameLoopFromSd()` でスクリプトを読み込んだあと、次のグローバル関数があればホストが呼び出します。
@@ -161,7 +263,8 @@ SD カード上の Lua ゲームから使える API の一覧です。
 | `machine.heap_used()` | なし | `integer` | 動的ヒープ使用量（バイト）。 |
 | `machine.heap_available()` | なし | `integer` | 残り確保可能バイト（予算−使用中−予備）。 |
 
-動的確保は `config.hpp` の `HeapConfig::BUDGET_BYTES`（既定 **256KB**、`RESERVE_BYTES` 8KB を除いた分が実質上限）を超えないよう拒否されます。
+動的確保は `config.hpp` の `HeapConfig::BUDGET_BYTES`（既定 **256KB**、`RESERVE_BYTES` 8KB を除いた分が実質上限）を超えないよう拒否されます。  
+Lua・画像 RAM 載せ・SE RAM 載せ・フォント等は **同じヒープ予算を共有**します（SE 用 32KB×8 は別プールではなく、予算内での API 上限です）。
 
 ### 画面更新（互換用・実質 no-op）
 
@@ -172,7 +275,10 @@ SD カード上の Lua ゲームから使える API の一覧です。
 
 ### 画像（SD 上の RGB565 バイナリ）
 
-事前に `tool/png_to_rgb565bin.py` などで **RGB565 リトルエンディアン・生バイナリ**（`.bin`）を用意し、SD から読み込みます。
+事前に `tool/png_to_rgb565bin.py` などで **RGB565 リトルエンディアン・生バイナリ**（`.bin`）を用意し、SD から読み込みます。  
+パスは **起動スクリプトのディレクトリ基準**の相対パスで指定できます（`/games/mygame/` 内のゲームなら `tiles/foo.bin` 等）。
+
+**メニュー用プレビュー**（100×100 `.bin`）は `machine.load_image` ではなく、ゲーム選択画面が自動で読み込みます（上記「メニュー用プレビュー画像」参照）。ゲーム内描画用とは用途が異なります。
 
 | 関数 | 引数 | 戻り値 | 意味 |
 |------|------|--------|------|
@@ -213,6 +319,8 @@ machine.draw_vn_stream({
 ```
 
 ### SD パス・外部 Lua 読み込み
+
+起動スクリプトは `/games/...` に置かれます。`machine.script_dir()` はその `.lua` のあるディレクトリ（末尾 `/` 付き）を返します。
 
 | 関数 | 引数 | 戻り値 | 意味 |
 |------|------|--------|------|
@@ -264,11 +372,13 @@ machine.draw_tilemap(sheet_id, 0, 0, 2, 2, 16, 16, 4, tiles)
 
 | ホスト処理 | 説明 |
 |------------|------|
-| `runGameLoopFromSd(path)` | ゲームループ（`game_init` / `game_update` / `game_draw`）で実行。 |
-| `runScriptFromSd(path)` | スクリプトを **1 回だけ** 読み込んで実行（上記コールバックは使わない）。 |
-| `executeOnSdRoot()` | SD ルートの `main.lua` → `game.lua` → `boot.lua` → 最初の `.lua` の順で 1 本実行。 |
+| **Game Select Menu → `runGameLoopFromSd(path)`** | **通常の起動経路**。`/games` 一覧で選んだスクリプトをゲームループで実行。終了後メニューへ戻る。 |
+| `runGameLoopFromSd(path)` | ゲームループ（`game_init` / `game_update` / `game_draw`）で実行。上記メニューから呼ばれる。 |
+| `runScriptFromSd(path)` | スクリプトを **1 回だけ** 読み込んで実行（`game_*` コールバックは使わない）。 |
+| `executeOnSdRoot()` | SD ルートの `main.lua` → `game.lua` → `boot.lua` → 最初の `.lua` の順で 1 本実行（**メニュー経由では使わない**）。 |
 
-スクリプトサイズ上限の目安: **48KB**（`LuaInterpreter::kDefaultMaxScriptBytes`）。
+スクリプト読み込みサイズ上限の目安: **48KB**（`LuaInterpreter::kDefaultMaxScriptBytes`）。  
+メニュー右下に表示される **Size** は起動スクリプトのファイルサイズです。
 
 ---
 
@@ -329,13 +439,18 @@ end
 
 | ファイル | 内容 |
 |----------|------|
+| `lib/game_catalog/game_catalog.cpp` | `/games` 走査・起動スクリプト解決・プレビュー `.bin` パス |
+| `lib/game_select_menu/game_select_menu.cpp` | ゲーム選択 GUI・SD ホットプラグ |
+| `lib/system_settings_menu/system_settings_menu.cpp` | 輝度・音量・Input Test |
+| `game_machine_main.cpp` | 起動・初期化・メニューループ |
 | `lib/lua_interpreter/lua_interpreter.cpp` | ゲームループ・画像スロット・`draw_bg_stream` |
 | `lib/lua_interpreter/lua_api_machine.cpp` | `machine.*` 登録・パス API |
 | `lib/lua_interpreter/lua_api_draw.cpp` | 描画・バンド・`draw_vn_stream` バインディング |
 | `lib/lua_interpreter/vn_stream_compose.cpp` | VN 用 SD ストリーム合成 |
 | `lib/lua_interpreter/bg_stream_util.cpp` | バンド単位 SD 行読み込み |
 | `lib/lua_interpreter/lua_interpreter.hpp` | 画像スロット上限など |
-| `config.hpp` | 画面サイズ・ボタン定義・ヒープ予算 |
+| `lib/heap_budget/heap_budget.cpp` | 動的ヒープ予算（Lua / 画像 / SE 共用） |
+| `config.hpp` | 画面サイズ・ボタン定義・`/games`・ヒープ予算 |
 | [lib/README.md](lib/README.md) | lib 配下の構成・依存関係 |
-| `Test_Lua/visual_novel/` | VN サンプル（`draw_vn_stream` 使用） |
+| `Test_Lua/` | サンプルゲーム（SD では `/games/` 配下に配置） |
 | `tool/png_to_rgb565bin.py` | PNG 等 → RGB565 `.bin` 変換 |

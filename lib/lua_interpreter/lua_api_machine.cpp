@@ -189,8 +189,37 @@ int luaHostFontHeight(lua_State* L) {
         return 1;
     }
     const FontRenderer* font = interp->fontRenderer();
-    lua_pushinteger(L, font && font->isLoaded() ? font->glyphHeight() : 8);
+    lua_pushinteger(L, font && font->isLoaded() ? font->scaledGlyphHeight() : 8);
     return 1;
+}
+
+int luaHostFontAdvance(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (!interp) {
+        lua_pushinteger(L, 8);
+        return 1;
+    }
+    const FontRenderer* font = interp->fontRenderer();
+    lua_pushinteger(L, font && font->isLoaded() ? font->scaledDefaultAdvance() : 8);
+    return 1;
+}
+
+int luaHostSetFontScale(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (!interp) {
+        return luaL_error(L, "no active interpreter");
+    }
+    const int num = static_cast<int>(luaL_checkinteger(L, 1));
+    const int den = lua_isnoneornil(L, 2) ? 1 : static_cast<int>(luaL_checkinteger(L, 2));
+    if (num <= 0 || den <= 0 || num > 255 || den > 255) {
+        return luaL_error(L, "font scale must be 1..255 (num, den)");
+    }
+    FontRenderer* font = interp->fontRenderer();
+    if (!font) {
+        return luaL_error(L, "no font renderer");
+    }
+    font->setScale(static_cast<uint8_t>(num), static_cast<uint8_t>(den));
+    return 0;
 }
 
 int luaHostLoadReturn(lua_State* L) {
@@ -382,6 +411,10 @@ void luaRegisterHostApi(lua_State* L) {
     lua_setfield(L, -2, "font_loaded");
     lua_pushcfunction(L, luaHostFontHeight);
     lua_setfield(L, -2, "font_height");
+    lua_pushcfunction(L, luaHostFontAdvance);
+    lua_setfield(L, -2, "font_advance");
+    lua_pushcfunction(L, luaHostSetFontScale);
+    lua_setfield(L, -2, "set_font_scale");
     lua_pushcfunction(L, luaHostLoadReturn);
     lua_setfield(L, -2, "load_return");
     lua_pushcfunction(L, luaHostScriptDir);

@@ -1,6 +1,6 @@
 // ============================================
 // ファイル: input_test_mode.cpp
-// SD 未検知時のエンコーダ・ボタン入力テスト画面
+// 設定画面から起動するエンコーダ・ボタン入力テスト画面
 // ============================================
 
 #include "input_test_mode.hpp"
@@ -94,7 +94,7 @@ void drawButtonBox(ST7789_LCD* lcd, const ButtonLayout& layout, bool pressed, bo
 void drawStaticBackground(ST7789_LCD* lcd) {
     lcd->fill(Color::BLACK);
     lcd->drawTextBg(8, 6, "INPUT TEST MODE", Color::WHITE, Color::BLACK);
-    lcd->drawTextBg(8, 18, "SD not detected - insert SD card", Color::YELLOW, Color::BLACK);
+    lcd->drawTextBg(8, 18, "[LEFT] & [FAR] Back", Color::GREEN, Color::BLACK);
 
     lcd->fillRect(kBarX, kBarY, kBarW, kBarH, kBarFill);
 
@@ -247,18 +247,14 @@ void InputTestMode::run(const Config& config) {
 
         if (config.try_mount && (now_ms - last_mount_attempt_ms >= config.mount_retry_ms)) {
             last_mount_attempt_ms = now_ms;
-            if (config.try_mount(config.user_data)) {
-                if (owns_encoder) {
-                    encoder->disableIrq();
-                }
-                config.lcd->fill(Color::BLACK);
-                config.lcd->drawTextBg(8, 110, "SD detected", Color::GREEN, Color::BLACK);
-                config.lcd->drawTextBg(8, 122, "Starting...", Color::WHITE, Color::BLACK);
-                break;
-            }
+            (void)config.try_mount(config.user_data);
         }
 
         config.buttons->update();
+        if (config.buttons->wasPressed(Button::LEFT) &&
+            config.buttons->wasPressed(Button::FAR)) {
+            break;
+        }
         if (config.on_frame) {
             config.on_frame(config.user_data);
         }
@@ -273,5 +269,9 @@ void InputTestMode::run(const Config& config) {
             delayed_by_ms(last_frame, config.frame_interval_ms);
         sleep_until(target);
         last_frame = target;
+    }
+
+    if (owns_encoder) {
+        encoder->disableIrq();
     }
 }

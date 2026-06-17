@@ -6,6 +6,7 @@
 #ifndef GAME_SELECT_MENU_HPP
 #define GAME_SELECT_MENU_HPP
 
+#include <cstddef>
 #include <cstdint>
 
 class ST7789_LCD;
@@ -17,6 +18,7 @@ public:
     using FrameCallback = void (*)(void* user_data);
     using RunGameCallback = void (*)(const char* script_path, void* user_data);
     using RunInputTestCallback = void (*)(void* user_data);
+    using SdStateCallback = void (*)(void* user_data);
 
     struct Config {
         ST7789_LCD* lcd = nullptr;
@@ -26,11 +28,13 @@ public:
         RunGameCallback on_run_game = nullptr;
         /** 設定画面の Input Test 行で呼ぶ（nullptr なら無視） */
         RunInputTestCallback on_run_input_test = nullptr;
+        /** SD マウント／アンマウント直後に呼ぶ（Lua 同期等） */
+        SdStateCallback on_sd_state_changed = nullptr;
         void* user_data = nullptr;
         uint32_t frame_interval_ms = 50;
     };
 
-    /** SD マウント済み・カード挿入中はループ。ゲーム起動は on_run_game へ委譲 */
+    /** SD の有無に関わらずメニューを表示し続ける。ゲーム起動は on_run_game へ委譲 */
     static bool run(const Config& config);
 };
 

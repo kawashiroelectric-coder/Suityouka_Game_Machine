@@ -1,16 +1,21 @@
 ===============================================================================
 
-                   8×8 ドット日本語フォント「美咲フォント」
-                                (2021-05-05 版)
+                   PixelMplus（ピクセル・エムプラス）
+                         PixelMplus12-Regular
 
-                       Copyright(C) 2002-2021 Num Kadoma
+                       Copyright (C) 2002-2013 M+ FONTS PROJECT
 
-本プロジェクトでは「美咲ゴシック第2」(Misaki Gothic 2nd) の BDF から
+本プロジェクトでは PixelMplus12-Regular.ttf から
 サブセットフォント (game_font.bin) を生成して利用します。
 
-配布元: http://littlelimit.net/misaki.htm
+配布元: Test_Lua/visual_novel/fonts/PixelMplus-20130602/
 
-美咲フォントはフリーで使用・改変・再配布が可能です。
-詳細は配布元アーカイブ内の readme およびライセンス表記を参照してください。
+ライセンス: M+ FONT LICENSE
+詳細は fonts/PixelMplus-20130602/mplus_bitmap_fonts/LICENSE_E を参照してください。
+
+===============================================================================
+
+（参考）従来の美咲 8x8 生成:
+  python generate_font.py --misaki --from-hpp fonts/misaki.hpp
 
 ===============================================================================

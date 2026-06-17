@@ -19,6 +19,8 @@ public:
     static bool mount();
     /** f_unmount（ファイルエクスプローラ終了時等） */
     static void unmount();
+    /** f_unmount のあと f_mount し直す（ゲーム終了後の FatFS 復旧用） */
+    static bool remount();
     /** デバッグ: ルートディレクトリを printf */
     static void listRoot();
 };

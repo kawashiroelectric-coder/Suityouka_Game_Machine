@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-美咲ゴシック第2 (BDF) からビジュアルノベル用サブセット MISF フォントを生成する。
+ビジュアルノベル用サブセット MISF フォントを生成する。
+
+デフォルト: PixelMplus12-Regular.ttf → 12x12 ネイティブ（拡大なし）
+代替: 美咲ゴシック第2 (BDF / misaki.hpp) → 8x8
 
 使い方:
-  1. 美咲フォント BDF を入手（フリー）
-     http://littlelimit.net/misaki.htm
-     → misaki_bdf_2021-05-05.zip 内の misaki_gothic_2nd.bdf
-  2. fonts/misaki_gothic_2nd.bdf に配置
-  3. python generate_font.py
+  python generate_font.py
+
+  # 明示的に TTF を指定
+  python generate_font.py --from-ttf fonts/PixelMplus-20130602/PixelMplus12-Regular.ttf
+
+  # 美咲 8x8（従来）
+  python generate_font.py --from-hpp fonts/misaki.hpp
 
 出力:
   fonts/game_font.bin  … Pico 向け MISF v1 バイナリ
@@ -22,6 +27,7 @@ import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+TTF_PATH = SCRIPT_DIR / "fonts" / "PixelMplus-20130602" / "PixelMplus12-Regular.ttf"
 BDF_PATH = SCRIPT_DIR / "fonts" / "misaki_gothic_2nd.bdf"
 HPP_PATH = SCRIPT_DIR / "fonts" / "misaki.hpp"
 OUT_PATH = SCRIPT_DIR / "fonts" / "game_font.bin"
@@ -45,8 +51,20 @@ EXTRA_CODEPOINTS = [
 ]
 
 
-def parse_bdf(path: Path) -> dict[int, tuple[int, bytes]]:
-    """BDF を読み、codepoint -> (advance, 8x8 bitmap) に変換。"""
+def bytes_per_row(glyph_w: int) -> int:
+    return (glyph_w + 7) // 8
+
+
+def bitmap_from_rows(rows: list[bytes], glyph_w: int, glyph_h: int) -> bytes:
+    expected = bytes_per_row(glyph_w) * glyph_h
+    blob = b"".join(rows)
+    if len(blob) < expected:
+        blob += b"\x00" * (expected - len(blob))
+    return blob[:expected]
+
+
+def parse_bdf(path: Path) -> tuple[dict[int, tuple[int, bytes]], int, int]:
+    """BDF を読み、codepoint -> (advance, bitmap) に変換（8x8）。"""
     text = path.read_text(encoding="utf-8", errors="replace")
     glyphs: dict[int, tuple[int, bytes]] = {}
 
@@ -71,8 +89,6 @@ def parse_bdf(path: Path) -> dict[int, tuple[int, bytes]]:
         bbx_match = re.search(r"BBX\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)", body)
         if not bbx_match:
             continue
-        bbx_w = int(bbx_match.group(1))
-        bbx_h = int(bbx_match.group(2))
 
         bm_start = body.find("BITMAP")
         if bm_start < 0:
@@ -87,27 +103,23 @@ def parse_bdf(path: Path) -> dict[int, tuple[int, bytes]]:
             if not line:
                 continue
             value = int(line, 16)
-            if bbx_w <= 8:
-                rows.append(value & 0xFF)
-            else:
-                rows.append((value >> 8) & 0xFF)
+            rows.append(bytes([value & 0xFF]))
             if len(rows) >= 8:
                 break
 
         while len(rows) < 8:
-            rows.append(0)
+            rows.append(b"\x00")
         rows = rows[:8]
 
-        # 全角は 16px 送り、半角は 8px（美咲 BDF の DWIDTH に従う）
         if advance > 16:
             advance = 16
-        glyphs[cp] = (advance, bytes(rows))
+        glyphs[cp] = (advance, bitmap_from_rows(rows, 8, 8))
 
-    return glyphs
+    return glyphs, 8, 8
 
 
-def parse_misaki_hpp(path: Path) -> dict[int, tuple[int, bytes]]:
-    """aloseed/misaki の misaki.hpp から glyph を読む（美咲ゴシック第2 同梱データ）。"""
+def parse_misaki_hpp(path: Path) -> tuple[dict[int, tuple[int, bytes]], int, int]:
+    """aloseed/misaki の misaki.hpp から glyph を読む（8x8）。"""
     text = path.read_text(encoding="utf-8", errors="replace")
 
     uni_match = re.search(r"const uint16_t misaki_uni\[\] = \{([^;]+)\};", text, re.S)
@@ -134,21 +146,52 @@ def parse_misaki_hpp(path: Path) -> dict[int, tuple[int, bytes]]:
         bitmap = data_rows[idx]
         if cp <= 0x7E or (0xFF61 <= cp <= 0xFF9F):
             advance = 8
-        elif cp >= 0xFF01:
-            advance = 16
         else:
             advance = 16
         glyphs[cp] = (advance, bitmap)
 
-    return glyphs
+    return glyphs, 8, 8
 
 
-def advance_for_codepoint(cp: int) -> int:
-    if cp <= 0x7E or (0xFF61 <= cp <= 0xFF9F):
-        return 8
-    if cp >= 0xFF01:
-        return 16
-    return 16
+def parse_ttf(path: Path, font_size: int) -> tuple[dict[int, tuple[int, bytes]], int, int]:
+    """TrueType（PixelMplus 等）をラスタライズして 12x12 等の固定セルに格納。"""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError as exc:
+        raise RuntimeError("Pillow が必要です: pip install Pillow") from exc
+
+    glyph_w = font_size
+    glyph_h = font_size
+    bpr = bytes_per_row(glyph_w)
+    font = ImageFont.truetype(str(path), font_size)
+
+    def rasterize(cp: int) -> tuple[int, bytes]:
+        ch = chr(cp)
+        advance_f = font.getlength(ch)
+        advance = max(1, min(int(round(advance_f)), glyph_w))
+        if cp <= 0x7E or cp == 0x20:
+            advance = max(1, min(advance, glyph_w // 2 if glyph_w >= 12 else glyph_w))
+        elif advance < glyph_w // 2:
+            advance = glyph_w
+
+        im = Image.new("1", (glyph_w, glyph_h), 0)
+        draw = ImageDraw.Draw(im)
+        draw.text((0, 0), ch, font=font, fill=1)
+
+        row_bytes: list[bytes] = []
+        for y in range(glyph_h):
+            packed = 0
+            for x in range(glyph_w):
+                if im.getpixel((x, y)):
+                    packed |= 1 << (7 - (x % 8))
+                if x % 8 == 7 or x == glyph_w - 1:
+                    row_bytes.append(bytes([packed & 0xFF]))
+                    packed = 0
+        return advance, bitmap_from_rows(row_bytes, glyph_w, glyph_h)
+
+    # 必要 codepoint だけ生成（全 JIS は重い）
+    glyphs: dict[int, tuple[int, bytes]] = {}
+    return glyphs, glyph_w, glyph_h, rasterize
 
 
 def collect_codepoints() -> set[int]:
@@ -169,7 +212,7 @@ def collect_codepoints() -> set[int]:
 
 
 def find_name_only_codepoints() -> list[str]:
-    """name = \"...\" 専用で、セリフ本文に出てこない文字（フォント更新漏れで ? になりやすい）。"""
+    """name = \"...\" 専用で、セリフ本文に出てこない文字。"""
     from collections import Counter
 
     body_counts: Counter[int] = Counter()
@@ -200,12 +243,16 @@ def find_name_only_codepoints() -> list[str]:
     return only_in_name
 
 
-def write_misf(path: Path, entries: list[tuple[int, int, bytes]]) -> None:
-    """MISF v1: header 16 + index 8*N + glyph 8*N"""
+def write_misf(
+    path: Path,
+    entries: list[tuple[int, int, bytes]],
+    glyph_w: int,
+    glyph_h: int,
+    default_advance: int,
+) -> None:
+    """MISF v1: header 16 + index 8*N + glyph N*bytes_per_glyph"""
     entries.sort(key=lambda e: e[0])
-    glyph_w = 8
-    glyph_h = 8
-    default_advance = 8
+    bytes_per_glyph = bytes_per_row(glyph_w) * glyph_h
     count = len(entries)
 
     header = struct.pack(
@@ -216,24 +263,67 @@ def write_misf(path: Path, entries: list[tuple[int, int, bytes]]) -> None:
         glyph_h,
         default_advance,
         count,
-        8,
+        bytes_per_glyph,
     )
 
     index_blob = bytearray()
     glyph_blob = bytearray()
     for i, (cp, advance, bitmap) in enumerate(entries):
+        if advance > 255:
+            advance = 255
         index_blob += struct.pack("<IBBH", cp, advance, 0, i)
+        if len(bitmap) != bytes_per_glyph:
+            raise ValueError(f"glyph U+{cp:04X}: expected {bytes_per_glyph} bytes, got {len(bitmap)}")
         glyph_blob += bitmap
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(header + index_blob + glyph_blob)
-    print(f"Wrote {path} ({count} glyphs, {path.stat().st_size} bytes)")
+    print(
+        f"Wrote {path} ({count} glyphs, {glyph_w}x{glyph_h}, "
+        f"{path.stat().st_size} bytes)"
+    )
+
+
+def build_entries(
+    source_glyphs: dict[int, tuple[int, bytes]] | None,
+    rasterize,
+    needed: set[int],
+) -> tuple[list[tuple[int, int, bytes]], list[str]]:
+    entries: list[tuple[int, int, bytes]] = []
+    missing: list[str] = []
+
+    for cp in sorted(needed):
+        if source_glyphs and cp in source_glyphs:
+            advance, bitmap = source_glyphs[cp]
+            entries.append((cp, advance, bitmap))
+        elif rasterize is not None:
+            try:
+                advance, bitmap = rasterize(cp)
+                entries.append((cp, advance, bitmap))
+            except (ValueError, OSError):
+                missing.append(chr(cp) if cp >= 32 else f"U+{cp:04X}")
+        else:
+            missing.append(chr(cp) if cp >= 32 else f"U+{cp:04X}")
+
+    return entries, missing
 
 
 def main() -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="Generate MISF subset font for Pico")
+    parser.add_argument(
+        "--from-ttf",
+        type=Path,
+        default=TTF_PATH,
+        help="PixelMplus 等 TrueType フォント",
+    )
+    parser.add_argument(
+        "--font-size",
+        type=int,
+        default=12,
+        help="TTF ラスタライズサイズ（PixelMplus12 は 12）",
+    )
     parser.add_argument(
         "--from-hpp",
         type=Path,
@@ -246,38 +336,44 @@ def main() -> int:
         default=BDF_PATH,
         help="misaki_gothic_2nd.bdf path (official BDF)",
     )
+    parser.add_argument(
+        "--misaki",
+        action="store_true",
+        help="美咲 8x8 を強制（TTF より優先しない）",
+    )
     args = parser.parse_args()
 
     source_glyphs: dict[int, tuple[int, bytes]] | None = None
+    rasterize = None
+    glyph_w = 8
+    glyph_h = 8
+    default_advance = 8
     source_name = ""
 
-    if args.from_hpp.exists():
+    if not args.misaki and args.from_ttf.exists():
+        print("Rasterizing TTF:", args.from_ttf, f"({args.font_size}px)")
+        source_glyphs, glyph_w, glyph_h, rasterize = parse_ttf(args.from_ttf, args.font_size)
+        default_advance = glyph_w
+        source_name = args.from_ttf.name
+    elif args.from_hpp.exists():
         print("Parsing misaki.hpp:", args.from_hpp)
-        source_glyphs = parse_misaki_hpp(args.from_hpp)
+        source_glyphs, glyph_w, glyph_h = parse_misaki_hpp(args.from_hpp)
+        default_advance = 8
         source_name = "misaki.hpp"
     elif args.from_bdf.exists():
         print("Parsing BDF:", args.from_bdf)
-        source_glyphs = parse_bdf(args.from_bdf)
+        source_glyphs, glyph_w, glyph_h = parse_bdf(args.from_bdf)
+        default_advance = 8
         source_name = "BDF"
     else:
         print("Error: font source not found.", file=sys.stderr)
-        print("Option A: place misaki.hpp at", HPP_PATH, file=sys.stderr)
-        print("  (clone https://github.com/aloseed/misaki and copy src/misaki.hpp)", file=sys.stderr)
-        print("Option B: place misaki_gothic_2nd.bdf at", BDF_PATH, file=sys.stderr)
-        print("  (download from http://littlelimit.net/misaki.htm)", file=sys.stderr)
+        print("Option A (default): place PixelMplus12 at", TTF_PATH, file=sys.stderr)
+        print("Option B: place misaki.hpp at", HPP_PATH, file=sys.stderr)
+        print("Option C: place misaki_gothic_2nd.bdf at", BDF_PATH, file=sys.stderr)
         return 1
 
     needed = collect_codepoints()
-
-    entries: list[tuple[int, int, bytes]] = []
-    missing: list[str] = []
-
-    for cp in sorted(needed):
-        if cp in source_glyphs:
-            advance, bitmap = source_glyphs[cp]
-            entries.append((cp, advance, bitmap))
-        else:
-            missing.append(chr(cp) if cp >= 32 else f"U+{cp:04X}")
+    entries, missing = build_entries(source_glyphs, rasterize, needed)
 
     if missing:
         print(f"Warning ({source_name}): missing {len(missing)} glyphs:", file=sys.stderr)
@@ -287,7 +383,7 @@ def main() -> int:
         print("Error: no glyphs generated", file=sys.stderr)
         return 1
 
-    write_misf(OUT_PATH, entries)
+    write_misf(OUT_PATH, entries, glyph_w, glyph_h, default_advance)
 
     name_only = find_name_only_codepoints()
     if name_only:

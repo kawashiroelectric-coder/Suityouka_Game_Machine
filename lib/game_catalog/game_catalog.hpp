@@ -29,7 +29,7 @@ public:
     /** games_dir 直下のフォルダと .lua を走査しエントリを構築する */
     static int loadEntries(const char* games_dir, GameCatalogEntry* out_entries, int max_entries);
 
-    /** 100x100 RGB565 プレビュー .bin を pixels に読み込む */
+    /** 100x100 パネルへ RGB565 プレビューを読み込む（100x100 未満は中央配置） */
     static bool loadPreviewRgb565(const char* preview_path, uint16_t* pixels, size_t pixel_count);
 };
 

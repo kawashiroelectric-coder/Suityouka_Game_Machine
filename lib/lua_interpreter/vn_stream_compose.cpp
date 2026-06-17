@@ -22,9 +22,18 @@ extern "C" {
 
 namespace {
 
-void closeVnLayerFile(VnStreamLayer* layer) {
+void closeVnLayerFile(VnStreamLayer* layer, bool abandon_open_files) {
     if (layer->open) {
-        f_close(&layer->file);
+        if (abandon_open_files) {
+            printf("[MENU-DBG] vn abandon: %s\n", layer->path[0] != '\0' ? layer->path : "(no path)");
+            fflush(stdout);
+            layer->file = FIL{};
+        } else {
+            const FRESULT fr = f_close(&layer->file);
+            if (fr != FR_OK) {
+                printf("draw_vn_stream: close failed %s (%s)\n", layer->path, FRESULT_str(fr));
+            }
+        }
     }
     layer->open = false;
     layer->path[0] = '\0';
@@ -33,8 +42,8 @@ void closeVnLayerFile(VnStreamLayer* layer) {
     layer->height = 0;
 }
 
-void resetVnLayer(VnStreamLayer* layer) {
-    closeVnLayerFile(layer);
+void resetVnLayer(VnStreamLayer* layer, bool abandon_open_files) {
+    closeVnLayerFile(layer, abandon_open_files);
     layer->active = false;
     layer->dx = 0;
     layer->dy = 0;
@@ -128,7 +137,7 @@ bool ensureLayerOpen(VnStreamLayer* layer, const char* norm, uint16_t w,
         return true;
     }
 
-    closeVnLayerFile(layer);
+    closeVnLayerFile(layer, false);
 
     const size_t byte_size = static_cast<size_t>(w) * static_cast<size_t>(h) * 2u;
     const FRESULT fr = f_open(&layer->file, norm, FA_READ);
@@ -272,14 +281,14 @@ bool syncLayersFromTable(LuaInterpreter* interp, VnStreamComposeState* st, lua_S
 
 }  // namespace
 
-void vnStreamComposeClose(LuaInterpreter* interp) {
+void vnStreamComposeClose(LuaInterpreter* interp, bool abandon_open_files) {
     if (!interp) {
         return;
     }
     VnStreamComposeState* st = &interp->vn_stream_;
-    resetVnLayer(&st->bg);
+    resetVnLayer(&st->bg, abandon_open_files);
     for (int i = 0; i < kVnStreamCharLayers; ++i) {
-        resetVnLayer(&st->chars[i]);
+        resetVnLayer(&st->chars[i], abandon_open_files);
     }
     st->char_count = 0;
 }
@@ -321,4 +330,6 @@ bool LuaInterpreter::drawVnStreamCompose(lua_State* L, int table_index) {
     return vnStreamComposeDraw(this, L, table_index);
 }
 
-void LuaInterpreter::closeVnStreamCompose() { vnStreamComposeClose(this); }
+void LuaInterpreter::closeVnStreamCompose(bool abandon_open_files) {
+    vnStreamComposeClose(this, abandon_open_files);
+}

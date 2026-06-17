@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "config.hpp"
+#include "st7789_lcd.hpp"
 
 extern "C" {
 #include "ff.h"
@@ -263,6 +264,47 @@ bool pickScriptInDir(const char* dir_path, char* out_script, size_t out_script_l
     return false;
 }
 
+bool inferPreviewDimensions(uint32_t byte_size, int* out_w, int* out_h) {
+    if (!out_w || !out_h || byte_size < 2 || (byte_size % 2) != 0) {
+        return false;
+    }
+    const uint32_t pixels = byte_size / 2;
+    if (pixels == 0) {
+        return false;
+    }
+    if (byte_size == static_cast<uint32_t>(GameCatalog::kPreviewBytes)) {
+        *out_w = GameCatalog::kPreviewW;
+        *out_h = GameCatalog::kPreviewH;
+        return true;
+    }
+
+    int best_w = 0;
+    int best_h = 0;
+    uint32_t best_diff = UINT32_MAX;
+    for (int w = 1; w <= GameCatalog::kPreviewW; w++) {
+        if ((pixels % static_cast<uint32_t>(w)) != 0) {
+            continue;
+        }
+        const int h = static_cast<int>(pixels / static_cast<uint32_t>(w));
+        if (h < 1 || h > GameCatalog::kPreviewH) {
+            continue;
+        }
+        const uint32_t diff =
+            static_cast<uint32_t>(w > h ? (w - h) : (h - w));
+        if (diff < best_diff) {
+            best_diff = diff;
+            best_w = w;
+            best_h = h;
+        }
+    }
+    if (best_w <= 0 || best_h <= 0) {
+        return false;
+    }
+    *out_w = best_w;
+    *out_h = best_h;
+    return true;
+}
+
 bool pickPreviewPath(const char* game_dir, const char* script_path, char* out_preview,
                      size_t out_preview_len) {
     if (!out_preview || out_preview_len == 0) {
@@ -358,15 +400,51 @@ bool GameCatalog::loadPreviewRgb565(const char* preview_path, uint16_t* pixels, 
 
     FIL file;
     if (f_open(&file, preview_path, FA_READ) != FR_OK) {
+        printf("GameCatalog: preview open failed: %s\n", preview_path);
         return false;
     }
     const FSIZE_t fsize = f_size(&file);
-    if (fsize < static_cast<FSIZE_t>(kPreviewBytes)) {
+    if (fsize < 2 || fsize > static_cast<FSIZE_t>(kPreviewBytes)) {
+        printf("GameCatalog: preview size invalid: %s (%lu bytes, max %u)\n", preview_path,
+               static_cast<unsigned long>(fsize), static_cast<unsigned>(kPreviewBytes));
         f_close(&file);
         return false;
     }
-    UINT br = 0;
-    const FRESULT fr = f_read(&file, pixels, static_cast<UINT>(kPreviewBytes), &br);
+
+    int img_w = 0;
+    int img_h = 0;
+    if (!inferPreviewDimensions(static_cast<uint32_t>(fsize), &img_w, &img_h)) {
+        printf("GameCatalog: preview dimensions invalid: %s (%lu bytes)\n", preview_path,
+               static_cast<unsigned long>(fsize));
+        f_close(&file);
+        return false;
+    }
+
+    constexpr uint16_t kPreviewBg = Color::rgb(20, 20, 40);
+    const size_t panel_pixels =
+        static_cast<size_t>(kPreviewW) * static_cast<size_t>(kPreviewH);
+    for (size_t i = 0; i < panel_pixels; i++) {
+        pixels[i] = kPreviewBg;
+    }
+
+    const int dst_x = (kPreviewW - img_w) / 2;
+    const int dst_y = (kPreviewH - img_h) / 2;
+    uint8_t row_buf[kPreviewW * 2];
+
+    for (int y = 0; y < img_h; y++) {
+        UINT br = 0;
+        const FRESULT fr =
+            f_read(&file, row_buf, static_cast<UINT>(img_w) * 2u, &br);
+        if (fr != FR_OK || br != static_cast<UINT>(img_w) * 2u) {
+            printf("GameCatalog: preview read failed: %s row %d\n", preview_path, y);
+            f_close(&file);
+            return false;
+        }
+        std::memcpy(pixels + static_cast<size_t>(dst_y + y) * kPreviewW + static_cast<size_t>(dst_x),
+                    row_buf, static_cast<size_t>(img_w) * 2u);
+    }
     f_close(&file);
-    return fr == FR_OK && br == static_cast<UINT>(kPreviewBytes);
+    printf("GameCatalog: preview OK %s (%dx%d in %dx%d panel)\n", preview_path, img_w, img_h,
+           kPreviewW, kPreviewH);
+    return true;
 }

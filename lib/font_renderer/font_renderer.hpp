@@ -1,6 +1,6 @@
 // ============================================
 // ファイル: font_renderer.hpp
-// MISF サブセットフォント（美咲 8x8）UTF-8 描画
+// MISF サブセットフォント（8x8 / 12x12 等）UTF-8 描画
 // ============================================
 
 #ifndef FONT_RENDERER_HPP
@@ -23,11 +23,22 @@ public:
     /** SD から MISF v1 を読み込む */
     bool loadFromSd(const char* path);
     void unload();
+    /** セッション終了時: malloc 起点を raw free（HeapBudget 迂回） */
+    void unloadRaw();
 
     bool isLoaded() const { return glyph_data_ != nullptr; }
     uint8_t glyphWidth() const { return glyph_w_; }
     uint8_t glyphHeight() const { return glyph_h_; }
     uint8_t defaultAdvance() const { return default_advance_; }
+
+    /** 描画倍率（整数比 num/den。例: 3/2 で 1.5 倍） */
+    void setScale(uint8_t num, uint8_t den);
+    uint8_t scaleNumerator() const { return scale_num_; }
+    uint8_t scaleDenominator() const { return scale_den_; }
+
+    uint8_t scaledGlyphWidth() const { return scaleValue(glyph_w_); }
+    uint8_t scaledGlyphHeight() const { return scaleValue(glyph_h_); }
+    uint8_t scaledDefaultAdvance() const { return scaleValue(default_advance_); }
 
     /**
      * バンド FB へ UTF-8 テキスト描画（背景付き）。
@@ -59,6 +70,12 @@ private:
     uint8_t* glyph_data_ = nullptr;
     size_t alloc_bytes_ = 0;
 
+    uint8_t scale_num_ = 1;
+    uint8_t scale_den_ = 1;
+
+    uint8_t scaleValue(uint8_t value) const;
+    uint8_t bytesPerRow() const;
+    bool glyphPixel(const uint8_t* glyph, int row, int col) const;
     const IndexEntry* findGlyph(uint32_t codepoint) const;
     void drawGlyph(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, int band_y0, int x, int y,
                    const uint8_t* glyph, uint16_t fg, uint16_t bg) const;

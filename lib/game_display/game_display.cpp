@@ -243,6 +243,20 @@ void GameDisplay::waitForTransferComplete() {
     inflight_buffer_index_ = -1;
 }
 
+void GameDisplay::releaseForDirectDraw() {
+    printf("[MENU-DBG] GameDisplay::releaseForDirectDraw enter (transfer_active=%d)\n",
+           transfer_active_ ? 1 : 0);
+    fflush(stdout);
+    waitForTransferComplete();
+    printf("[MENU-DBG] GameDisplay::waitForTransferComplete done\n");
+    fflush(stdout);
+    if (lcd_) {
+        lcd_->finishDrawRawImageDMA();
+    }
+    printf("[MENU-DBG] GameDisplay::releaseForDirectDraw exit\n");
+    fflush(stdout);
+}
+
 /** 全画面を単色で塗る（バンドバッファを 1 度埋めて全バンドへ転送） */
 void GameDisplay::fillScreen(uint16_t color) {
     waitForTransferComplete();

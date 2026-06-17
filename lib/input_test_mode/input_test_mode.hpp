@@ -1,6 +1,6 @@
 // ============================================
 // ファイル: input_test_mode.hpp
-// SD 未検知時のエンコーダ・ボタン入力テスト画面
+// 設定画面から起動するエンコーダ・ボタン入力テスト画面
 // ============================================
 
 #ifndef INPUT_TEST_MODE_HPP
@@ -12,7 +12,7 @@ class ST7789_LCD;
 class ButtonInput;
 class EncoderInput;
 
-/** SD 利用可能になるまでブロックし、入力状態を LCD に表示する */
+/** 設定画面等から起動し、LEFT で呼び出し元へ戻る入力テスト画面 */
 class InputTestMode {
 public:
     using TryMountCallback = bool (*)(void* user_data);
@@ -23,6 +23,7 @@ public:
         ButtonInput* buttons = nullptr;
         /** 共有エンコーダ（nullptr ならローカル生成） */
         EncoderInput* encoder = nullptr;
+        /** 任意: SD 挿入時のバックグラウンドマウント試行 */
         TryMountCallback try_mount = nullptr;
         FrameCallback on_frame = nullptr;
         void* user_data = nullptr;
@@ -30,7 +31,7 @@ public:
         uint32_t frame_interval_ms = 50;
     };
 
-    /** try_mount が true を返すまでループする */
+    /** LEFT / OP_LEFT で抜けるまでループする */
     static void run(const Config& config);
 };
 
