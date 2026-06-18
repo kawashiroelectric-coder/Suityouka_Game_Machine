@@ -111,7 +111,7 @@ static const uint8_t kFont8x8[96][8] = {
     {0x6E, 0x3B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
 };
 
-/** フレームバッファに 8x8 グリフ 1 文字を描画 */
+/** フレームバッファに 8x8 グリフ 1 文字を描画する。組み込みフォントのテキスト描画時に使う */
 static void drawCharFb(uint16_t* fb, uint16_t w, uint16_t h, int x, int y, char c, uint16_t color,
                        uint16_t bg, bool use_bg) {
     if (!fb || c < 32 || c > 127) return;
@@ -132,6 +132,7 @@ static void drawCharFb(uint16_t* fb, uint16_t w, uint16_t h, int x, int y, char 
     }
 }
 
+/** 描画状態を初期化する。bind 呼び出し前のデフォルト構築時に使う */
 GameDisplay::GameDisplay()
     : buffers_{nullptr, nullptr},
       work_buffer_(nullptr),
@@ -149,7 +150,7 @@ GameDisplay::GameDisplay()
       dma_buffer_(nullptr),
       dma_buffer_size_(0) {}
 
-/** バンドバッファと転送用 DMA リソースを登録 */
+/** バンドバッファと LCD・DMA リソースを登録する。ゲームループ開始前に一度呼ぶ */
 void GameDisplay::bind(uint16_t* buffer_a, uint16_t* buffer_b, uint16_t width, uint16_t height,
                        uint16_t buffer_height, ST7789_LCD* lcd, int dma_channel,
                        uint8_t* dma_buffer, size_t dma_buffer_size) {
@@ -172,21 +173,24 @@ void GameDisplay::bind(uint16_t* buffer_a, uint16_t* buffer_b, uint16_t width, u
     dma_buffer_size_ = dma_buffer_size;
 }
 
+/** RGB888 を RGB565 に変換する。Lua やゲームから色指定するときに使う */
 uint16_t GameDisplay::rgb(uint8_t r, uint8_t g, uint8_t b) {
     return Color::rgb(r, g, b);
 }
 
-/** 画面を覆うのに必要なバンド数 */
+/** 画面を覆うのに必要なバンド数を返す。フレーム描画ループの回数決定時に使う */
 int GameDisplay::bandCount() const {
     if (buffer_height_ == 0) return 0;
     return (height_ + buffer_height_ - 1) / buffer_height_;
 }
 
+/** 論理矩形が現在バンドと交差するか判定する。描画 API のクリッピング判定時に使う */
 bool GameDisplay::rectIntersectsBand(int y, int h) const {
     if (h <= 0) return false;
     return (y + h) > bandTop() && y < bandBottom();
 }
 
+/** 現在バンドのフレームバッファに 1 画素を書く。線・円などの基本描画時に使う */
 void GameDisplay::plotPixel(int x, int y, uint16_t color) {
     if (!work_buffer_) return;
     if (x < 0 || x >= (int)width_) return;
@@ -194,7 +198,7 @@ void GameDisplay::plotPixel(int x, int y, uint16_t color) {
     work_buffer_[(uint32_t)(y - band_y0_) * width_ + (uint32_t)x] = color;
 }
 
-/** バンド描画開始: 描画先バッファ・y 原点・行数を設定 */
+/** バンド描画を開始し描画先バッファと y 範囲を設定する。各バンドの game_draw 直前に呼ぶ */
 void GameDisplay::beginBand(int band) {
     band_index_ = band;
     current_buffer_index_ = (band & 1);
@@ -213,7 +217,7 @@ void GameDisplay::beginBand(int band) {
     }
 }
 
-/** 現在のバンドを LCD へ転送（非ブロッキング DMA をキック） */
+/** 現在バンドを LCD へ DMA 転送する。各バンドの game_draw 直後に呼ぶ */
 void GameDisplay::endBand() {
     if (!lcd_ || !work_buffer_ || band_rows_ <= 0) return;
     // SPI には 1 本しか流せないため、前バンド送信中はここでポンプして完了待ち
@@ -234,6 +238,7 @@ void GameDisplay::endBand() {
     }
 }
 
+/** 進行中の DMA 転送完了を待つ。1 フレーム末尾で呼ぶ */
 void GameDisplay::waitForTransferComplete() {
     if (!lcd_) return;
     while (lcd_->isDrawRawImageDMABusy()) {
@@ -243,6 +248,7 @@ void GameDisplay::waitForTransferComplete() {
     inflight_buffer_index_ = -1;
 }
 
+/** DMA を解放し ST7789 直描画モードへ戻す。ゲーム終了後メニュー復帰前に呼ぶ */
 void GameDisplay::releaseForDirectDraw() {
     printf("[MENU-DBG] GameDisplay::releaseForDirectDraw enter (transfer_active=%d)\n",
            transfer_active_ ? 1 : 0);
@@ -257,7 +263,7 @@ void GameDisplay::releaseForDirectDraw() {
     fflush(stdout);
 }
 
-/** 全画面を単色で塗る（バンドバッファを 1 度埋めて全バンドへ転送） */
+/** 全画面を単色で塗る。起動画面など game_draw を使わない描画時に呼ぶ */
 void GameDisplay::fillScreen(uint16_t color) {
     waitForTransferComplete();
     uint16_t* buf = buffers_[0];
@@ -278,7 +284,7 @@ void GameDisplay::fillScreen(uint16_t color) {
     }
 }
 
-/** 現在のバンドを単色で塗る */
+/** 現在バンド領域を単色で塗る。タイルレイヤー合成の下地クリア時に呼ぶ */
 void GameDisplay::clear(uint16_t color) {
     if (!work_buffer_ || band_rows_ <= 0) return;
     const uint32_t n = (uint32_t)width_ * band_rows_;
@@ -287,7 +293,7 @@ void GameDisplay::clear(uint16_t color) {
     }
 }
 
-/** クリップ付き矩形塗りつぶし（論理座標 → 現在バンドへクリップ） */
+/** クリップ付き矩形を塗りつぶす。game_draw 内の図形描画時に呼ぶ */
 void GameDisplay::fillRect(int x, int y, int w, int h, uint16_t color) {
     if (!work_buffer_ || w <= 0 || h <= 0) return;
 
@@ -310,7 +316,7 @@ void GameDisplay::fillRect(int x, int y, int w, int h, uint16_t color) {
     }
 }
 
-/** RGB565 画像全体を転写（クリッピング付き、現在バンドのみ書き込み） */
+/** RGB565 画像全体をクリップ付きで転写する。スプライト描画時に呼ぶ */
 void GameDisplay::drawImage(int dx, int dy, int img_w, int img_h, const uint16_t* pixels) {
     if (!work_buffer_ || !pixels || img_w <= 0 || img_h <= 0) return;
 
@@ -330,7 +336,7 @@ void GameDisplay::drawImage(int dx, int dy, int img_w, int img_h, const uint16_t
     }
 }
 
-/** RGB565 画像の部分矩形を転写（現在バンドのみ書き込み） */
+/** RGB565 画像の部分矩形をクリップ付きで転写する。タイル・部分描画時に呼ぶ */
 void GameDisplay::drawImageSub(int dx, int dy, int img_w, int img_h, const uint16_t* pixels,
                                int sx, int sy, int sw, int sh) {
     if (!work_buffer_ || !pixels || img_w <= 0 || img_h <= 0) return;
@@ -355,7 +361,7 @@ void GameDisplay::drawImageSub(int dx, int dy, int img_w, int img_h, const uint1
     }
 }
 
-/** 透過色をスキップして部分矩形を転写 */
+/** 透過色をスキップして部分矩形を転写する。キー付きスプライト描画時に呼ぶ */
 void GameDisplay::drawImageSubKeyed(int dx, int dy, int img_w, int img_h, const uint16_t* pixels,
                                     int sx, int sy, int sw, int sh, uint16_t key_color,
                                     bool key_enabled) {
@@ -390,6 +396,7 @@ void GameDisplay::drawImageSubKeyed(int dx, int dy, int img_w, int img_h, const 
     }
 }
 
+/** Bresenham 法でクリップ付き直線を描く。game_draw 内の線描画時に呼ぶ */
 void GameDisplay::drawLine(int x0, int y0, int x1, int y1, uint16_t color) {
     int dx = abs(x1 - x0);
     int sx = (x0 < x1) ? 1 : -1;
@@ -412,6 +419,7 @@ void GameDisplay::drawLine(int x0, int y0, int x1, int y1, uint16_t color) {
     }
 }
 
+/** クリップ付き円の輪郭を描く。game_draw 内の円描画時に呼ぶ */
 void GameDisplay::drawCircle(int cx, int cy, int radius, uint16_t color) {
     if (radius <= 0) {
         plotPixel(cx, cy, color);
@@ -439,6 +447,7 @@ void GameDisplay::drawCircle(int cx, int cy, int radius, uint16_t color) {
     }
 }
 
+/** クリップ付き塗りつぶし円を描く。game_draw 内の円塗り時に呼ぶ */
 void GameDisplay::fillCircle(int cx, int cy, int radius, uint16_t color) {
     if (radius <= 0) {
         plotPixel(cx, cy, color);
@@ -452,6 +461,7 @@ void GameDisplay::fillCircle(int cx, int cy, int radius, uint16_t color) {
     }
 }
 
+/** タイルセットから 1 タイルを転写する。タイルマップ描画時に呼ぶ */
 void GameDisplay::drawTile(int dx, int dy, int tile_w, int tile_h, int sheet_cols,
                            const uint16_t* tileset, int sheet_w, int sheet_h, int tile_index) {
     if (!tileset || tile_w <= 0 || tile_h <= 0 || sheet_cols <= 0 || tile_index < 0) {
@@ -465,6 +475,7 @@ void GameDisplay::drawTile(int dx, int dy, int tile_w, int tile_h, int sheet_col
     drawImageSub(dx, dy, sheet_w, sheet_h, tileset, sx, sy, tile_w, tile_h);
 }
 
+/** 透過色付きでタイル 1 枚を転写する。タイルレイヤー合成時に呼ぶ */
 void GameDisplay::drawTileKeyed(int dx, int dy, int tile_w, int tile_h, int sheet_cols,
                                 const uint16_t* tileset, int sheet_w, int sheet_h, int tile_index,
                                 uint16_t key_color, bool key_enabled) {
@@ -480,7 +491,7 @@ void GameDisplay::drawTileKeyed(int dx, int dy, int tile_w, int tile_h, int shee
                       key_enabled);
 }
 
-/** rects 配列の矩形を順に fillRect */
+/** 複数矩形を順に塗りつぶす。バッチ矩形描画時に呼ぶ */
 void GameDisplay::fillRects(const FillRect* rects, size_t count) {
     if (!rects) return;
     for (size_t i = 0; i < count; i++) {
@@ -489,7 +500,7 @@ void GameDisplay::fillRects(const FillRect* rects, size_t count) {
     }
 }
 
-/** 改行対応 8x8 テキスト（背景色あり、現在バンドへクリップ） */
+/** 背景付きテキストを描く。FontRenderer 未使用時は 8x8 ASCII にフォールバックする */
 void GameDisplay::drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bg_color) {
     if (!work_buffer_ || !text) return;
     if (font_renderer_ && font_renderer_->isLoaded()) {

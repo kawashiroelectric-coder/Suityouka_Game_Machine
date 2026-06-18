@@ -28,6 +28,7 @@ namespace Color {
     constexpr uint16_t PURPLE  = 0x780F;
     constexpr uint16_t GRAY    = 0x8410;
 
+    /** 8bit RGB を RGB565 16bit カラー値に変換する */
     constexpr uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
         return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
     }
@@ -112,9 +113,13 @@ private:
     int _backlight_percent = 80;
     bool _backlight_pwm_ready = false;
 
+    /** バックライトピンを PWM 初期化する */
     void initBacklightPwm();
+    /** バックライト輝度を PWM または GPIO で出力する */
     void applyBacklightPwm();
+    /** 非同期 DMA 転送の次チャンクを開始する */
     void dmaAsyncStartChunk();
+    /** 非同期 DMA 転送を完了し状態をリセットする */
     void dmaAsyncFinish();
 
     /** DC=0: コマンド 1 バイト */
@@ -131,6 +136,7 @@ private:
     void setWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
 
 public:
+    /** コンストラクタ。SPI ポートと描画状態を初期化する */
     ST7789_LCD();
     
     /** GPIO / SPI 初期化と ST7789 レジスタ設定 */
@@ -140,13 +146,16 @@ public:
     void setBacklight(bool on);
     /** バックライト輝度 10〜100%（BLK ピン PWM） */
     void setBacklightPercent(int percent);
+    /** 現在のバックライト輝度（%）を返す */
     int backlightPercent() const { return _backlight_percent; }
     /** 表示の色反転 ON/OFF */
     void invertDisplay(bool i);
 
-    /** DMA 設定用 SPI インスタンス */
+    /** DMA 設定用 SPI インスタンスを返す */
     spi_inst_t* getSPI() const { return spi_port; }
+    /** CS ピン番号を返す */
     uint8_t getPinCS() const { return LCDConfig::PIN_CS; }
+    /** DC ピン番号を返す */
     uint8_t getPinDC() const { return LCDConfig::PIN_DC; }
     
     /** 描画ウィンドウ（CASET/RASET/RAMWR）を外部から設定 */
@@ -167,20 +176,30 @@ public:
     void drawPixel(uint16_t x, uint16_t y, uint16_t color);
     /** 連続 RAM 書き込み前提の高速ピクセル描画 */
     void writePixel(uint16_t x, uint16_t y, uint16_t color);
+    /** 水平線を描画する */
     void drawHLine(uint16_t x, uint16_t y, uint16_t w, uint16_t color);
+    /** 垂直線を描画する */
     void drawVLine(uint16_t x, uint16_t y, uint16_t h, uint16_t color);
     /** Bresenham による任意線 */
     void drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color);
+    /** 矩形の枠線を描画する */
     void drawRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
+    /** 円の輪郭を描画する */
     void drawCircle(uint16_t x0,uint16_t y0,uint16_t r,uint16_t color);
     /** 画面回転 0～3（0°/90°/180°/270°） */
     void setRotation(uint8_t r);
 
+    /** テキスト描画色を設定する（背景なし） */
     void setTextColor(uint16_t color);
+    /** テキスト描画色と背景色を設定する */
     void setTextColor(uint16_t color, uint16_t bgColor);
+    /** 内蔵 8x8 フォントの拡大倍率を設定する */
     void setFontSize(FontSize size);
+    /** 1 文字を内蔵フォントで描画する */
     void drawChar(uint16_t x, uint16_t y, char c, uint16_t color);
+    /** ASCII 文字列を内蔵フォントで描画する */
     void drawText(uint16_t x, uint16_t y, const char* text);
+    /** 前景色・背景色を指定してテキストを描画する */
     void drawTextBg(uint16_t x, uint16_t y, const char* text, uint16_t color, uint16_t bgColor);
     /** 24bit BMP バイナリを描画（ヘッダは uint16_t 配列として渡す） */
     void drawBMP(uint16_t x, uint16_t y, const uint16_t* bmpData);
@@ -205,6 +224,7 @@ public:
     uint16_t width() const { return _width; }
     /** 現在の論理高さ（回転後） */
     uint16_t height() const { return _height; }
+    /** 現在の画面回転値（0〜3） */
     uint8_t rotation() const { return _rotation; }
     
 };

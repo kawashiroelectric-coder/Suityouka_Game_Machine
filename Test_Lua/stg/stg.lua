@@ -3,19 +3,47 @@
 -- 縦スクロール弾幕 STG（4 面構成） / Suityouka Game Machine
 -- SD: /games/stg/stg.lua
 --
+-- 【このファイルの目的】
+--   Game Machine 向け STG のサンプル実装です。
+--   game_init / game_update / game_draw の三コールバック構成、
+--   machine.* API の典型的な使い方、ステージデータの切り出し方を
+--   参考にできるようコメントを付けています。
+--   API 一覧はプロジェクト直下の LUA_API.md を参照してください。
+--
+-- 【ホストとの契約】
+--   game_init()     … 起動時に 1 回。アセット読込・変数初期化。
+--   game_update(dt) … 毎フレーム 1 回。dt はミリ秒（最大 100 にクランプ）。
+--                     true を返すとゲーム終了しメニューへ戻る（本サンプルは常に false）。
+--   game_draw()     … 1 フレームあたり複数回（画面を 20px 帯に分割したバンド数）。
+--                     論理座標は常に 0..machine.width()-1, 0..machine.height()-1。
+--                     direct モードでは毎バンド machine.clear 相当の処理が必要。
+--
+-- 【描画モード】
+--   本ゲームは direct モード（既定）を使用。
+--   play 中は game_draw 先頭で machine.clear → 背景 → エンティティの順に全描画。
+--   layers モード（タイル背景合成）を使う場合は clear を呼ばない点に注意（LUA_API.md 参照）。
+--
+-- 【状態機械】
+--   mode 変数で画面遷移を管理: title → banner → play → alert → play(ボス)
+--   → clear → banner … → victory / gameover
+--
 -- 操作
 --   移動 … 十字キー
 --   射撃 … OP_RIGHT / NEAR（連射可）
---   決定 … タイトル・リトライ時にジャンプ系ボタン
+--   決定 … タイトル・リトライ時にジャンプ系ボタン（machine.jump_pressed）
 --
 -- 画像（任意）: img/*.bin を置くと自動で使用。無ければ図形スプライト。
 --   詳細は README.md / generate_images.py 参照
 -- ============================================================================
 
+-- 画面サイズは config.hpp の GameConfig に依存（通常 320×240）。
+-- ハード依存を避けるため定数は machine API から取得する。
 local W = machine.width()
 local H = machine.height()
 
--- ボタン（config.hpp / LUA_API.md）
+-- ボタン index は config.hpp / LUA_API.md と一致させる。
+-- machine.pressed(index) … 押している間 true
+-- machine.jump_pressed() … UP, OP_RIGHT, RIGHT, DOWN, NEAR のいずれか
 local BTN_RIGHT = 0
 local BTN_UP = 1
 local BTN_LEFT = 2
@@ -24,7 +52,7 @@ local BTN_OP_LEFT = 4
 local BTN_OP_RIGHT = 5
 local BTN_NEAR = 7
 
--- 色
+-- RGB565 色。machine.rgb(r,g,b) で生成し、fill_rect / text 等に渡す。
 local COL_BG0 = machine.rgb(4, 6, 18)
 local COL_BG1 = machine.rgb(12, 18, 42)
 local COL_STAR0 = machine.rgb(30, 40, 70)
@@ -43,7 +71,8 @@ local COL_DIVER = machine.rgb(100, 220, 120)
 local COL_BOSS = machine.rgb(255, 60, 180)
 local COL_BOSS2 = machine.rgb(180, 40, 120)
 
--- スプライト寸法（画像未配置時の当たり判定もこの値）
+-- 当たり判定・図形フォールバック用の論理サイズ。
+-- 画像を差し替えても当たりを変えたい場合はここと IMG の w/h を揃える。
 local PLAYER_W = 16
 local PLAYER_H = 16
 local PB_W = 4
@@ -51,6 +80,7 @@ local PB_H = 10
 local EB_W = 5
 local EB_H = 5
 
+-- 同時存在数の上限（ヒープ・ループ負荷対策）。増やす場合は実機で FPS を確認。
 local PB_SPEED = 0.45
 local EB_SPEED = 0.11
 local MAX_PBULLETS = 24
@@ -59,7 +89,9 @@ local MAX_ENEMIES = 7
 local MAX_LIVES = 3
 local INV_TIME_MS = 1800
 
--- 画像アセット（generate_images.py で生成可）
+-- SD 上の RGB565 .bin（width*height*2 バイト）。id は load_image の戻り値。
+-- path は起動スクリプト（stg.lua）のディレクトリ基準の相対パス。
+-- 読込失敗時は id=nil のまま → draw_image_or_rect が図形描画にフォールバック。
 local IMG = {
   player = { path = "img/player.bin", w = 16, h = 16, id = nil },
   scout = { path = "img/scout.bin", w = 20, h = 16, id = nil },
@@ -70,6 +102,11 @@ local IMG = {
   eb = { path = "img/ebullet.bin", w = 5, h = 5, id = nil },
 }
 
+-- ステージ定義テーブル。面を増やすときはこの配列に要素を追加する。
+--   waves … { kind, count, gap } の配列。gap は同一ウェーブ内の出現間隔（ms）。
+--   boss  … hp / w,h（当たり）/ score / pattern（弾幕種別）を指定。
+-- 新しい雑魚 kind を足す場合: enemy_size, spawn_enemy, fire_enemy_shot,
+-- draw_entities の分岐を同じ名前で追加する。
 local STAGES = {
   {
     id = 1,
@@ -160,7 +197,7 @@ local STAGES = {
   },
 }
 
--- ゲーム状態
+-- ゲーム状態（モジュール内グローバル）。game_init で初期化、game_update で遷移。
 local mode = "title" -- title | banner | play | alert | clear | victory | gameover
 local stage_idx = 1
 local wave_idx = 1
@@ -171,6 +208,7 @@ local boss_entering = false
 local alert_timer = 0
 local banner_timer = 0
 local clear_timer = 0
+local different = 0 --改修中　難易度を追加予定
 
 local player_x = 0
 local player_y = 0
@@ -183,6 +221,7 @@ local blink = 0
 local scroll_y = 0
 local font_ok = false
 
+-- オブジェクトプール代わりの配列。table.remove は末尾から削除して GC 負荷を抑える。
 local pbullets = {}
 local ebullets = {}
 local enemies = {}
@@ -192,6 +231,7 @@ local spawn_serial = 0
 -- ユーティリティ
 -- ---------------------------------------------------------------------------
 
+-- AABB 矩形の重なり判定（ピクセル座標・整数化は呼び出し側で実施）。
 local function clamp(v, lo, hi)
   if v < lo then return lo end
   if v > hi then return hi end
@@ -210,6 +250,8 @@ local function confirm_pressed()
   return machine.jump_pressed()
 end
 
+-- game_init から呼ぶ。フォント・画像は失敗してもゲーム続行（図形／ASCII にフォールバック）。
+-- load_font / load_image はヒープ予算内でのみ成功（LUA_API.md の heap_* 参照）。
 local function load_assets()
   font_ok = machine.load_font("fonts/game_font.bin") == true
   for _, spec in pairs(IMG) do
@@ -220,6 +262,8 @@ local function load_assets()
   end
 end
 
+-- 画像があれば draw_image_keyed（透過 0xF81F）、なければ draw_proc または fill_rect。
+-- 自ゲームでも「アセット任意」のパターンとして流用できる。
 local function draw_image_or_rect(spec, x, y, w, h, color, draw_proc)
   if spec and spec.id then
     machine.draw_image_keyed(spec.id, math.floor(x), math.floor(y), 0xF81F)
@@ -231,7 +275,8 @@ local function draw_image_or_rect(spec, x, y, w, h, color, draw_proc)
 end
 
 -- ---------------------------------------------------------------------------
--- 図形スプライト（画像差し替え前のプレースホルダ）
+-- 図形スプライト（img/*.bin 未配置時のプレースホルダ）
+-- machine.fill_rect のみで描く。バンド外はホスト側でクリップされる。
 -- ---------------------------------------------------------------------------
 
 local function draw_player_shape(x, y, w, h, _)
@@ -268,9 +313,11 @@ local function draw_boss_shape(x, y, w, h, pulse)
 end
 
 -- ---------------------------------------------------------------------------
--- 弾・敵
+-- 弾・敵の生成と更新用データ
+-- 座標は float で保持し、描画時に math.floor する（サブピクセル移動）。
 -- ---------------------------------------------------------------------------
 
+-- kind ごとの表示・当たりサイズ。boss は STAGES[].boss の w/h を優先。
 local function enemy_size(kind, boss_def)
   if kind == "boss" and boss_def then
     return boss_def.w, boss_def.h
@@ -325,6 +372,7 @@ local function spawn_enemy(kind, boss_def)
     e.hp = 2
     e.shoot_cd = 500
   elseif kind == "boss" and boss_def then
+    -- 画面上部へスライドイン後、左右に振動しながら弾幕（pattern 参照）。
     e.x = (W - boss_def.w) // 2
     e.y = -boss_def.h - 8
     e.w = boss_def.w
@@ -366,6 +414,11 @@ local function fire_enemy_shot(e, px, py)
     add_ebullet(cx - EB_W * 0.5 - 6, cy, -0.4, 1, false)
     add_ebullet(cx - EB_W * 0.5 + 6, cy, 0.4, 1, false)
   elseif e.kind == "boss" then
+    -- ボス弾幕パターン名は STAGES[].boss.pattern と対応:
+    --   aim … 自機狙い + 左右弾
+    --   fan … 扇状 5 方向
+    --   spray … 8 方向ローテーション
+    --   spiral … 双方向スパイラル + たまにサイド弾
     local pat = e.pattern
     if pat == "aim" then
       local dx = px - cx
@@ -400,6 +453,7 @@ end
 
 -- ---------------------------------------------------------------------------
 -- リセット・ステージ進行
+-- begin_stage / reset_run でウェーブ・ボスフラグをまとめて初期化。
 -- ---------------------------------------------------------------------------
 
 local function clear_bullets()
@@ -442,6 +496,7 @@ local function reset_run()
   banner_timer = 0
 end
 
+-- 全ウェーブ消化かつ画面上の敵ゼロ → 警告演出 → ボス出現。
 local function start_boss_alert()
   mode = "alert"
   alert_timer = 0
@@ -486,9 +541,11 @@ local function on_player_dead()
 end
 
 -- ---------------------------------------------------------------------------
--- 更新
+-- 更新（game_update から mode=="play" のとき update_play が呼ばれる）
+-- dt ベースの移動: speed * dt でフレームレートに依存しない。
 -- ---------------------------------------------------------------------------
 
+-- 自機は画面下半分にクランプ（縦 STG の可動域制限の例）。
 local function update_player(dt)
   local speed = 0.24 * dt
   if machine.pressed(BTN_LEFT) then player_x = player_x - speed end
@@ -631,6 +688,7 @@ local function wave_active()
   return false
 end
 
+-- ウェーブ管理: 画面上に敵がいる間は次を出さない。gap は ms 単位のクールダウン。
 local function update_waves(dt)
   if boss_active or boss_entering or mode ~= "play" then
     return
@@ -693,9 +751,12 @@ local function update_play(dt)
 end
 
 -- ---------------------------------------------------------------------------
--- 描画
+-- 描画（game_draw）
+-- 各 mode ごとに専用関数。play 時は clear → 背景 → エンティティ → HUD の順。
+-- machine.text は load_font 済みなら UTF-8 日本語、未 load なら 8x8 ASCII。
 -- ---------------------------------------------------------------------------
 
+-- 縦スクロール風背景: 2 色グラデ + 星（scroll_y は update_play で進行）。
 local function draw_bg()
   local st = STAGES[stage_idx] or STAGES[1]
   machine.fill_rect(0, 0, W, H // 2, st.bg_top)
@@ -785,6 +846,7 @@ local function draw_entities(pulse)
   end
 end
 
+-- 8px グリッド前提の簡易センタリング（#text * 8）。日本語は字幅が異なる点に注意。
 local function draw_center_text(y, text, col)
   local x = (W - #text * 8) // 2
   machine.text(x, y, text, col, COL_BG0)
@@ -801,7 +863,7 @@ local function draw_title()
     draw_center_text(150, "PRESS BUTTON", COL_HUD)
   end
   draw_center_text(176, "MOVE: D-PAD", COL_HUD_DIM)
-  draw_center_text(192, "FIRE: OP / NEAR", COL_HUD_DIM)
+  draw_center_text(192, "FIRE: NEAR", COL_HUD_DIM)
   if hi_score > 0 then
     draw_center_text(214, "HI " .. hi_score, COL_HUD_DIM)
   end
@@ -870,10 +932,11 @@ local function draw_gameover()
 end
 
 -- ---------------------------------------------------------------------------
--- エントリ
+-- エントリ（ホストが require せずグローバル関数として呼ぶ）
 -- ---------------------------------------------------------------------------
 
 function game_init()
+  -- 1 回だけ: アセットとタイトル画面用の初期状態。
   load_assets()
   mode = "title"
   hi_score = 0
@@ -884,9 +947,11 @@ function game_init()
 end
 
 function game_update(dt)
+  -- 毎フレーム: 入力と mode に応じたロジック。false で継続、true でメニュー復帰。
   blink = blink + dt
 
   if mode == "title" then
+    -- ジャンプ系ボタンで新規ゲーム開始。
     if confirm_pressed() then
       reset_run()
     end
@@ -894,6 +959,7 @@ function game_update(dt)
   end
 
   if mode == "banner" then
+    -- ステージ名表示（2.2 秒）後に play へ。
     banner_timer = banner_timer + dt
     if banner_timer >= 2200 then
       mode = "play"
@@ -902,6 +968,7 @@ function game_update(dt)
   end
 
   if mode == "alert" then
+    -- ボス警告。一定時間後に spawn_boss して play に戻る。
     alert_timer = alert_timer + dt
     if alert_timer >= 1800 then
       mode = "play"
@@ -911,6 +978,7 @@ function game_update(dt)
   end
 
   if mode == "clear" then
+    -- 面クリア演出後、次面の banner へ（最終面クリア時は on_stage_cleared で victory）。
     clear_timer = clear_timer + dt
     if clear_timer >= 2500 then
       begin_stage(stage_idx)
@@ -928,6 +996,7 @@ function game_update(dt)
   end
 
   if mode == "gameover" then
+    -- OP_LEFT でタイトル、それ以外のジャンプ系で同ステージからリトライ。
     if blink > 500 then
       if machine.pressed(BTN_OP_LEFT) then
         mode = "title"
@@ -943,6 +1012,8 @@ function game_update(dt)
 end
 
 function game_draw()
+  -- 毎バンド呼ばれる。mode ごとに早期 return する画面もある。
+  -- play 中は毎バンド machine.clear する（direct モードの典型パターン）。
   if mode == "title" then
     draw_title()
     return

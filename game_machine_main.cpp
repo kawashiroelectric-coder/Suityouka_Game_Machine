@@ -119,12 +119,14 @@ static bool inputTestTryMountSdCard(void* user_data);
 // LuaHostHooks コールバック（Lua → C++ ホスト）
 // ---------------------------------------------------------------------------
 
+/** LuaHostHooks: ブート画面用に LCD へテキスト描画する（メニュー外の簡易表示向け） */
 static void luaHostDrawText(void* user_data, int x, int y, const char* text, uint16_t color,
                             uint16_t bg_color) {
     (void)user_data;
     bootScreenDrawText(x, y, text, color, bg_color);
 }
 
+/** LuaHostHooks: 指定インデックスのボタン押下状態を返す（Lua API から呼ばれる） */
 static bool luaHostIsButtonPressed(void* user_data, int button_index) {
     auto* ctx = static_cast<LuaHostButtonContext*>(user_data);
     if (!ctx || !ctx->buttons || button_index < 0 || button_index >= 8) {
@@ -134,6 +136,7 @@ static bool luaHostIsButtonPressed(void* user_data, int button_index) {
     return ctx->buttons->isPressed(static_cast<Button>(button_index));
 }
 
+/** 8 ボタンのいずれかが押下中なら true（離し待ち判定用） */
 static bool isAnyButtonHeld(ButtonInput* btn_input) {
     if (!btn_input) {
         return false;
@@ -150,6 +153,7 @@ static bool isAnyButtonHeld(ButtonInput* btn_input) {
 // Lua ランタイムと描画・入力の接続
 // ---------------------------------------------------------------------------
 
+/** GameDisplay・LuaHostHooks を初期化し LuaInterpreter に接続する（main 起動時に 1 回） */
 static void bindLuaRuntimeToHardware() {
     g_luaHostButtonCtx.buttons = buttons;
 
@@ -168,6 +172,7 @@ static void bindLuaRuntimeToHardware() {
     syncLuaInterpreterSdMountFlag();
 }
 
+/** SdService のマウント状態を LuaInterpreter に反映する（SD 挿抜・ゲーム終了後） */
 static void syncLuaInterpreterSdMountFlag() {
     g_luaInterpreter.setSdMounted(SdService::isMounted());
 }
@@ -222,6 +227,7 @@ static void teardownLuaSessionAfterGame() {
     fflush(stdout);
 }
 
+/** ゲーム起動失敗時にエラー内容を LCD 表示し、ボタン押下を待つ */
 static void showGameStartFailureScreen(const char* script_path) {
     bootScreenClear(Color::BLACK);
     bootScreenDrawText(10, 80, "Game start failed", Color::RED, Color::BLACK);
@@ -270,16 +276,19 @@ static void menuIdleFrameTick(void* user_data) {
     inputTestIdleFrameTick(user_data);
 }
 
+/** GameSelectMenu: 選択された .lua を実行するコールバック */
 static void menuLaunchGameCallback(const char* path, void* user_data) {
     (void)user_data;
     runGameFromMenuAndTeardown(path);
 }
 
+/** GameSelectMenu: 入力テスト画面へ遷移するコールバック */
 static void menuLaunchInputTestCallback(void* user_data) {
     (void)user_data;
     runInputTestScreen();
 }
 
+/** GameSelectMenu: SD カード挿抜時に Lua 側フラグ同期とルート一覧表示を行う */
 static void menuOnSdCardStateChanged(void* user_data) {
     (void)user_data;
     syncLuaInterpreterSdMountFlag();
@@ -293,12 +302,14 @@ static void menuOnSdCardStateChanged(void* user_data) {
 // 入力テスト画面
 // ---------------------------------------------------------------------------
 
+/** 入力テスト／メニュー共通の毎フレーム処理（音声ポンプ・エンコーダ音量） */
 static void inputTestIdleFrameTick(void* user_data) {
     (void)user_data;
     g_luaInterpreter.audioEngine().pumpStream();
     EncoderVolumeControl::service();
 }
 
+/** 入力テスト画面: SD カード検出時にマウントを試みるコールバック */
 static bool inputTestTryMountSdCard(void* user_data) {
     (void)user_data;
     if (!SdService::isCardPresent()) {
@@ -311,6 +322,7 @@ static bool inputTestTryMountSdCard(void* user_data) {
     return true;
 }
 
+/** 入力テスト画面を起動する（メニューから呼ばれる） */
 static void runInputTestScreen() {
     if (!lcd || !buttons) {
         return;
@@ -330,10 +342,12 @@ static void runInputTestScreen() {
 // ブート画面用 LCD ヘルパ
 // ---------------------------------------------------------------------------
 
+/** ブート／エラー画面用に画面全体を単色で塗りつぶす */
 static void bootScreenClear(uint16_t color) {
     g_gameDisplay.fillScreen(color);
 }
 
+/** ブート／エラー画面用に LCD へテキストを描画する */
 static void bootScreenDrawText(int x, int y, const char* text, uint16_t color, uint16_t bg_color) {
     if (!lcd) {
         return;
@@ -341,6 +355,7 @@ static void bootScreenDrawText(int x, int y, const char* text, uint16_t color, u
     lcd->drawTextBg(x, y, text, color, bg_color);
 }
 
+/** 全ボタンが離されるまでブロックする（誤再押下防止） */
 static void bootScreenWaitForAllButtonsReleased() {
     if (!buttons) {
         return;
@@ -354,6 +369,7 @@ static void bootScreenWaitForAllButtonsReleased() {
     }
 }
 
+/** いずれかのボタン押下を待ち、離されるまで待つ（エラー画面の続行用） */
 static void bootScreenWaitForAnyButtonPress() {
     if (!buttons) {
         sleep_ms(1000);
@@ -373,6 +389,7 @@ static void bootScreenWaitForAnyButtonPress() {
 // LCD SPI DMA
 // ---------------------------------------------------------------------------
 
+/** LCD 向け SPI DMA チャネルを確保・設定する（main 起動時に 1 回） */
 static void initLcdSpiDma(ST7789_LCD& lcd_ref) {
     lcd_spi_dma_channel = dma_claim_unused_channel(true);
     dma_channel_config config = dma_channel_get_default_config(lcd_spi_dma_channel);
@@ -392,6 +409,7 @@ static void initLcdSpiDma(ST7789_LCD& lcd_ref) {
 // main
 // ---------------------------------------------------------------------------
 
+/** ファームウェアのエントリポイント。ハードウェア初期化後 GameSelectMenu へ入る */
 int main() {
     stdio_init_all();
     // デバッグ時: USB シリアル接続を待つとログ取りやすい

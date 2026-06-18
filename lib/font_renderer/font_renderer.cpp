@@ -19,8 +19,10 @@ extern "C" {
 
 FontRenderer* FontRenderer::s_active_ = nullptr;
 
+// コンストラクタ（メンバはデフォルト初期化）
 FontRenderer::FontRenderer() = default;
 
+// デストラクタ。アクティブ参照を解除し、読み込み済みフォントを解放する
 FontRenderer::~FontRenderer() {
     if (s_active_ == this) {
         s_active_ = nullptr;
@@ -28,6 +30,7 @@ FontRenderer::~FontRenderer() {
     unload();
 }
 
+// HeapBudget 経由で確保したフォントデータを解放し、状態をリセットする
 void FontRenderer::unload() {
     if (index_) {
         auto* base = reinterpret_cast<uint8_t*>(index_) - 16;
@@ -41,6 +44,7 @@ void FontRenderer::unload() {
     scale_den_ = 1;
 }
 
+// malloc 起点のフォントデータを raw free し、状態をリセットする（HeapBudget 迂回）
 void FontRenderer::unloadRaw() {
     if (index_) {
         auto* base = reinterpret_cast<uint8_t*>(index_) - 16;
@@ -54,6 +58,7 @@ void FontRenderer::unloadRaw() {
     scale_den_ = 1;
 }
 
+// 描画倍率を整数比 num/den で設定する（0 指定時は 1:1 に戻す）
 void FontRenderer::setScale(uint8_t num, uint8_t den) {
     if (num == 0 || den == 0) {
         scale_num_ = 1;
@@ -64,6 +69,7 @@ void FontRenderer::setScale(uint8_t num, uint8_t den) {
     scale_den_ = den;
 }
 
+// フォントメトリクス値に描画倍率を適用して返す
 uint8_t FontRenderer::scaleValue(uint8_t value) const {
     if (scale_num_ == scale_den_) {
         return value;
@@ -71,6 +77,7 @@ uint8_t FontRenderer::scaleValue(uint8_t value) const {
     return static_cast<uint8_t>((static_cast<unsigned>(value) * scale_num_) / scale_den_);
 }
 
+// グリフ 1 行あたりのバイト数を返す
 uint8_t FontRenderer::bytesPerRow() const {
     if (glyph_h_ == 0) {
         return 0;
@@ -78,6 +85,7 @@ uint8_t FontRenderer::bytesPerRow() const {
     return static_cast<uint8_t>(bytes_per_glyph_ / glyph_h_);
 }
 
+// グリフビットマップの指定座標がオン（描画対象）かどうかを返す
 bool FontRenderer::glyphPixel(const uint8_t* glyph, int row, int col) const {
     if (!glyph || row < 0 || col < 0 || row >= glyph_h_ || col >= glyph_w_) {
         return false;
@@ -91,6 +99,7 @@ bool FontRenderer::glyphPixel(const uint8_t* glyph, int row, int col) const {
     return (bits & mask) != 0;
 }
 
+// SD カード上の MISF v1 フォントファイルを読み込み、インデックスとグリフをメモリに展開する
 bool FontRenderer::loadFromSd(const char* path) {
     unload();
     if (!path || path[0] == '\0') {
@@ -174,6 +183,7 @@ bool FontRenderer::loadFromSd(const char* path) {
     return true;
 }
 
+// コードポイントからグリフインデックスエントリを二分探索で検索する
 const FontRenderer::IndexEntry* FontRenderer::findGlyph(uint32_t codepoint) const {
     if (!index_ || glyph_count_ == 0) {
         return nullptr;
@@ -195,6 +205,7 @@ const FontRenderer::IndexEntry* FontRenderer::findGlyph(uint32_t codepoint) cons
     return nullptr;
 }
 
+// 1 グリフをバンドフレームバッファへ描画する（倍率対応・背景色あり）
 void FontRenderer::drawGlyph(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, int band_y0,
                              int x, int y, const uint8_t* glyph, uint16_t fg,
                              uint16_t bg) const {
@@ -248,6 +259,7 @@ void FontRenderer::drawGlyph(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, in
 
 namespace {
 
+// UTF-8 文字列から次のコードポイントを 1 つ取り出し、ポインタを進める
 bool utf8Next(const char*& p, uint32_t& codepoint) {
     const unsigned char c = static_cast<unsigned char>(*p);
     if (c == '\0') {
@@ -301,6 +313,7 @@ bool utf8Next(const char*& p, uint32_t& codepoint) {
 
 }  // namespace
 
+// UTF-8 テキストをバンドフレームバッファへ描画する（改行・欠損グリフのフォールバック対応）
 void FontRenderer::drawTextBg(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, int band_y0, int x,
                               int y, const char* utf8, uint16_t fg, uint16_t bg) const {
     if (!fb || !utf8 || !glyph_data_) {

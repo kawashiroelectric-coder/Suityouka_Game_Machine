@@ -14,6 +14,7 @@ class SdService {
 public:
     /** カード挿入 GPIO の状態（マウント前でも可） */
     static bool isCardPresent();
+    /** FatFS がマウント済みかどうか */
     static bool isMounted();
     /** hw_config + f_mount。成功時のみ true */
     static bool mount();

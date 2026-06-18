@@ -31,7 +31,7 @@ public:
         uint32_t frame_interval_ms = 50;
     };
 
-    /** LEFT / OP_LEFT で抜けるまでループする */
+    /** 入力テスト画面を起動し LEFT+FAR で戻るまでループする。設定メニューから呼ぶ */
     static void run(const Config& config);
 };
 

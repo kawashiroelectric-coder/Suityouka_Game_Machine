@@ -54,6 +54,7 @@ struct UiState {
     char battery_line[16] = {};
 };
 
+/** テキストが前回と異なるときだけ LCD に描画する。部分更新のちらつき防止に使う */
 bool drawTextIfChanged(ST7789_LCD* lcd, int x, int y, const char* text, uint16_t fg,
                        uint16_t bg, char* cache, size_t cache_size) {
     if (strcmp(cache, text) == 0) {
@@ -65,11 +66,13 @@ bool drawTextIfChanged(ST7789_LCD* lcd, int x, int y, const char* text, uint16_t
     return true;
 }
 
+/** バッテリー電圧を表示用文字列に整形する。右上表示更新時に使う */
 void formatBatteryLine(char* line, size_t line_size) {
     const float voltage = BatteryMonitor::lastVoltage();
     snprintf(line, line_size, "%6.3f V", static_cast<double>(voltage));
 }
 
+/** バッテリー電圧表示を必要時のみ更新する。各フレームの動的更新時に呼ぶ */
 bool updateBatteryLine(ST7789_LCD* lcd, UiState& state) {
     char line[16];
     formatBatteryLine(line, sizeof(line));
@@ -77,6 +80,7 @@ bool updateBatteryLine(ST7789_LCD* lcd, UiState& state) {
                              sizeof(state.battery_line));
 }
 
+/** ボタン 1 個分の枠とラベルを描画する。押下状態・エッジ変化時に呼ぶ */
 void drawButtonBox(ST7789_LCD* lcd, const ButtonLayout& layout, bool pressed, bool edge) {
     const uint16_t fill = pressed ? Color::GREEN : Color::rgb(40, 40, 40);
     const uint16_t border = edge ? Color::YELLOW : (pressed ? Color::WHITE : Color::GRAY);
@@ -91,6 +95,7 @@ void drawButtonBox(ST7789_LCD* lcd, const ButtonLayout& layout, bool pressed, bo
                     fill);
 }
 
+/** 入力テスト画面の固定背景と説明を描く。画面入場時に一度呼ぶ */
 void drawStaticBackground(ST7789_LCD* lcd) {
     lcd->fill(Color::BLACK);
     lcd->drawTextBg(8, 6, "INPUT TEST MODE", Color::WHITE, Color::BLACK);
@@ -104,10 +109,12 @@ void drawStaticBackground(ST7789_LCD* lcd) {
     lcd->drawTextBg(24, 172, line, Color::GRAY, Color::BLACK);
 }
 
+/** エンコーダ位置バーの枠線を描く。バー更新のたびに呼ぶ */
 void drawEncoderBarFrame(ST7789_LCD* lcd) {
     lcd->drawRect(kBarX, kBarY, kBarW, kBarH, Color::GRAY);
 }
 
+/** エンコーダ位置に応じてバー上のマーカーを移動描画する。各フレームの動的更新時に呼ぶ */
 void refreshEncoderBar(ST7789_LCD* lcd, int32_t position, UiState& state) {
     const int marker = kBarX + static_cast<int>((position % kBarW + kBarW) % kBarW);
 
@@ -123,6 +130,7 @@ void refreshEncoderBar(ST7789_LCD* lcd, int32_t position, UiState& state) {
     state.marker_x = marker;
 }
 
+/** 全ボタンの押下状態表示を更新する。各フレームの動的更新時に呼ぶ */
 bool updateButtons(ST7789_LCD* lcd, ButtonInput* buttons, UiState& state) {
     bool changed = false;
     for (size_t i = 0; i < sizeof(kButtons) / sizeof(kButtons[0]); ++i) {
@@ -141,6 +149,7 @@ bool updateButtons(ST7789_LCD* lcd, ButtonInput* buttons, UiState& state) {
     return changed;
 }
 
+/** エンコーダ・ボタン・バッテリー等の動的表示をまとめて更新する。メインループ各フレームで呼ぶ */
 bool updateDynamicFields(ST7789_LCD* lcd, ButtonInput* buttons, EncoderInput& encoder,
                          int32_t frame_delta, UiState& state) {
     bool changed = updateButtons(lcd, buttons, state);
@@ -178,6 +187,7 @@ bool updateDynamicFields(ST7789_LCD* lcd, ButtonInput* buttons, EncoderInput& en
     return changed;
 }
 
+/** 入力テスト画面を初期描画し UI 状態をリセットする。run 入場時に一度呼ぶ */
 void initUiState(ST7789_LCD* lcd, ButtonInput* buttons, EncoderInput& encoder, UiState& state) {
     drawStaticBackground(lcd);
     memset(&state, 0, sizeof(state));
@@ -217,6 +227,7 @@ void initUiState(ST7789_LCD* lcd, ButtonInput* buttons, EncoderInput& encoder, U
 
 }  // namespace
 
+/** 入力テスト画面のメインループ。設定メニューから起動し LEFT+FAR で戻る */
 void InputTestMode::run(const Config& config) {
     if (!config.lcd || !config.buttons) {
         return;

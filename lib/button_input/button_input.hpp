@@ -51,6 +51,7 @@ private:
     
     
 public:
+    /** I2C ポートと PCA9539 アドレスを指定して構築する */
     ButtonInput(i2c_inst_t* port, uint8_t addr);
     
     /** Port0 を入力、Port1 を出力に設定する */

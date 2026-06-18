@@ -17,6 +17,7 @@
 
 AudioOutput* AudioOutput::instance_ = nullptr;
 
+// コンストラクタ。バッファをゼロ初期化し、シングルトン instance_ を自身に設定する
 AudioOutput::AudioOutput()
     : sample_rate_(AudioConfig::SAMPLE_RATE),
       initialized_(false),
@@ -36,17 +37,20 @@ AudioOutput::AudioOutput()
     memset(buffer_b_, 0, sizeof(buffer_b_));
 }
 
+// デストラクタ。再生を停止し、シングルトン参照を解除する
 AudioOutput::~AudioOutput() {
     stop();
     instance_ = nullptr;
 }
 
+// Core 1 のエントリポイント。multicore_launch_core1 から呼ばれ core1Loop へ委譲する
 void AudioOutput::core1Entry() {
     if (instance_) {
         instance_->core1Loop();
     }
 }
 
+// Core 1 を起動し I2S ハードウェアの初期化完了を待つ。成功時 true
 bool AudioOutput::init(uint32_t sample_rate) {
     if (initialized_) {
         return true;
@@ -69,6 +73,7 @@ bool AudioOutput::init(uint32_t sample_rate) {
     return true;
 }
 
+// Core 1 上で PIO・DMA・ミュート GPIO を初期化し、I2S 出力を有効化する
 void AudioOutput::initHardwareOnCore1() {
     using namespace AudioConfig::I2S;
 
@@ -92,6 +97,7 @@ void AudioOutput::initHardwareOnCore1() {
     core1_ready_ = true;
 }
 
+// コールバックで 16bit L/R を取得し、音量適用後に 32bit ステレオ DMA バッファへ詰める
 void AudioOutput::fillBuffer(int32_t* dst, int16_t* scratch_l, int16_t* scratch_r) {
     if (callback_) {
         callback_(scratch_l, scratch_r, BUFFER_FRAMES);
@@ -108,6 +114,7 @@ void AudioOutput::fillBuffer(int32_t* dst, int16_t* scratch_l, int16_t* scratch_
     }
 }
 
+// 指定バッファから PIO TX FIFO へ DMA 転送を開始する
 void AudioOutput::kickDma(const int32_t* src) {
     if (dma_channel_ < 0) {
         return;
@@ -121,6 +128,7 @@ void AudioOutput::kickDma(const int32_t* src) {
     dma_channel_configure(dma_channel_, &cfg, &pio_->txf[sm_], src, BUFFER_WORDS, true);
 }
 
+// DMA 完了割り込みハンドラ。該当チャンネルの完了を検知し onDmaComplete を呼ぶ
 void AudioOutput::dmaIrqHandler() {
     if (!instance_ || instance_->dma_channel_ < 0) {
         return;
@@ -131,6 +139,7 @@ void AudioOutput::dmaIrqHandler() {
     }
 }
 
+// DMA 転送完了時に非アクティブ側バッファを充填し、次の DMA をキックする（ダブルバッファ）
 void AudioOutput::onDmaComplete() {
     if (!playing_) {
         return;
@@ -146,6 +155,7 @@ void AudioOutput::onDmaComplete() {
     current_buffer_ = next;
 }
 
+// Core 1 上で両バッファを充填し、I2S 再生を開始する
 void AudioOutput::startPlaybackOnCore1() {
     if (playing_ || dma_channel_ < 0) {
         return;
@@ -162,6 +172,7 @@ void AudioOutput::startPlaybackOnCore1() {
     printf("AudioOutput: I2S playback start (Core1)\n");
 }
 
+// Core 1 上で DMA を中止し、バッファを無音化して再生を停止する
 void AudioOutput::stopPlaybackOnCore1() {
     if (!playing_) {
         return;
@@ -175,6 +186,7 @@ void AudioOutput::stopPlaybackOnCore1() {
     printf("AudioOutput: I2S playback stop\n");
 }
 
+// Core 1 のメインループ。再生開始/停止要求の処理とバッテリー監視を行う
 void AudioOutput::core1Loop() {
     initHardwareOnCore1();
     BatteryMonitor::initOnCore1();
@@ -201,6 +213,7 @@ void AudioOutput::core1Loop() {
     }
 }
 
+// Core 0 から再生開始を Core 1 へ要求する
 void AudioOutput::start() {
     if (!initialized_) {
         return;
@@ -208,6 +221,7 @@ void AudioOutput::start() {
     start_requested_ = true;
 }
 
+// Core 0 から再生停止を要求し、Core 1 が停止するまで最大 500ms 待機する
 void AudioOutput::stop() {
     stop_requested_ = true;
     const uint32_t deadline = to_ms_since_boot(get_absolute_time()) + 500;
@@ -216,6 +230,7 @@ void AudioOutput::stop() {
     }
 }
 
+// 再生音量を 0.0〜1.0 の範囲にクランプして設定する
 void AudioOutput::setVolume(float volume) {
     if (volume < 0.0f) {
         volume = 0.0f;
@@ -226,6 +241,7 @@ void AudioOutput::setVolume(float volume) {
     volume_ = volume;
 }
 
+// 指定周波数・時間のトーン再生（未実装・スタブ）
 void AudioOutput::playTone(float frequency, float duration_ms) {
     (void)frequency;
     (void)duration_ms;

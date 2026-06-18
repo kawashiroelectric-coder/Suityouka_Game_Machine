@@ -19,10 +19,13 @@ LuaInterpreter* g_active_interpreter = nullptr;
 
 }  // namespace
 
+/** 現在ゲーム実行中の LuaInterpreter ポインタを返す */
 LuaInterpreter* luaApiActiveInterpreter() { return g_active_interpreter; }
 
+/** ゲーム実行中に使う LuaInterpreter を登録する */
 void luaApiSetActiveInterpreter(LuaInterpreter* interp) { g_active_interpreter = interp; }
 
+/** アクティブ interpreter に紐づく GameDisplay を返す。未登録なら nullptr */
 GameDisplay* luaApiActiveDisplay() {
     if (!g_active_interpreter) {
         return nullptr;
@@ -30,6 +33,7 @@ GameDisplay* luaApiActiveDisplay() {
     return g_active_interpreter->hostHooks().display;
 }
 
+/** Lua スタック上の色引数を RGB565 に変換する（整数1個 or R,G,B 3個） */
 uint16_t luaApiParseColor(lua_State* L, int idx) {
     const int n = lua_gettop(L);
     if (n >= idx + 2 && lua_isnumber(L, idx) && lua_isnumber(L, idx + 1) &&

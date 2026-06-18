@@ -140,8 +140,9 @@ flowchart TD
 
 ### `audio_output/` + `lua_audio/`
 
-- **Core0**: SD から PCM を読み、`LuaAudio::pumpStream` でバッファ供給。
+- **Core0**: SD から PCM を読み、`LuaAudio::pumpStream` でバッファ供給。埋め込み BGM は flash 配列からもストリーム可能。
 - **Core1**: `AudioOutput` が I2S DMA とコールバック（ミキシング）を実行。
+- **C++ 埋め込み SE/BGM**: `playSeFromEmbedded` / `playBgmFromEmbedded`（`tool/wav_to_pcm_header.py` で生成した `assets/*.h`）
 
 ### `file_explorer/` + `input_test_mode/`
 

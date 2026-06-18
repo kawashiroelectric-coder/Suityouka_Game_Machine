@@ -68,7 +68,7 @@ python generate_images.py
 PNG から変換する場合（プロジェクト共通ツール）:
 
 ```bash
-python ../../tool/png_to_rgb565bin.py ship.png --resize 16x16 -o img/player.bin
+python ../../tool/image_to_rgb565_bin.py ship.png --resize 16x16 -o img/player.bin
 ```
 
 ## カスタム画像を作るときのヒント

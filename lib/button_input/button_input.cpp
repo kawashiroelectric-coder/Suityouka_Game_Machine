@@ -18,6 +18,7 @@ ButtonInput::ButtonInput(i2c_inst_t* port, uint8_t addr)
       irq_enabled(false) {}
 
 namespace {
+/** I2C バス排他制御用クリティカルセクションを返す（初回のみ初期化） */
 critical_section_t* i2cCriticalSection() {
     static critical_section_t cs;
     static bool inited = false;
@@ -29,6 +30,7 @@ critical_section_t* i2cCriticalSection() {
 }
 }  // namespace
 
+/** PCA9539 レジスタへ 1 バイト書き込む（I2C 排他制御付き） */
 bool ButtonInput::writeRegister(uint8_t reg, uint8_t value) {
     critical_section_enter_blocking(i2cCriticalSection());
     uint8_t buf[2] = {reg, value};
@@ -37,6 +39,7 @@ bool ButtonInput::writeRegister(uint8_t reg, uint8_t value) {
     return result == 2;
 }
 
+/** PCA9539 レジスタから 1 バイト読み込む（I2C 排他制御付き） */
 bool ButtonInput::readRegister(uint8_t reg, uint8_t* value) {
     critical_section_enter_blocking(i2cCriticalSection());
     int result = i2c_write_blocking(i2c_port, i2c_addr, &reg, 1, true);
@@ -81,10 +84,12 @@ bool ButtonInput::init() {
     return true;
 }
 
+/** Port1 出力レジスタへ port1_output_ を反映する（P1.3〜P1.7 は常に 0） */
 bool ButtonInput::writePort1Output() {
     return writeRegister(REG_OUTPUT_PORT1, port1_output_ & BatteryLedConfig::PORT1_MASK);
 }
 
+/** Port1 の P1.0〜P1.2（pin_index 0=FULL, 1=MID, 2=LOW）を個別 ON/OFF する */
 bool ButtonInput::setBatteryLed(uint8_t pin_index, bool on) {
     if (pin_index >= BatteryLedConfig::LED_COUNT) {
         return false;
@@ -98,6 +103,7 @@ bool ButtonInput::setBatteryLed(uint8_t pin_index, bool on) {
     return writePort1Output();
 }
 
+/** 残量レベル（0=消灯, 1=LOW, 2=MID, 3=FULL）に応じて LED を 1 灯だけ点灯する */
 bool ButtonInput::setBatteryLevel(uint8_t level) {
     if (level > BatteryLedConfig::LEVEL_FULL) {
         level = BatteryLedConfig::LEVEL_FULL;
@@ -112,6 +118,7 @@ bool ButtonInput::setBatteryLevel(uint8_t level) {
     return writePort1Output();
 }
 
+/** P1.0〜P1.2 のマスク（下位 3bit）を一括設定する */
 bool ButtonInput::setBatteryLedMask(uint8_t mask) {
     port1_output_ = mask & BatteryLedConfig::PORT1_MASK;
     return writePort1Output();

@@ -23,6 +23,7 @@ namespace {
 constexpr size_t kMaxSaveBytes = 16 * 1024;
 constexpr int kMaxNestDepth = 16;
 
+/** Lua 文字列をエスケープしてダブルクォートで囲んだ形式に追記する */
 void appendEscapedString(const char* s, std::string* out) {
     out->push_back('"');
     if (s) {
@@ -52,6 +53,7 @@ void appendEscapedString(const char* s, std::string* out) {
     out->push_back('"');
 }
 
+/** Lua テーブルキーを Lua リテラル形式の文字列に追記する */
 bool appendKey(lua_State* L, int key_idx, std::string* out, char* err, size_t err_len) {
     const int t = lua_type(L, key_idx);
     if (t == LUA_TNUMBER) {
@@ -74,8 +76,10 @@ bool appendKey(lua_State* L, int key_idx, std::string* out, char* err, size_t er
     return false;
 }
 
+/** Lua 値を Lua リテラル形式に追記する（前方宣言） */
 bool appendValue(lua_State* L, int idx, std::string* out, int depth, char* err, size_t err_len);
 
+/** Lua テーブルを再帰的に Lua リテラル文字列へシリアライズする */
 bool appendTable(lua_State* L, int idx, std::string* out, int depth, char* err, size_t err_len) {
     if (depth > kMaxNestDepth) {
         std::snprintf(err, err_len, "table nest too deep (max %d)", kMaxNestDepth);
@@ -112,6 +116,7 @@ bool appendTable(lua_State* L, int idx, std::string* out, int depth, char* err, 
     return true;
 }
 
+/** Lua 値（nil/bool/number/string/table）を Lua リテラル形式に追記する */
 bool appendValue(lua_State* L, int idx, std::string* out, int depth, char* err, size_t err_len) {
     switch (lua_type(L, idx)) {
         case LUA_TNIL:
@@ -142,6 +147,7 @@ bool appendValue(lua_State* L, int idx, std::string* out, int depth, char* err, 
     }
 }
 
+/** バイト列を SD ファイルへ書き込む（save_data 用） */
 bool writeSdBytes(LuaInterpreter* interp, const char* path, const char* data, size_t len, char* err,
                   size_t err_len) {
     char norm[FF_LFN_BUF + 4];
@@ -164,6 +170,7 @@ bool writeSdBytes(LuaInterpreter* interp, const char* path, const char* data, si
     return true;
 }
 
+/** SD からセーブファイルを読み込み、ヌル終端バッファとして返す */
 bool readSdSaveBytes(LuaInterpreter* interp, const char* path, char** out_buf, size_t* out_len,
                      char* err, size_t err_len) {
     *out_buf = nullptr;
@@ -208,6 +215,7 @@ bool readSdSaveBytes(LuaInterpreter* interp, const char* path, char** out_buf, s
 
 }  // namespace
 
+/** Lua テーブルを Lua リテラル形式で SD に保存する */
 bool LuaInterpreter::saveDataToSd(lua_State* L, int table_index, const char* path) {
     if (!L || !path || path[0] == '\0') {
         setLastError("save_data: invalid args");
@@ -246,6 +254,7 @@ bool LuaInterpreter::saveDataToSd(lua_State* L, int table_index, const char* pat
     return true;
 }
 
+/** SD からセーブファイルを読み込み、Lua テーブルとしてスタックに push する */
 bool LuaInterpreter::loadDataFromSd(lua_State* L, const char* path) {
     if (!L || !path || path[0] == '\0') {
         setLastError("load_data: invalid args");

@@ -17,6 +17,7 @@ namespace {
 
 class DebugOverlay {
 public:
+    /** FPS / RAM 表示用の内部カウンタをリセットする */
     void reset() {
         last_ms_ = 0;
         accum_ms_ = 0;
@@ -26,6 +27,7 @@ public:
         displayed_ram_pct_ = 0;
     }
 
+    /** フレーム毎に呼び、250ms ごとに FPS と RAM 統計を更新する */
     void tick(uint32_t now_ms) {
         if (last_ms_ == 0) {
             last_ms_ = now_ms;
@@ -43,6 +45,7 @@ public:
         }
     }
 
+    /** 画面右上に FPS と RAM 使用量を LCD へ直接描画する */
     void draw(ST7789_LCD* lcd, int screen_width) const {
         if (!lcd || screen_width <= 0) {
             return;
@@ -62,6 +65,7 @@ public:
     }
 
 private:
+    /** HeapBudget から RAM 使用量（KB）と使用率（%）を計算する */
     void updateRamStats() {
         const size_t used = HeapBudget::used();
         const size_t budget = HeapBudget::budget();
@@ -86,20 +90,26 @@ DebugOverlay g_debug_overlay;
 
 }  // namespace
 
+/** デバッグオーバーレイの計測状態をリセットする */
 void debugOverlayReset() { g_debug_overlay.reset(); }
 
+/** デバッグオーバーレイの FPS 計測を1フレーム進める */
 void debugOverlayTick(uint32_t now_ms) { g_debug_overlay.tick(now_ms); }
 
+/** フレーム DMA 完了後に FPS / RAM を LCD 右上へ描画する */
 void debugOverlayDrawAfterFrame(ST7789_LCD* lcd, int screen_width) {
     g_debug_overlay.draw(lcd, screen_width);
 }
 
 #else
 
+/** デバッグ無効時: 何もしない */
 void debugOverlayReset() {}
 
+/** デバッグ無効時: 何もしない */
 void debugOverlayTick(uint32_t) {}
 
+/** デバッグ無効時: 何もしない */
 void debugOverlayDrawAfterFrame(ST7789_LCD*, int) {}
 
 #endif  // GAME_MACHINE_DEBUG

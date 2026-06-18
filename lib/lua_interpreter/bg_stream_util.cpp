@@ -9,10 +9,12 @@
 
 uint16_t g_bg_stream_buf[2][GameConfig::BUFFER_WIDTH * GameConfig::BUFFER_HEIGHT];
 
+/** バンド index から画面上端の Y 座標（論理座標）を返す */
 int bgBandTopY(int band_index) {
     return band_index * static_cast<int>(GameConfig::BUFFER_HEIGHT);
 }
 
+/** バンド index から画面下端の Y 座標（論理座標、排他的）を返す */
 int bgBandBottomY(int band_index) {
     const int top = bgBandTopY(band_index);
     const int remaining = static_cast<int>(GameConfig::SCREEN_HEIGHT) - top;
@@ -25,6 +27,7 @@ int bgBandBottomY(int band_index) {
     return top + remaining;
 }
 
+/** 画像矩形と指定バンドの交差領域を求める。交差なしなら false */
 bool bgStreamBandRegion(int band_index, int dx, int dy, uint16_t w, uint16_t h, int* draw_top,
                         int* rows, int* src_y0) {
     (void)dx;
@@ -43,6 +46,7 @@ bool bgStreamBandRegion(int band_index, int dx, int dy, uint16_t w, uint16_t h, 
     return true;
 }
 
+/** SD 上 RGB565 画像の src_y0 行から rows 行分を dst 先頭へ読み込む */
 bool readBgStreamChunk(FIL* file, uint16_t w, int src_y0, int rows, uint16_t* dst) {
     if (!file || !dst || w == 0 || rows <= 0) {
         return false;

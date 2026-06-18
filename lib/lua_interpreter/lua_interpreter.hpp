@@ -67,14 +67,19 @@ public:
     static constexpr int kMaxImageSlots = 16;
     static constexpr size_t kMaxImageBytes = 200 * 1024;
 
+    /** コンストラクタ */
     LuaInterpreter();
+    /** デストラクタ */
     ~LuaInterpreter();
 
+    /** LCD / ボタン / 描画コールバックを登録する */
     void setHostHooks(const LuaHostHooks& hooks);
     /** PCM5102 出力と Lua 音声 API を接続しストリーミング開始 */
     void setAudioOutput(AudioOutput* audio);
     /** FatFS 利用前に SD マウント済みかを設定 */
+    /** FatFS 利用前に SD マウント済みかを設定 */
     void setSdMounted(bool mounted);
+    /** 読み込み可能な Lua スクリプトの最大バイト数を設定 */
     void setMaxScriptBytes(size_t max_bytes);
 
     /** SD ルートの main.lua / game.lua / boot.lua、無ければ最初の .lua（1回実行） */
@@ -112,21 +117,31 @@ public:
     /** SD 上の .lua を実行し return 値 1 個を L に push */
     bool pushLoadReturnFromSd(lua_State* L, const char* path);
 
+    /** 登録済みホストコールバックを返す */
     const LuaHostHooks& hostHooks() const { return hooks_; }
+    /** Lua 音声エンジンへの参照を返す */
     LuaAudio& audioEngine() { return audio_engine_; }
+    /** 現在の描画モードを返す */
     LuaDrawMode drawMode() const { return draw_mode_; }
+    /** 描画モード（Direct / Layers）を設定する */
     void setDrawMode(LuaDrawMode mode) { draw_mode_ = mode; }
+    /** タイルレイヤーシステムへの参照を返す */
     TileLayerSystem& tileLayers() { return tile_layers_; }
+    /** レイヤー合成の背景色を設定する */
     void setLayerBackdrop(uint16_t color) {
         layer_backdrop_color_ = color;
         tile_layers_.setBackdropColor(color);
     }
+    /** レイヤー合成の背景色を返す */
     uint16_t layerBackdropColor() const { return layer_backdrop_color_; }
 
-    /** 画像スロット操作（Lua バインディングから呼ばれる） */
+    /** SD から RGB565 画像を読み込みスロット ID を返す */
     int loadImage(const char* path, uint16_t w, uint16_t h);
+    /** 画像スロット ID に対応する ImageSlot を返す */
     const ImageSlot* getImage(int id) const;
+    /** 指定 ID の画像スロットを解放する */
     void freeImage(int id);
+    /** すべての画像スロットを解放する */
     void freeAllImages();
 
     /** 背景 1 枚: SD から現在バンド行だけ読み drawImageSub（RAM に全枚載せない）。
@@ -143,8 +158,11 @@ public:
 
     /** MISF サブセットフォント（美咲）を SD から読み込む */
     bool loadFont(const char* path);
+    /** 読み込み済みフォントをアンロードする */
     void unloadFont();
+    /** フォントレンダラーへの参照を返す */
     FontRenderer* fontRenderer() { return &font_renderer_; }
+    /** フォントレンダラーへの const 参照を返す */
     const FontRenderer* fontRenderer() const { return &font_renderer_; }
 
     /** 実行中 .lua のディレクトリ（例: "/visual_novel"）。resolveGamePath の基準。 */
@@ -197,19 +215,29 @@ private:
 
     VnStreamComposeState vn_stream_;
 
+    /** 次バンド用に背景ストリームの行データを先読みする */
     void prefetchBgStreamBand(int display_band);
 
+    /** 実行中ゲームのスクリプトディレクトリをクリアする */
     void clearGameScriptDir();
+    /** スクリプトパスからゲーム用基準ディレクトリを設定する */
     void setGameScriptFromPath(const char* script_path);
 
+    /** SD ファイルをヒープバッファに読み込む */
     bool readSdFileToBuffer(const char* path, char** out_buf, size_t* out_len);
+    /** カスタムアロケータで新しい Lua VM を生成する */
     lua_State* newLuaState();
+    /** ファイル名が .lua 拡張子か判定する */
     bool endsWithLuaExt(const char* name) const;
+    /** LCD にステータス行を表示する */
     void showStatus(const char* line1, const char* line2, uint16_t color, uint16_t bg);
+    /** 直近エラーメッセージを保存する */
     void setLastError(const char* msg);
+    /** バッファ内 Lua ソースをロードして実行する */
     bool loadScriptIntoState(lua_State* L, const char* path, char* source, size_t len);
     /** print / sleep_ms / machine.* を Lua に登録 */
     void registerLuaHostApi(lua_State* L);
+    /** ゲーム状態をすべて終了する */
     void closeGameState();
     /** フォント / Lua VM / タイル等のみ解放（finishGameSession 後） */
     void closeDeferredSession();
@@ -217,6 +245,7 @@ private:
     void releaseGameAssets();
     /** trim 済み Lua VM を lua_close する */
     void releaseGameLuaVm();
+    /** タイルレイヤー合成時の画像 ID ルックアップコールバック */
     static const TileLayerImageView* tileLayerLookupImage(int id, void* ctx);
 };
 

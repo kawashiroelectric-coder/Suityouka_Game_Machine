@@ -108,6 +108,7 @@ static const uint8_t font8x8[96][8] = {
 };
 
 
+// コンストラクタ。SPI ポート・解像度・テキスト描画状態を初期値に設定する
 ST7789_LCD::ST7789_LCD()
     : spi_port(LCDConfig::spiHw()),
       _width(LCDConfig::PHYSICAL_WIDTH),
@@ -171,7 +172,7 @@ void ST7789_LCD::setWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
     writeCommand(Command::RAMWR);
 }
 
-/** GPIO/SPI 初期化と ST7789 レジスタシーケンス */
+/** GPIO / SPI 初期化と ST7789 レジスタシーケンス */
 void ST7789_LCD::init() {
     // GPIO初期化
     gpio_init(LCDConfig::PIN_CS);
@@ -216,6 +217,7 @@ void ST7789_LCD::init() {
     sleep_ms(100);
 }
 
+// バックライトピンを PWM 初期化し、現在の輝度設定を反映する
 void ST7789_LCD::initBacklightPwm() {
     gpio_set_function(LCDConfig::PIN_BLK, GPIO_FUNC_PWM);
     const uint slice = pwm_gpio_to_slice_num(LCDConfig::PIN_BLK);
@@ -227,6 +229,7 @@ void ST7789_LCD::initBacklightPwm() {
     setBacklightPercent(_backlight_percent);
 }
 
+// バックライト輝度を PWM または GPIO の ON/OFF で出力する
 void ST7789_LCD::applyBacklightPwm() {
     if (!_backlight_pwm_ready) {
         gpio_init(LCDConfig::PIN_BLK);
@@ -240,6 +243,7 @@ void ST7789_LCD::applyBacklightPwm() {
     pwm_set_gpio_level(LCDConfig::PIN_BLK, level);
 }
 
+// バックライト輝度を 10〜100% にクランプして設定する
 void ST7789_LCD::setBacklightPercent(int percent) {
     if (percent < kBacklightMinPercent) {
         percent = kBacklightMinPercent;
@@ -250,6 +254,7 @@ void ST7789_LCD::setBacklightPercent(int percent) {
     applyBacklightPwm();
 }
 
+// バックライトの ON/OFF を切り替える（OFF 時は最小輝度 10%）
 void ST7789_LCD::setBacklight(bool on) {
     if (on) {
         if (_backlight_percent < kBacklightMinPercent) {
@@ -263,6 +268,7 @@ void ST7789_LCD::setBacklight(bool on) {
 }
 
 
+// 表示の色反転モードを ON/OFF する（INVON / INVOFF コマンド）
 void ST7789_LCD::invertDisplay(bool i){
     if(i == 0){
     writeCommand(Command::INVOFF);
@@ -272,7 +278,7 @@ void ST7789_LCD::invertDisplay(bool i){
 }
 
 
-/** SPI 送信完了まで待機 */
+/** SPI 送信完了まで待機する（TX FIFO 空・バスアイドル） */
 static void spiWaitIdle(spi_inst_t* spi_port) {
     while (!(spi_get_hw(spi_port)->sr & SPI_SSPSR_TFE_BITS)) {
         tight_loop_contents();
@@ -282,10 +288,12 @@ static void spiWaitIdle(spi_inst_t* spi_port) {
     }
 }
 
+// 画面全体を単色で塗りつぶす
 void ST7789_LCD::fill(uint16_t color) {
         fillRect(0, 0, _width, _height, color);
 }
 
+// 指定矩形を SPI ブロッキング転送で単色塗りつぶす
 void ST7789_LCD::fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color) {
     if (x >= _width || y >= _height) return;
     if (x + w > _width) w = _width - x;
@@ -309,6 +317,7 @@ void ST7789_LCD::fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16
 
 
 
+// 指定矩形を DMA チャンク転送で単色塗りつぶす
 void ST7789_LCD::fillRectDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color,
                               int dma_channel, uint8_t* dma_buffer, size_t buffer_size) {
     if (x >= _width || y >= _height) return;
@@ -359,10 +368,12 @@ void ST7789_LCD::fillRectDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uin
 }
 
 
+// 円塗りつぶし（未実装・スタブ）
 void ST7789_LCD::fillCircle(uint16_t x0,uint16_t y0,uint16_t r,uint16_t color){
 
 }
 
+// 1 ピクセルを描画する（毎回描画ウィンドウを設定）
 void ST7789_LCD::drawPixel(uint16_t x, uint16_t y, uint16_t color) {
     if (x >= _width || y >= _height) return;
     
@@ -373,6 +384,7 @@ void ST7789_LCD::drawPixel(uint16_t x, uint16_t y, uint16_t color) {
     writeDataBuffer(colorBuf, 2);
 }
 
+// 連続 RAM 書き込み前提の高速ピクセル描画（CS を維持したまま送信）
 void ST7789_LCD::writePixel(uint16_t x, uint16_t y, uint16_t color){
     if (x >= _width || y >= _height) return;
     
@@ -384,15 +396,18 @@ void ST7789_LCD::writePixel(uint16_t x, uint16_t y, uint16_t color){
 }
 
 
+// 水平線を描画する（高さ 1 の矩形塗りつぶし）
 void ST7789_LCD::drawHLine(uint16_t x, uint16_t y, uint16_t w, uint16_t color) {
     fillRect(x, y, w, 1, color);
 }
 
+// 垂直線を描画する（幅 1 の矩形塗りつぶし）
 void ST7789_LCD::drawVLine(uint16_t x, uint16_t y, uint16_t h, uint16_t color) {
     fillRect(x, y, 1, h, color);
 }
 
 
+// Bresenham アルゴリズムで任意の直線を描画する
 void ST7789_LCD::drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color) {
     int16_t dx = abs(x1 - x0);
     int16_t dy = abs(y1 - y0);
@@ -417,6 +432,7 @@ void ST7789_LCD::drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16
     }
 }
 
+// 矩形の枠線を 4 辺の線分で描画する
 void ST7789_LCD::drawRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color) {
     drawHLine(x, y, w, color);
     drawHLine(x, y + h - 1, w, color);
@@ -424,6 +440,7 @@ void ST7789_LCD::drawRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16
     drawVLine(x + w - 1, y, h, color);
 }
 
+// 中点円アルゴリズムで円の輪郭を描画する
 void ST7789_LCD::drawCircle(uint16_t x0,uint16_t y0,uint16_t r,uint16_t color){
     int16_t f = 1 - r;
   int16_t ddF_x = 1;
@@ -459,6 +476,7 @@ void ST7789_LCD::drawCircle(uint16_t x0,uint16_t y0,uint16_t r,uint16_t color){
     gpio_put(LCDConfig::PIN_CS, 1);
 }
 
+// 画面回転（0〜3）を設定し、MADCTL と論理解像度を更新する
 void ST7789_LCD::setRotation(uint8_t r) {
     _rotation = r % 4;  // 0-3の範囲に制限
     
@@ -488,21 +506,25 @@ void ST7789_LCD::setRotation(uint8_t r) {
     }
 }
 
+// テキスト描画色を設定する（背景なし）
 void ST7789_LCD::setTextColor(uint16_t color) {
     _textColor = color;
     _textBg = false;
 }
 
+// テキスト描画色と背景色を設定する
 void ST7789_LCD::setTextColor(uint16_t color, uint16_t bgColor) {
     _textColor = color;
     _textBgColor = bgColor;
     _textBg = true;
 }
 
+// 内蔵 8x8 フォントの拡大倍率を設定する
 void ST7789_LCD::setFontSize(FontSize size) {
     _fontSize = size;
 }
 
+// 1 文字を内蔵 8x8 ビットマップフォントで描画する
 void ST7789_LCD::drawChar(uint16_t x, uint16_t y, char c, uint16_t color) {
     if (c < 32 || c > 127) c = 32; // 印字可能文字のみ
     
@@ -529,6 +551,7 @@ void ST7789_LCD::drawChar(uint16_t x, uint16_t y, char c, uint16_t color) {
     }
 }
 
+// ASCII 文字列を内蔵フォントで描画する（改行対応）
 void ST7789_LCD::drawText(uint16_t x, uint16_t y, const char* text) {
     uint8_t scale = static_cast<uint8_t>(_fontSize);
     uint16_t cursorX = x;
@@ -545,12 +568,14 @@ void ST7789_LCD::drawText(uint16_t x, uint16_t y, const char* text) {
     }
 }
 
+// 前景色・背景色を指定してテキストを描画する
 void ST7789_LCD::drawTextBg(uint16_t x, uint16_t y, const char* text, uint16_t color, uint16_t bgColor) {
     setTextColor(color, bgColor);
     drawText(x, y, text);
     _textBg = false;
 }
 
+// RGB565 配列を SPI ブロッキング転送で指定矩形に描画する
 void ST7789_LCD::drawRawImage(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t* data) {
     if (x >= _width || y >= _height || !data) {
         return;
@@ -680,12 +705,14 @@ void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
 }
 */
 
+// 非同期 DMA 画像転送を完了し、CS を解放して状態をリセットする
 void ST7789_LCD::dmaAsyncFinish() {
     gpio_put(LCDConfig::PIN_CS, 1);
     dma_async_.active = false;
     dma_async_.data = nullptr;
 }
 
+// 非同期 DMA 転送の次チャンクを準備して DMA を開始する
 void ST7789_LCD::dmaAsyncStartChunk() {
     if (!dma_async_.active || !dma_async_.data || !dma_async_.dma_buffer ||
         dma_async_.dma_buffer_size < 2 || dma_async_.dma_channel < 0) {
@@ -732,6 +759,7 @@ void ST7789_LCD::dmaAsyncStartChunk() {
     dmaAsyncFinish();
 }
 
+// 非ブロッキング DMA 画像転送を開始する。成功時 true
 bool ST7789_LCD::beginDrawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                                       const uint16_t* data, uint32_t src_stride, int dma_channel,
                                       uint8_t* dma_buffer, size_t buffer_size) {
@@ -764,12 +792,14 @@ bool ST7789_LCD::beginDrawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16
     return dma_async_.active;
 }
 
+// 進行中の非同期 DMA 転送を 1 ステップ進める（メインループから呼ぶ）
 void ST7789_LCD::pumpDrawRawImageDMA() {
     if (!dma_async_.active) return;
     if (dma_channel_is_busy(dma_async_.dma_channel)) return;
     dmaAsyncStartChunk();
 }
 
+// 進行中の非同期 DMA 転送を完了させ SPI をアイドルにする
 void ST7789_LCD::finishDrawRawImageDMA() {
     while (isDrawRawImageDMABusy()) {
         if (dma_channel_is_busy(dma_async_.dma_channel)) {
@@ -781,6 +811,7 @@ void ST7789_LCD::finishDrawRawImageDMA() {
     spiWaitIdle(spi_port);
 }
 
+// RGB565 配列を DMA 転送で描画する（完了までブロック）
 void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                                  const uint16_t* data, int dma_channel, uint8_t* dma_buffer,
                                  size_t buffer_size) {
@@ -795,6 +826,7 @@ void ST7789_LCD::drawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     }
 }
 
+// 24bit BMP バイナリを解析して指定位置に描画する
 void ST7789_LCD::drawBMP(uint16_t x, uint16_t y, const uint16_t* bmpData) {
     // BMPヘッダー解析 (簡易版 - 24bit BMPのみ対応)
     if (bmpData[0] != 'B' || bmpData[1] != 'M') return;

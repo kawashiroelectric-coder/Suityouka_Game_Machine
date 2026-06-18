@@ -16,18 +16,22 @@ static ButtonInput* s_buttons = nullptr;
 static volatile float s_last_voltage = 0.0f;
 static volatile uint8_t s_last_mask = BatteryLedConfig::MASK_OFF;
 
+/** LED 制御先の ButtonInput を登録する（main 起動時） */
 void BatteryMonitor::attach(ButtonInput* buttons) {
     s_buttons = buttons;
 }
 
+/** 直近の ADC 測定電圧（V）を返す */
 float BatteryMonitor::lastVoltage() {
     return s_last_voltage;
 }
 
+/** 直近の残量 LED マスク（下位 3bit）を返す */
 uint8_t BatteryMonitor::lastLedMask() {
     return s_last_mask;
 }
 
+/** Core1 起動時に GP28 ADC を初期化する */
 void BatteryMonitor::initOnCore1() {
     adc_init();
     adc_gpio_init(BatteryConfig::PIN_ADC);
@@ -36,6 +40,7 @@ void BatteryMonitor::initOnCore1() {
            (unsigned)BatteryConfig::PIN_ADC, (unsigned)BatteryConfig::ADC_CHANNEL);
 }
 
+/** 電圧（V）から残量 LED マスク（LOW/MID/FULL）へ変換する */
 uint8_t BatteryMonitor::voltageToLedMask(float voltage_v) {
     if (voltage_v >= BatteryConfig::THRESHOLD_FULL_V) {
         return BatteryLedConfig::MASK_FULL;
@@ -46,6 +51,7 @@ uint8_t BatteryMonitor::voltageToLedMask(float voltage_v) {
     return BatteryLedConfig::MASK_LOW;
 }
 
+/** ADC を読み取り、残量 LED を更新する（Core1 で 100ms 周期） */
 void BatteryMonitor::tick() {
     if (!s_buttons) {
         return;

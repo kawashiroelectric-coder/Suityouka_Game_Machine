@@ -17,6 +17,7 @@ extern "C" {
 
 namespace {
 
+/** ファイル名が .lua 拡張子か判定する。ゲームスクリプト走査時に使う */
 bool endsWithLuaExt(const char* name) {
     if (!name) {
         return false;
@@ -31,6 +32,7 @@ bool endsWithLuaExt(const char* name) {
            std::tolower(static_cast<unsigned char>(ext[3])) == 'a';
 }
 
+/** ファイル名から表示用タイトル文字列を生成する。単体 .lua エントリ登録時に使う */
 void toTitleFromFilename(const char* filename, char* out, size_t out_len) {
     if (!out || out_len == 0) {
         return;
@@ -53,6 +55,7 @@ void toTitleFromFilename(const char* filename, char* out, size_t out_len) {
     out[j] = '\0';
 }
 
+/** ディレクトリパスとファイル名を結合する。SD 上のパス組み立て時に使う */
 bool pathJoin(const char* base, const char* name, char* out, size_t out_len) {
     if (!base || !name || !out || out_len == 0) {
         return false;
@@ -63,6 +66,7 @@ bool pathJoin(const char* base, const char* name, char* out, size_t out_len) {
     return std::snprintf(out, out_len, "%s/%s", base, name) > 0;
 }
 
+/** パスが通常ファイルとして存在するか確認する。プレビュー・スクリプト解決時に使う */
 bool fileExists(const char* path, uint32_t* out_size = nullptr) {
     FILINFO fno;
     if (f_stat(path, &fno) != FR_OK) {
@@ -77,6 +81,7 @@ bool fileExists(const char* path, uint32_t* out_size = nullptr) {
     return true;
 }
 
+/** パス文字列から末尾のファイル／フォルダ名を返す。同名スクリプト推測時に使う */
 const char* baseNameOfPath(const char* path) {
     if (!path) {
         return "";
@@ -90,6 +95,7 @@ const char* baseNameOfPath(const char* path) {
     return last;
 }
 
+/** 2 つのファイル名を大文字小文字無視で比較する。補助スクリプト判定時に使う */
 bool namesEqualIgnoreCase(const char* a, const char* b) {
     if (!a || !b) {
         return false;
@@ -105,6 +111,7 @@ bool namesEqualIgnoreCase(const char* a, const char* b) {
     return *a == '\0' && *b == '\0';
 }
 
+/** assets.lua 等の補助スクリプトか判定する。起動スクリプト選別時に使う */
 bool isAuxiliaryLuaScript(const char* filename) {
     static const char* kAuxiliary[] = {
         "assets.lua",
@@ -126,6 +133,7 @@ bool isAuxiliaryLuaScript(const char* filename) {
     return false;
 }
 
+/** Lua ソース先頭付近に game_init 定義があるか走査する。メインスクリプト判定時に使う */
 bool luaSourceDeclaresGameInit(const char* path) {
     FIL file;
     if (f_open(&file, path, FA_READ) != FR_OK) {
@@ -168,6 +176,7 @@ bool luaSourceDeclaresGameInit(const char* path) {
     return found;
 }
 
+/** 指定パスの .lua を起動スクリプトとして採用する。候補確定時に使う */
 bool tryPickScriptPath(const char* path, char* out_script, size_t out_script_len, uint32_t* out_size) {
     uint32_t size = 0;
     if (!fileExists(path, &size)) {
@@ -180,6 +189,7 @@ bool tryPickScriptPath(const char* path, char* out_script, size_t out_script_len
     return true;
 }
 
+/** ゲームフォルダ内から最適な起動 .lua を選ぶ。エントリ登録時に使う */
 bool pickScriptInDir(const char* dir_path, char* out_script, size_t out_script_len, uint32_t* out_size) {
     if (!dir_path || !out_script || out_script_len == 0) {
         return false;
@@ -264,6 +274,7 @@ bool pickScriptInDir(const char* dir_path, char* out_script, size_t out_script_l
     return false;
 }
 
+/** バイナリサイズから RGB565 プレビューの幅・高さを推定する。プレビュー読込前に使う */
 bool inferPreviewDimensions(uint32_t byte_size, int* out_w, int* out_h) {
     if (!out_w || !out_h || byte_size < 2 || (byte_size % 2) != 0) {
         return false;
@@ -305,6 +316,7 @@ bool inferPreviewDimensions(uint32_t byte_size, int* out_w, int* out_h) {
     return true;
 }
 
+/** title.bin / preview.bin 等のプレビュー画像パスを解決する。エントリ構築時に使う */
 bool pickPreviewPath(const char* game_dir, const char* script_path, char* out_preview,
                      size_t out_preview_len) {
     if (!out_preview || out_preview_len == 0) {
@@ -341,6 +353,7 @@ bool pickPreviewPath(const char* game_dir, const char* script_path, char* out_pr
 
 }  // namespace
 
+/** games_dir 直下のフォルダと .lua を走査しメニュー用エントリ配列を構築する。メニュー読込時に呼ぶ */
 int GameCatalog::loadEntries(const char* games_dir, GameCatalogEntry* out_entries, int max_entries) {
     if (!games_dir || !out_entries || max_entries <= 0) {
         return 0;
@@ -390,6 +403,7 @@ int GameCatalog::loadEntries(const char* games_dir, GameCatalogEntry* out_entrie
     return count;
 }
 
+/** SD 上の .bin プレビューを 100x100 RGB565 パネルへ読み込む。右パネル描画前に呼ぶ */
 bool GameCatalog::loadPreviewRgb565(const char* preview_path, uint16_t* pixels, size_t pixel_count) {
     if (!preview_path || preview_path[0] == '\0' || !pixels) {
         return false;

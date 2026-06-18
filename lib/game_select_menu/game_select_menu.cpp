@@ -72,11 +72,13 @@ struct PreviewPixelBuffer {
     static constexpr size_t kByteSize = GameCatalog::kPreviewBytes;
 
     PreviewPixelBuffer() = default;
+    /** 確保したプレビューバッファを HeapBudget へ返却する。メニュー終了時やバッファ破棄時に呼ぶ */
     ~PreviewPixelBuffer() { release(); }
 
     PreviewPixelBuffer(const PreviewPixelBuffer&) = delete;
     PreviewPixelBuffer& operator=(const PreviewPixelBuffer&) = delete;
 
+    /** プレビュー画像用 RGB565 バッファを HeapBudget から確保する。右パネル描画の直前に呼ぶ */
     bool acquire() {
         if (pixels) {
             return true;
@@ -92,6 +94,7 @@ struct PreviewPixelBuffer {
         return true;
     }
 
+    /** 確保済みプレビューバッファを解放する。ゲーム起動前やメニュー再入時に呼ぶ */
     void release() {
         if (!pixels) {
             return;
@@ -115,6 +118,7 @@ struct MenuUiCache {
     char prev_scroll_title[48] = {};
 };
 
+/** 8x8 フォント前提で文字列の描画幅（px）を返す。中央揃え計算時に使う */
 int textWidthPx(const char* text) {
     if (!text) {
         return 0;
@@ -122,6 +126,7 @@ int textWidthPx(const char* text) {
     return static_cast<int>(std::strlen(text)) * 8;
 }
 
+/** 画面幅中央に背景付きテキストを描く。ヘッダー・フッター表示時に使う */
 void drawTextCenteredBg(ST7789_LCD* lcd, int y, const char* text, uint16_t fg, uint16_t bg) {
     if (!lcd) {
         return;
@@ -130,6 +135,7 @@ void drawTextCenteredBg(ST7789_LCD* lcd, int y, const char* text, uint16_t fg, u
     lcd->drawTextBg(x < 0 ? 0 : x, y, text, fg, bg);
 }
 
+/** 指定矩形内に背景付きテキストを中央配置する。プレビュー枠内のプレースホルダ表示時に使う */
 void drawTextCenteredInRect(ST7789_LCD* lcd, int rect_x, int rect_y, int rect_w, int rect_h,
                             const char* text, uint16_t fg, uint16_t bg) {
     if (!lcd || !text) {
@@ -142,6 +148,7 @@ void drawTextCenteredInRect(ST7789_LCD* lcd, int rect_x, int rect_y, int rect_w,
     lcd->drawTextBg(x < rect_x ? rect_x : x, y, text, fg, bg);
 }
 
+/** 8 ボタンのいずれかが押下中か判定する。離し待ちループで毎フレーム使う */
 bool isAnyButtonPressed(ButtonInput* buttons) {
     if (!buttons) {
         return false;
@@ -154,6 +161,7 @@ bool isAnyButtonPressed(ButtonInput* buttons) {
     return false;
 }
 
+/** 全ボタンが離されるまでブロックする。メニュー入場時やゲーム復帰直後のチャタリング防止に使う */
 void waitForButtonRelease(ButtonInput* buttons) {
     if (!buttons) {
         return;
@@ -179,6 +187,7 @@ void waitForButtonRelease(ButtonInput* buttons) {
     }
 }
 
+/** SD 上の games_dir を走査しメニュー用ゲーム一覧を再構築する。マウント直後や更新時に呼ぶ */
 void loadGameMenuEntries(MenuState& state, const char* games_dir) {
     state.count = 0;
     state.selected = 0;
@@ -188,6 +197,7 @@ void loadGameMenuEntries(MenuState& state, const char* games_dir) {
         GameCatalog::loadEntries(games_dir, state.games, GameCatalog::kMaxEntries);
 }
 
+/** 選択中ゲームのプレビュー画像を SD から読み込む。右パネル描画の直前に呼ぶ（キャッシュあり） */
 bool loadPreviewForSelected(MenuState& state, PreviewPixelBuffer& preview_buf) {
     if (state.selected < 0 || state.selected >= state.count) {
         state.preview_loaded = false;
@@ -215,6 +225,7 @@ bool loadPreviewForSelected(MenuState& state, PreviewPixelBuffer& preview_buf) {
     return state.preview_loaded;
 }
 
+/** 長いタイトルを最大文字数で切り詰めて出力する。左リスト行の描画時に使う */
 void buildTruncatedTitle(const char* title, char* out, size_t out_len, int max_chars) {
     if (!out || out_len == 0) {
         return;
@@ -231,6 +242,7 @@ void buildTruncatedTitle(const char* title, char* out, size_t out_len, int max_c
     std::snprintf(out, out_len, "%.*s", max_chars, title);
 }
 
+/** 右パネル用にタイトルを切り詰めまたは横スクロール表示用に整形する。スクロールアニメ時に呼ぶ */
 void buildScrollingTitle(const char* title, char* out, size_t out_len, int max_chars, bool scrolling) {
     if (!out || out_len == 0) {
         return;
@@ -268,8 +280,10 @@ void buildScrollingTitle(const char* title, char* out, size_t out_len, int max_c
     std::snprintf(out, out_len, "%.*s", max_chars, title + offset);
 }
 
+/** メニューの固定枠を描く（前方宣言）。drawEmptyGamesScreen から呼ばれる */
 void drawMenuStaticChrome(ST7789_LCD* lcd);
 
+/** 左リスト領域に背景付きテキストを描く。空一覧メッセージ等の表示時に使う */
 void drawTextInListPanel(ST7789_LCD* lcd, int y, const char* text, uint16_t fg, uint16_t bg) {
     if (!lcd || !text) {
         return;
@@ -277,6 +291,7 @@ void drawTextInListPanel(ST7789_LCD* lcd, int y, const char* text, uint16_t fg, 
     lcd->drawTextBg(kMenuListX + 4, y, text, fg, bg);
 }
 
+/** ゲーム未検出または SD 未挿入時のメニュー画面を描く。一覧が空のときに呼ぶ */
 void drawEmptyGamesScreen(ST7789_LCD* lcd, bool sd_mounted) {
     if (!lcd) {
         return;
@@ -302,6 +317,7 @@ void drawEmptyGamesScreen(ST7789_LCD* lcd, bool sd_mounted) {
                   Color::WHITE);
 }
 
+/** SD カードが挿され未マウントならマウントを試みる。挿入検知時や手動更新時に呼ぶ */
 bool tryMountSdCard(const GameSelectMenu::Config& config) {
     if (!SdService::isCardPresent() || SdService::isMounted()) {
         return false;
@@ -315,6 +331,7 @@ bool tryMountSdCard(const GameSelectMenu::Config& config) {
     return true;
 }
 
+/** SD が抜かれたときマウント済みならアンマウントする。ホットプラグ監視で抜去検知時に呼ぶ */
 void unmountSdCardIfNeeded(const GameSelectMenu::Config& config) {
     if (!SdService::isMounted()) {
         return;
@@ -325,6 +342,7 @@ void unmountSdCardIfNeeded(const GameSelectMenu::Config& config) {
     }
 }
 
+/** メニュー各フレームで SD 挿抜を監視しマウント／アンマウントを処理する。メインループから呼ぶ */
 bool serviceSdHotplug(const GameSelectMenu::Config& config, uint32_t now_ms,
                       uint32_t* last_mount_attempt_ms, bool* sd_state_changed) {
     if (!last_mount_attempt_ms || !sd_state_changed) {
@@ -354,6 +372,7 @@ bool serviceSdHotplug(const GameSelectMenu::Config& config, uint32_t now_ms,
     return *sd_state_changed;
 }
 
+/** ゲーム一覧の 1 行を描画または更新する。初期表示・カーソル移動時に呼ぶ */
 void drawMenuListRow(ST7789_LCD* lcd, const MenuState& state, int index) {
     if (!lcd || index < 0 || index >= state.count || index >= kMaxVisibleRows) {
         return;
@@ -377,6 +396,7 @@ void drawMenuListRow(ST7789_LCD* lcd, const MenuState& state, int index) {
     lcd->drawTextBg(kMenuListX + 12, bg_y, line, fg, bg);
 }
 
+/** ゲーム描画後の DMA 転送を完了させメニュー直描画の準備をする。メニュー再表示の直前に呼ぶ */
 void prepareLcdForMenuDraw(ST7789_LCD* lcd) {
     if (!lcd) {
         return;
@@ -384,6 +404,7 @@ void prepareLcdForMenuDraw(ST7789_LCD* lcd) {
     lcd->finishDrawRawImageDMA();
 }
 
+/** メニューの固定枠（ヘッダー・区切り・フッター）を描く。初期化や全面再描画時に呼ぶ */
 void drawMenuStaticChrome(ST7789_LCD* lcd) {
     if (!lcd) {
         return;
@@ -403,6 +424,7 @@ void drawMenuStaticChrome(ST7789_LCD* lcd) {
     lcd->fillRect(kRightMetaX, kRightTitleY, kRightTitleChars * 8, 24, kMenuBg);
 }
 
+/** 読み込み済みプレビュー RGB565 を右パネルへ描画する。プレビュー取得成功時に呼ぶ */
 void drawPreviewImage(ST7789_LCD* lcd, const uint16_t* pixels) {
     if (!lcd || !pixels) {
         return;
@@ -419,6 +441,7 @@ void drawPreviewImage(ST7789_LCD* lcd, const uint16_t* pixels) {
                   Color::WHITE);
 }
 
+/** 右パネルにプレビュー画像または NO IMAGE を描く。選択変更・スクロール更新時に呼ぶ */
 void drawRightPreviewPanel(const GameSelectMenu::Config& config, MenuState& state,
                            PreviewPixelBuffer& preview_buf) {
     if (!config.lcd) {
@@ -441,6 +464,7 @@ void drawRightPreviewPanel(const GameSelectMenu::Config& config, MenuState& stat
     }
 }
 
+/** 選択中ゲームのスクリプトサイズ行を右パネルに描く。選択変更時に呼ぶ */
 void drawRightSizeLine(ST7789_LCD* lcd, const MenuState& state) {
     if (!lcd || state.selected < 0 || state.selected >= state.count) {
         return;
@@ -453,6 +477,7 @@ void drawRightSizeLine(ST7789_LCD* lcd, const MenuState& state) {
     lcd->drawTextBg(kRightMetaX, kRightSizeY, line2, Color::WHITE, kMenuBg);
 }
 
+/** 右パネルのスクロールタイトルを描画する。変化があったとき true を返す。アニメ tick 時に呼ぶ */
 bool drawRightTitleScroll(ST7789_LCD* lcd, MenuState& state, MenuUiCache& cache) {
     if (!lcd || state.selected < 0 || state.selected >= state.count) {
         return false;
@@ -470,6 +495,7 @@ bool drawRightTitleScroll(ST7789_LCD* lcd, MenuState& state, MenuUiCache& cache)
     return true;
 }
 
+/** メニュー画面を初回または全面再描画する。一覧読込後・設定復帰後に呼ぶ */
 void initGameSelectMenu(const GameSelectMenu::Config& config, MenuState& state, MenuUiCache& cache,
                         PreviewPixelBuffer& preview_buf) {
     ST7789_LCD* lcd = config.lcd;
@@ -497,6 +523,7 @@ void initGameSelectMenu(const GameSelectMenu::Config& config, MenuState& state, 
     fflush(stdout);
 }
 
+/** カーソル移動時に変更行と右パネルのみ部分更新する。UP/DOWN 入力時に呼ぶ */
 void updateGameSelectSelection(const GameSelectMenu::Config& config, MenuState& state,
                                MenuUiCache& cache, int old_selected,
                                PreviewPixelBuffer& preview_buf) {
@@ -517,6 +544,7 @@ void updateGameSelectSelection(const GameSelectMenu::Config& config, MenuState& 
     cache.prev_selected = state.selected;
 }
 
+/** システム設定メニューを起動する。LEFT ボタン押下時に呼ぶ */
 void runSettingsFromMenu(const GameSelectMenu::Config& config) {
     SystemSettingsMenu::Config settings = {};
     settings.lcd = config.lcd;
@@ -530,6 +558,7 @@ void runSettingsFromMenu(const GameSelectMenu::Config& config) {
 
 }  // namespace
 
+/** ゲーム選択メニューのメインループ。起動時からゲーム終了まで繰り返し表示する */
 bool GameSelectMenu::run(const Config& config) {
     if (!config.lcd || !config.buttons) {
         return false;

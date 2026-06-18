@@ -7,6 +7,7 @@
 #include "lua_audio.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 
@@ -27,21 +28,25 @@ constexpr int16_t kToneAmplitude = 12000;
 /** Core0 のみ: BGM ストリーム用 FatFS ハンドル */
 FIL s_bgm_file;
 
+/** サンプル値を int16_t の範囲にクランプする */
 int32_t clampSample(int32_t v) {
     if (v > 32767) return 32767;
     if (v < -32768) return -32768;
     return v;
 }
 
+/** リトルエンディアン 32bit 整数をバイト列から読み取る */
 uint32_t readLe32(const uint8_t* p) {
     return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
            (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
 }
 
+/** リトルエンディアン 16bit 整数をバイト列から読み取る */
 uint16_t readLe16(const uint8_t* p) {
     return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
 }
 
+/** エラーメッセージバッファに文字列をコピーする */
 void setError(char* errbuf, size_t errbuf_len, const char* msg) {
     if (!errbuf || errbuf_len == 0) return;
     snprintf(errbuf, errbuf_len, "%s", msg);
@@ -132,6 +137,7 @@ static_assert(LuaAudio::kStreamFrames == AudioConfig::STREAM_BUFFER_FRAMES,
 
 LuaAudio* LuaAudio::instance_ = nullptr;
 
+/** コンストラクタ: シングルトン instance と各チャンネル状態を初期化する */
 LuaAudio::LuaAudio()
     : output_(nullptr),
       sample_rate_(AudioConfig::SAMPLE_RATE),
@@ -144,6 +150,10 @@ LuaAudio::LuaAudio()
       bgm_active_(false),
       bgm_eof_(false),
       bgm_file_open_(false),
+      bgm_embed_active_(false),
+      bgm_embed_pcm_(nullptr),
+      bgm_embed_frame_count_(0),
+      bgm_embed_frames_remaining_(0),
       bgm_channels_(0),
       bgm_source_rate_(0),
       bgm_data_remaining_(0),
@@ -159,16 +169,19 @@ LuaAudio::LuaAudio()
     }
 }
 
+/** デストラクタ: 再生を停止しシングルトン参照を解除する */
 LuaAudio::~LuaAudio() {
     stop();
     instance_ = nullptr;
 }
 
+/** AudioOutput とサンプルレートを接続する */
 void LuaAudio::attach(AudioOutput* output, uint32_t sample_rate) {
     output_ = output;
     sample_rate_ = sample_rate;
 }
 
+/** I2S コールバック（Core1）: ミックス済み PCM を出力バッファへ書き込む */
 void LuaAudio::audioCallback(int16_t* left, int16_t* right, size_t samples) {
     if (instance_) {
         instance_->fill(left, right, samples);
@@ -178,6 +191,7 @@ void LuaAudio::audioCallback(int16_t* left, int16_t* right, size_t samples) {
     }
 }
 
+/** マスター音量を 0.0〜1.0 の範囲で設定する */
 void LuaAudio::setVolume(float volume) {
     if (volume < 0.0f) volume = 0.0f;
     if (volume > 1.0f) volume = 1.0f;
@@ -187,6 +201,7 @@ void LuaAudio::setVolume(float volume) {
     }
 }
 
+/** BGM / SE / トーンのいずれかが再生中か返す */
 bool LuaAudio::isAudioActive() const {
     if (bgm_active_ || tone_active_) {
         return true;
@@ -199,12 +214,14 @@ bool LuaAudio::isAudioActive() const {
     return false;
 }
 
+/** 出力が停止中なら I2S 再生を開始する */
 void LuaAudio::ensureOutputPlaying() {
     if (output_ && !output_->isPlaying()) {
         output_->start();
     }
 }
 
+/** BGM ストリーム用ダブルバッファスロットを空状態にリセットする */
 void LuaAudio::resetStreamSlotsLocked() {
     for (StreamSlot& slot : stream_slots_) {
         memset(slot.left, 0, sizeof(slot.left));
@@ -214,6 +231,7 @@ void LuaAudio::resetStreamSlotsLocked() {
     }
 }
 
+/** BGM ストリーミング状態を停止して内部変数を初期化する */
 void LuaAudio::stopBgmLocked() {
     bgm_active_ = false;
     bgm_eof_ = false;
@@ -223,21 +241,24 @@ void LuaAudio::stopBgmLocked() {
     bgm_cur_r_ = 0;
 }
 
+/** トーン生成状態を停止する */
 void LuaAudio::stopToneLocked() {
     tone_active_ = false;
     tone_samples_left_ = 0;
 }
 
+/** 指定 SE チャンネルの PCM バッファを解放して無効化する */
 void LuaAudio::freeSeChannelLocked(int index) {
     if (index < 0 || index >= static_cast<int>(kSeChannels)) {
         return;
     }
     SeChannel& ch = se_channels_[index];
     ch.active = false;
-    if (ch.data) {
-        HeapBudget::release(ch.data, ch.byte_size);
+    if (ch.pcm_on_heap && ch.pcm) {
+        HeapBudget::release(const_cast<int16_t*>(ch.pcm), ch.byte_size);
     }
-    ch.data = nullptr;
+    ch.pcm = nullptr;
+    ch.pcm_on_heap = false;
     ch.byte_size = 0;
     ch.frame_count = 0;
     ch.channels = 0;
@@ -246,22 +267,29 @@ void LuaAudio::freeSeChannelLocked(int index) {
     ch.load_serial = 0;
 }
 
+/** 全 SE チャンネルを停止・解放する */
 void LuaAudio::stopSeLocked() {
     for (size_t i = 0; i < kSeChannels; i++) {
         freeSeChannelLocked(static_cast<int>(i));
     }
 }
 
+/** 開いている BGM 用 WAV ファイルを閉じ、埋め込み BGM 参照も解除する */
 void LuaAudio::closeBgmFileLocked() {
     if (bgm_file_open_) {
         f_close(&s_bgm_file);
         bgm_file_open_ = false;
     }
+    bgm_embed_active_ = false;
+    bgm_embed_pcm_ = nullptr;
+    bgm_embed_frame_count_ = 0;
+    bgm_embed_frames_remaining_ = 0;
     bgm_channels_ = 0;
     bgm_source_rate_ = 0;
     bgm_data_remaining_ = 0;
 }
 
+/** BGM / SE / トーンをすべて停止し、ファイルとバッファを解放する */
 void LuaAudio::stop() {
     uint32_t irq = save_and_disable_interrupts();
     stopBgmLocked();
@@ -277,6 +305,7 @@ void LuaAudio::stop() {
     }
 }
 
+/** 指定周波数・時間のサイン波トーンを再生する */
 bool LuaAudio::playTone(float frequency_hz, float duration_ms) {
     if (!output_ || frequency_hz <= 0.0f || duration_ms <= 0.0f) {
         return false;
@@ -299,6 +328,7 @@ bool LuaAudio::playTone(float frequency_hz, float duration_ms) {
     return true;
 }
 
+/** SD 上の WAV を開き、BGM ストリーミング用に fmt/data を解析する */
 bool LuaAudio::openBgmForStream(const char* path, char* errbuf, size_t errbuf_len) {
     closeBgmFileLocked();
 
@@ -328,7 +358,28 @@ bool LuaAudio::openBgmForStream(const char* path, char* errbuf, size_t errbuf_le
     return true;
 }
 
+/** BGM ファイルまたは埋め込み PCM から次の1フレーム（L/R）を読み込む */
 bool LuaAudio::readNextBgmFrame(int16_t* out_l, int16_t* out_r) {
+    if (bgm_embed_active_) {
+        if (!bgm_embed_pcm_ || bgm_embed_frames_remaining_ == 0) {
+            return false;
+        }
+        const size_t idx = bgm_embed_frame_count_ - bgm_embed_frames_remaining_;
+        if (bgm_channels_ == 1) {
+            const int16_t sample = bgm_embed_pcm_[idx];
+            *out_l = sample;
+            *out_r = sample;
+        } else {
+            *out_l = bgm_embed_pcm_[idx * 2];
+            *out_r = bgm_embed_pcm_[idx * 2 + 1];
+        }
+        bgm_embed_frames_remaining_--;
+        bgm_file_frame_next_++;
+        bgm_cur_l_ = *out_l;
+        bgm_cur_r_ = *out_r;
+        return true;
+    }
+
     if (!bgm_file_open_ || bgm_data_remaining_ == 0) {
         return false;
     }
@@ -356,8 +407,9 @@ bool LuaAudio::readNextBgmFrame(int16_t* out_l, int16_t* out_r) {
     return true;
 }
 
+/** BGM データをリサンプルしながら1ストリームスロット分を埋める */
 bool LuaAudio::fillStreamSlot(StreamSlot& slot) {
-    if (!bgm_file_open_) {
+    if (!bgm_file_open_ && !bgm_embed_active_) {
         return false;
     }
 
@@ -370,13 +422,15 @@ bool LuaAudio::fillStreamSlot(StreamSlot& slot) {
 
     while (out < kStreamFrames) {
         const size_t src_idx = static_cast<size_t>(bgm_src_pos_);
-        while (bgm_file_frame_next_ <= src_idx && bgm_data_remaining_ > 0) {
+        while (bgm_file_frame_next_ <= src_idx &&
+               (bgm_data_remaining_ > 0 || bgm_embed_frames_remaining_ > 0)) {
             if (!readNextBgmFrame(&bgm_cur_l_, &bgm_cur_r_)) {
                 break;
             }
         }
 
-        if (src_idx >= bgm_file_frame_next_ && bgm_data_remaining_ == 0) {
+        if (src_idx >= bgm_file_frame_next_ && bgm_data_remaining_ == 0 &&
+            bgm_embed_frames_remaining_ == 0) {
             break;
         }
         if (bgm_file_frame_next_ == 0) {
@@ -390,7 +444,7 @@ bool LuaAudio::fillStreamSlot(StreamSlot& slot) {
     }
 
     if (out == 0) {
-        if (bgm_data_remaining_ == 0) {
+        if (bgm_data_remaining_ == 0 && bgm_embed_frames_remaining_ == 0) {
             bgm_eof_ = true;
         }
         return false;
@@ -399,7 +453,7 @@ bool LuaAudio::fillStreamSlot(StreamSlot& slot) {
     if (out < kStreamFrames) {
         memset(slot.left + out, 0, (kStreamFrames - out) * sizeof(int16_t));
         memset(slot.right + out, 0, (kStreamFrames - out) * sizeof(int16_t));
-        if (bgm_data_remaining_ == 0) {
+        if (bgm_data_remaining_ == 0 && bgm_embed_frames_remaining_ == 0) {
             bgm_eof_ = true;
         }
     }
@@ -408,6 +462,42 @@ bool LuaAudio::fillStreamSlot(StreamSlot& slot) {
     return true;
 }
 
+/** 埋め込み PCM パラメータの妥当性を検証する */
+bool LuaAudio::validateEmbeddedPcm(const int16_t* pcm, size_t frame_count, uint16_t channels,
+                                   uint32_t sample_rate, size_t max_bytes) {
+    if (!pcm || frame_count == 0 || sample_rate == 0) {
+        return false;
+    }
+    if (channels != 1 && channels != 2) {
+        return false;
+    }
+    const size_t byte_size = frame_count * static_cast<size_t>(channels) * sizeof(int16_t);
+    return byte_size > 0 && byte_size <= max_bytes;
+}
+
+/** SE チャンネルに PCM を割り当てて再生開始する */
+void LuaAudio::activateSeChannelLocked(int slot, const int16_t* pcm, bool pcm_on_heap,
+                                       size_t byte_size, size_t frame_count, uint16_t channels,
+                                       uint32_t sample_rate) {
+    SeChannel& ch = se_channels_[slot];
+    ch.active = false;
+    __dmb();
+    if (ch.pcm_on_heap && ch.pcm) {
+        HeapBudget::release(const_cast<int16_t*>(ch.pcm), ch.byte_size);
+    }
+    ch.pcm = pcm;
+    ch.pcm_on_heap = pcm_on_heap;
+    ch.byte_size = byte_size;
+    ch.frame_count = frame_count;
+    ch.channels = channels;
+    ch.source_rate = sample_rate;
+    ch.position = 0.0;
+    ch.load_serial = ++se_load_counter_;
+    __dmb();
+    ch.active = true;
+}
+
+/** READY 状態のストリームスロット数を返す */
 int LuaAudio::countReadySlots() const {
     int count = 0;
     for (const StreamSlot& slot : stream_slots_) {
@@ -418,6 +508,7 @@ int LuaAudio::countReadySlots() const {
     return count;
 }
 
+/** Core0: 空きストリームスロットへ SD から BGM データを読み込む */
 void LuaAudio::pumpStream() {
     if (!bgm_active_) {
         if (bgm_file_open_) {
@@ -425,7 +516,7 @@ void LuaAudio::pumpStream() {
         }
         return;
     }
-    if (!bgm_file_open_) {
+    if (!bgm_file_open_ && !bgm_embed_active_) {
         return;
     }
 
@@ -454,6 +545,7 @@ void LuaAudio::pumpStream() {
     }
 }
 
+/** BGM 再生開始前にストリームバッファを先読みしてプリロードする */
 void LuaAudio::primeStreamBuffers() {
     for (int i = 0; i < 4; i++) {
         pumpStream();
@@ -470,6 +562,7 @@ void LuaAudio::primeStreamBuffers() {
     }
 }
 
+/** SD 上の WAV を BGM としてストリーミング再生開始する */
 bool LuaAudio::playWav(const char* path, char* errbuf, size_t errbuf_len) {
     if (errbuf && errbuf_len > 0) {
         errbuf[0] = '\0';
@@ -506,6 +599,7 @@ bool LuaAudio::playWav(const char* path, char* errbuf, size_t errbuf_len) {
     return true;
 }
 
+/** 空き SE スロットを探す。満杯なら最古のスロットを再利用する */
 int LuaAudio::allocateSeSlotLocked() {
     for (size_t i = 0; i < kSeChannels; i++) {
         if (!se_channels_[i].active) {
@@ -524,6 +618,7 @@ int LuaAudio::allocateSeSlotLocked() {
     return oldest;
 }
 
+/** SD 上の WAV を RAM に読み込み、SE チャンネルで加算再生する */
 bool LuaAudio::playSe(const char* path, char* errbuf, size_t errbuf_len) {
     if (errbuf && errbuf_len > 0) {
         errbuf[0] = '\0';
@@ -590,27 +685,78 @@ bool LuaAudio::playSe(const char* path, char* errbuf, size_t errbuf_len) {
 
     uint32_t irq = save_and_disable_interrupts();
     const int slot = allocateSeSlotLocked();
-    SeChannel& ch = se_channels_[slot];
-    ch.active = false;
-    __dmb();
-    if (ch.data) {
-        HeapBudget::release(ch.data, ch.byte_size);
-    }
-    ch.data = new_pcm;
-    ch.byte_size = new_pcm_bytes;
-    ch.frame_count = new_frames;
-    ch.channels = new_ch;
-    ch.source_rate = new_rate;
-    ch.position = 0.0;
-    ch.load_serial = ++se_load_counter_;
-    __dmb();
-    ch.active = true;
+    activateSeChannelLocked(slot, new_pcm, true, new_pcm_bytes, new_frames, new_ch, new_rate);
     restore_interrupts(irq);
 
     ensureOutputPlaying();
     return true;
 }
 
+/** flash 埋め込み PCM を SE として加算再生する */
+bool LuaAudio::playSeFromEmbedded(const int16_t* pcm, size_t frame_count, uint16_t channels,
+                                  uint32_t sample_rate) {
+    if (!output_) {
+        return false;
+    }
+    if (!validateEmbeddedPcm(pcm, frame_count, channels, sample_rate, kMaxSeBytes)) {
+        return false;
+    }
+
+    const size_t byte_size = frame_count * static_cast<size_t>(channels) * sizeof(int16_t);
+    uint32_t irq = save_and_disable_interrupts();
+    const int slot = allocateSeSlotLocked();
+    activateSeChannelLocked(slot, pcm, false, byte_size, frame_count, channels, sample_rate);
+    restore_interrupts(irq);
+
+    ensureOutputPlaying();
+    return true;
+}
+
+/** flash 埋め込み PCM を BGM としてストリーム再生する */
+bool LuaAudio::playBgmFromEmbedded(const int16_t* pcm, size_t frame_count, uint16_t channels,
+                                   uint32_t sample_rate) {
+    if (!output_) {
+        return false;
+    }
+    if (!validateEmbeddedPcm(pcm, frame_count, channels, sample_rate, SIZE_MAX)) {
+        return false;
+    }
+
+    uint32_t irq = save_and_disable_interrupts();
+    stopBgmLocked();
+    resetStreamSlotsLocked();
+    closeBgmFileLocked();
+
+    bgm_embed_active_ = true;
+    bgm_embed_pcm_ = pcm;
+    bgm_embed_frame_count_ = frame_count;
+    bgm_embed_frames_remaining_ = frame_count;
+    bgm_channels_ = channels;
+    bgm_source_rate_ = sample_rate;
+    bgm_src_pos_ = 0.0;
+    bgm_file_frame_next_ = 0;
+    bgm_cur_l_ = 0;
+    bgm_cur_r_ = 0;
+    bgm_eof_ = false;
+    bgm_active_ = true;
+    restore_interrupts(irq);
+
+    primeStreamBuffers();
+
+    if (countReadySlots() == 0) {
+        uint32_t irq2 = save_and_disable_interrupts();
+        stopBgmLocked();
+        resetStreamSlotsLocked();
+        closeBgmFileLocked();
+        restore_interrupts(irq2);
+        return false;
+    }
+
+    ensureOutputPlaying();
+    return true;
+}
+
+/** READY なストリームスロットを1つ取り出し、出力バッファへコピーする */
 bool LuaAudio::consumeStreamSlot(int16_t* left, int16_t* right, size_t frames) {
     for (StreamSlot& slot : stream_slots_) {
         if (slot.state != kSlotReady) {
@@ -632,10 +778,11 @@ bool LuaAudio::consumeStreamSlot(int16_t* left, int16_t* right, size_t frames) {
     return false;
 }
 
+/** 全アクティブ SE チャンネルを出力バッファへ加算ミックスする */
 void LuaAudio::mixSeChannels(int16_t* left, int16_t* right, size_t samples) {
     for (size_t c = 0; c < kSeChannels; c++) {
         SeChannel& ch = se_channels_[c];
-        if (!ch.active || !ch.data) {
+        if (!ch.active || !ch.pcm) {
             continue;
         }
 
@@ -657,10 +804,10 @@ void LuaAudio::mixSeChannels(int16_t* left, int16_t* right, size_t samples) {
             int32_t sl;
             int32_t sr;
             if (ch.channels == 1) {
-                sl = sr = ch.data[idx];
+                sl = sr = ch.pcm[idx];
             } else {
-                sl = ch.data[idx * 2];
-                sr = ch.data[idx * 2 + 1];
+                sl = ch.pcm[idx * 2];
+                sr = ch.pcm[idx * 2 + 1];
             }
 
             left[i] = static_cast<int16_t>(clampSample(static_cast<int32_t>(left[i]) + sl));
@@ -675,6 +822,7 @@ void LuaAudio::mixSeChannels(int16_t* left, int16_t* right, size_t samples) {
     }
 }
 
+/** I2S 1 バッファ分: BGM + SE + トーンをミックスして出力する */
 void LuaAudio::fill(int16_t* left, int16_t* right, size_t samples) {
     const float vol = volume_;
     const bool tone_on = tone_active_;

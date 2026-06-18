@@ -14,7 +14,9 @@ class FontRenderer {
 public:
     static constexpr char kMagic[4] = {'M', 'I', 'S', 'F'};
 
+    /** コンストラクタ */
     FontRenderer();
+    /** デストラクタ（フォント解放・アクティブ参照解除） */
     ~FontRenderer();
 
     FontRenderer(const FontRenderer&) = delete;
@@ -22,22 +24,32 @@ public:
 
     /** SD から MISF v1 を読み込む */
     bool loadFromSd(const char* path);
+    /** HeapBudget 経由で確保したフォントデータを解放する */
     void unload();
     /** セッション終了時: malloc 起点を raw free（HeapBudget 迂回） */
     void unloadRaw();
 
+    /** フォントが読み込み済みかどうか */
     bool isLoaded() const { return glyph_data_ != nullptr; }
+    /** グリフの論理幅（ピクセル） */
     uint8_t glyphWidth() const { return glyph_w_; }
+    /** グリフの論理高さ（ピクセル） */
     uint8_t glyphHeight() const { return glyph_h_; }
+    /** デフォルトの文字送り幅 */
     uint8_t defaultAdvance() const { return default_advance_; }
 
     /** 描画倍率（整数比 num/den。例: 3/2 で 1.5 倍） */
     void setScale(uint8_t num, uint8_t den);
+    /** 描画倍率の分子 */
     uint8_t scaleNumerator() const { return scale_num_; }
+    /** 描画倍率の分母 */
     uint8_t scaleDenominator() const { return scale_den_; }
 
+    /** 倍率適用後のグリフ幅 */
     uint8_t scaledGlyphWidth() const { return scaleValue(glyph_w_); }
+    /** 倍率適用後のグリフ高さ */
     uint8_t scaledGlyphHeight() const { return scaleValue(glyph_h_); }
+    /** 倍率適用後のデフォルト送り幅 */
     uint8_t scaledDefaultAdvance() const { return scaleValue(default_advance_); }
 
     /**
@@ -49,6 +61,7 @@ public:
 
     /** グローバルアクティブフォント（GameDisplay が参照） */
     static FontRenderer* active() { return s_active_; }
+    /** グローバルアクティブフォントを設定する */
     static void setActive(FontRenderer* font) { s_active_ = font; }
 
 private:
@@ -73,10 +86,15 @@ private:
     uint8_t scale_num_ = 1;
     uint8_t scale_den_ = 1;
 
+    /** メトリクス値に描画倍率を適用する */
     uint8_t scaleValue(uint8_t value) const;
+    /** グリフ 1 行あたりのバイト数 */
     uint8_t bytesPerRow() const;
+    /** グリフビットマップの指定ピクセルがオンかどうか */
     bool glyphPixel(const uint8_t* glyph, int row, int col) const;
+    /** コードポイントからインデックスエントリを二分探索する */
     const IndexEntry* findGlyph(uint32_t codepoint) const;
+    /** 1 グリフをバンド FB へ描画する */
     void drawGlyph(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, int band_y0, int x, int y,
                    const uint8_t* glyph, uint16_t fg, uint16_t bg) const;
 };

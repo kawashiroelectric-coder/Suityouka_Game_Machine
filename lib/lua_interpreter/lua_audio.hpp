@@ -21,21 +21,40 @@ public:
     static constexpr size_t kSeChannels = AudioConfig::SE_CHANNEL_COUNT;
     static constexpr size_t kMaxSeBytes = AudioConfig::SE_MAX_BYTES;
 
+    /** コンストラクタ */
     LuaAudio();
+    /** デストラクタ */
     ~LuaAudio();
 
+    /** AudioOutput とサンプルレートを接続する */
     void attach(AudioOutput* output, uint32_t sample_rate);
+    /** SD マウント状態を設定する */
     void setSdMounted(bool mounted) { sd_mounted_ = mounted; }
 
     /** AudioOutput::setCallback に渡す静的コールバック（Core1 から呼ばれる） */
     static void audioCallback(int16_t* left, int16_t* right, size_t samples);
 
+    /** トーン（サイン波）を指定周波数・時間再生する */
     bool playTone(float frequency_hz, float duration_ms);
     /** BGM: 16bit PCM WAV を SD からストリーミング（SE は止めない） */
     bool playWav(const char* path, char* errbuf, size_t errbuf_len);
     /** SE: 16bit PCM WAV を RAM 載せで加算再生（8 系統、超過時は最古を上書き） */
     bool playSe(const char* path, char* errbuf, size_t errbuf_len);
+    /**
+     * SE: flash 埋め込み PCM を加算再生（ヒープコピーなし）。
+     * pcm は再生完了まで有効な const 配列を指すこと。最大 kMaxSeBytes。
+     */
+    bool playSeFromEmbedded(const int16_t* pcm, size_t frame_count, uint16_t channels,
+                            uint32_t sample_rate);
+    /**
+     * BGM: flash 埋め込み PCM をストリーム再生（SE は止めない）。
+     * 長い曲向け。サイズ上限は flash 容量のみ。
+     */
+    bool playBgmFromEmbedded(const int16_t* pcm, size_t frame_count, uint16_t channels,
+                             uint32_t sample_rate);
+    /** BGM / SE / トーンをすべて停止する */
     void stop();
+    /** マスター音量（0.0〜1.0）を設定する */
     void setVolume(float volume);
 
     /** Core0: BGM 用ストリームバッファへ SD から読み込む */
@@ -59,7 +78,8 @@ private:
     };
 
     struct SeChannel {
-        int16_t* data;
+        const int16_t* pcm;
+        bool pcm_on_heap;
         size_t byte_size;
         size_t frame_count;
         uint16_t channels;
@@ -69,21 +89,43 @@ private:
         uint32_t load_serial;
     };
 
+    /** I2S 1 バッファ分: BGM + SE + トーンをミックスして出力する */
     void fill(int16_t* left, int16_t* right, size_t samples);
+    /** 全アクティブ SE チャンネルを出力バッファへ加算する */
     void mixSeChannels(int16_t* left, int16_t* right, size_t samples);
+    /** BGM ストリーミング状態を停止する */
     void stopBgmLocked();
+    /** 全 SE チャンネルを停止する */
     void stopSeLocked();
+    /** トーン生成を停止する */
     void stopToneLocked();
+    /** BGM 用 WAV ファイルを閉じる */
     void closeBgmFileLocked();
+    /** ストリーム用ダブルバッファスロットをリセットする */
     void resetStreamSlotsLocked();
+    /** 指定 SE チャンネルの PCM を解放する */
     void freeSeChannelLocked(int index);
+    /** SD 上の WAV を BGM ストリーミング用に開く */
     bool openBgmForStream(const char* path, char* errbuf, size_t errbuf_len);
+    /** 空きまたは最古の SE スロット index を返す */
     int allocateSeSlotLocked();
+    /** SE チャンネルに PCM を割り当てて再生開始する */
+    void activateSeChannelLocked(int slot, const int16_t* pcm, bool pcm_on_heap, size_t byte_size,
+                                 size_t frame_count, uint16_t channels, uint32_t sample_rate);
+    /** 埋め込み PCM パラメータの妥当性を検証する */
+    static bool validateEmbeddedPcm(const int16_t* pcm, size_t frame_count, uint16_t channels,
+                                  uint32_t sample_rate, size_t max_bytes);
+    /** 1 ストリームスロット分の BGM PCM を SD から読み込む */
     bool fillStreamSlot(StreamSlot& slot);
+    /** BGM ファイルから次の1オーディオフレームを読み込む */
     bool readNextBgmFrame(int16_t* out_l, int16_t* out_r);
+    /** 再生開始前にストリームバッファをプリロードする */
     void primeStreamBuffers();
+    /** READY 状態のストリームスロット数を返す */
     int countReadySlots() const;
+    /** READY スロットを1つ取り出して出力バッファへコピーする */
     bool consumeStreamSlot(int16_t* left, int16_t* right, size_t frames);
+    /** 出力が停止中なら I2S 再生を開始する */
     void ensureOutputPlaying();
 
     static LuaAudio* instance_;
@@ -103,6 +145,10 @@ private:
     volatile bool bgm_eof_;
 
     bool bgm_file_open_;
+    bool bgm_embed_active_;
+    const int16_t* bgm_embed_pcm_;
+    size_t bgm_embed_frame_count_;
+    size_t bgm_embed_frames_remaining_;
     uint16_t bgm_channels_;
     uint32_t bgm_source_rate_;
     uint32_t bgm_data_remaining_;

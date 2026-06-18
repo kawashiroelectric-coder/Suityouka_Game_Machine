@@ -11,7 +11,9 @@
 
 class ST7789_LCD;
 
+/** デバッグオーバーレイの計測状態をリセットする */
 void debugOverlayReset();
+/** デバッグオーバーレイの FPS 計測を1フレーム進める */
 void debugOverlayTick(uint32_t now_ms);
 /** フレーム DMA 完了後、LCD へ直接描画する */
 void debugOverlayDrawAfterFrame(ST7789_LCD* lcd, int screen_width);

@@ -22,7 +22,9 @@ public:
     /** 1 DMA チャンクあたりのフレーム数（LuaAudio ストリームバッファと一致） */
     static constexpr size_t BUFFER_FRAMES = AudioConfig::STREAM_BUFFER_FRAMES;
 
+    /** コンストラクタ。内部バッファとシングルトン参照を初期化する */
     AudioOutput();
+    /** デストラクタ。再生を停止しシングルトン参照を解除する */
     ~AudioOutput();
 
     /** Core 1 を起動し I2S PIO / DMA を初期化する */
@@ -33,11 +35,15 @@ public:
     /** DMA を停止し無音を出力 */
     void stop();
 
+    /** 現在 I2S 再生中かどうかを返す */
     bool isPlaying() const { return playing_; }
 
+    /** PCM 供給用コールバックを登録する（Core 1 から呼ばれる） */
     void setCallback(AudioCallback cb) { callback_ = cb; }
+    /** 再生音量を 0.0〜1.0 で設定する */
     void setVolume(float volume);
 
+    /** 指定周波数・時間のトーン再生（未実装） */
     void playTone(float frequency, float duration_ms);
 
     /** Core 1 エントリ（multicore_launch_core1 から呼ぶ） */
@@ -68,13 +74,21 @@ private:
 
     static AudioOutput* instance_;
 
+    /** DMA 完了割り込みハンドラ（IRQ から呼ばれる） */
     static void dmaIrqHandler();
+    /** DMA 完了時に次バッファを充填して再キックする */
     void onDmaComplete();
+    /** コールバック結果を 32bit ステレオ DMA バッファへ変換する */
     void fillBuffer(int32_t* dst, int16_t* scratch_l, int16_t* scratch_r);
+    /** 指定バッファから PIO TX FIFO へ DMA 転送を開始する */
     void kickDma(const int32_t* src);
+    /** Core 1 上で PIO・DMA・GPIO を初期化する */
     void initHardwareOnCore1();
+    /** Core 1 上で I2S 再生を開始する */
     void startPlaybackOnCore1();
+    /** Core 1 上で I2S 再生を停止する */
     void stopPlaybackOnCore1();
+    /** Core 1 のメインループ（再生制御・バッテリー監視） */
     void core1Loop();
 };
 

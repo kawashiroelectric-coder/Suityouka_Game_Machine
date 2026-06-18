@@ -46,6 +46,7 @@ struct SettingsUiCache {
     int prev_cursor = -1;
 };
 
+/** 8x8 フォント前提で文字列の描画幅（px）を返す。中央揃え計算時に使う */
 int textWidthPx(const char* text) {
     if (!text) {
         return 0;
@@ -53,6 +54,7 @@ int textWidthPx(const char* text) {
     return static_cast<int>(std::strlen(text)) * 8;
 }
 
+/** 画面幅中央に背景付きテキストを描く。タイトル・フッター表示時に使う */
 void drawTextCenteredBg(ST7789_LCD* lcd, int y, const char* text, uint16_t fg, uint16_t bg) {
     if (!lcd) {
         return;
@@ -61,6 +63,7 @@ void drawTextCenteredBg(ST7789_LCD* lcd, int y, const char* text, uint16_t fg, u
     lcd->drawTextBg(x < 0 ? 0 : x, y, text, fg, bg);
 }
 
+/** 8 ボタンのいずれかが押下中か判定する。離し待ちループで毎フレーム使う */
 bool isAnyButtonPressed(ButtonInput* buttons) {
     if (!buttons) {
         return false;
@@ -73,6 +76,7 @@ bool isAnyButtonPressed(ButtonInput* buttons) {
     return false;
 }
 
+/** 全ボタンが離されるまでブロックする。設定メニュー入退場時のチャタリング防止に使う */
 void waitForButtonRelease(ButtonInput* buttons) {
     if (!buttons) {
         return;
@@ -86,6 +90,7 @@ void waitForButtonRelease(ButtonInput* buttons) {
     }
 }
 
+/** パーセント値を [====----] 形式のメーター行に整形する。明るさ行ラベル更新時に使う */
 void buildMeterLine(char* out, size_t out_len, const char* prefix, int percent) {
     if (!out || out_len == 0) {
         return;
@@ -105,6 +110,7 @@ void buildMeterLine(char* out, size_t out_len, const char* prefix, int percent) 
     std::snprintf(out, out_len, "%s [%s] %d%%", prefix, bar, percent);
 }
 
+/** 音量ステップをメーター付き行文字列に整形する。音量行ラベル更新時に使う */
 void buildVolumeMeterLine(char* out, size_t out_len, int step) {
     if (!out || out_len == 0) {
         return;
@@ -126,6 +132,7 @@ void buildVolumeMeterLine(char* out, size_t out_len, int step) {
                   EncoderVolumeControl::kVolumeSteps);
 }
 
+/** 全設定行の表示ラベルを最新状態で再構築する。音量・明るさ変更後に呼ぶ */
 void refreshSettingsRowLabels(SettingsState& state) {
     std::snprintf(state.row_labels[0], sizeof(state.row_labels[0]), "WiFi: [CONNECTED]");
     std::snprintf(state.row_labels[1], sizeof(state.row_labels[1]), "SSID: HOME_NET");
@@ -136,6 +143,7 @@ void refreshSettingsRowLabels(SettingsState& state) {
     std::snprintf(state.row_labels[5], sizeof(state.row_labels[5]), "Back");
 }
 
+/** 指定行の表示ラベル文字列を返す。行描画時に使う */
 const char* settingsRowLabel(const SettingsState& state, int index) {
     if (index < 0 || index >= kSettingsRowCount) {
         return "";
@@ -143,6 +151,7 @@ const char* settingsRowLabel(const SettingsState& state, int index) {
     return state.row_labels[index];
 }
 
+/** LCD の現在輝度を状態へ同期しラベルを更新する。画面初期化時に呼ぶ */
 void syncBrightnessFromLcd(ST7789_LCD* lcd, SettingsState& state) {
     if (!lcd) {
         return;
@@ -151,11 +160,13 @@ void syncBrightnessFromLcd(ST7789_LCD* lcd, SettingsState& state) {
     refreshSettingsRowLabels(state);
 }
 
+/** エンコーダ音量ステップを状態へ同期しラベルを更新する。画面初期化時に呼ぶ */
 void syncVolumeFromEncoder(SettingsState& state) {
     state.volume_step = EncoderVolumeControl::volumeStep();
     refreshSettingsRowLabels(state);
 }
 
+/** バックライト輝度を LCD と永続設定へ反映する。明るさ調整確定時に呼ぶ */
 void applyBrightness(ST7789_LCD* lcd, SettingsState& state, int percent) {
     if (!lcd) {
         return;
@@ -166,6 +177,7 @@ void applyBrightness(ST7789_LCD* lcd, SettingsState& state, int percent) {
     refreshSettingsRowLabels(state);
 }
 
+/** 明るさを delta 分だけ増減する。編集モードで LEFT/RIGHT 入力時に呼ぶ */
 void adjustBrightness(ST7789_LCD* lcd, SettingsState& state, int delta) {
     int next = state.brightness_percent + delta;
     if (next < ST7789_LCD::kBacklightMinPercent) {
@@ -176,6 +188,7 @@ void adjustBrightness(ST7789_LCD* lcd, SettingsState& state, int delta) {
     applyBrightness(lcd, state, next);
 }
 
+/** 画面下部の操作ヒントを描く。モード切替や初期表示時に呼ぶ */
 void drawSettingsFooterHint(ST7789_LCD* lcd, bool editing_brightness) {
     if (!lcd) {
         return;
@@ -191,6 +204,7 @@ void drawSettingsFooterHint(ST7789_LCD* lcd, bool editing_brightness) {
     }
 }
 
+/** 設定画面の固定枠（パネル・タイトル・フッター）を描く。初期化や全面再描画時に呼ぶ */
 void drawSettingsStaticChrome(ST7789_LCD* lcd, bool editing_brightness) {
     if (!lcd) {
         return;
@@ -201,6 +215,7 @@ void drawSettingsStaticChrome(ST7789_LCD* lcd, bool editing_brightness) {
     drawSettingsFooterHint(lcd, editing_brightness);
 }
 
+/** 設定メニューの 1 行を描画または更新する。カーソル移動・値変更時に呼ぶ */
 void drawSettingsRow(ST7789_LCD* lcd, const SettingsState& state, int row_index, int cursor) {
     if (!lcd || row_index < 0 || row_index >= kSettingsRowCount) {
         return;
@@ -219,6 +234,7 @@ void drawSettingsRow(ST7789_LCD* lcd, const SettingsState& state, int row_index,
     lcd->drawTextBg(kSettingsPanelX + 26, bg_y, settingsRowLabel(state, row_index), fg, bg);
 }
 
+/** 設定画面を初回描画し状態を同期する。run 入場時や入力テスト復帰後に呼ぶ */
 void initSettingsScreen(ST7789_LCD* lcd, SettingsUiCache& cache, SettingsState& state, int cursor) {
     state.editing_brightness = false;
     syncVolumeFromEncoder(state);
@@ -233,6 +249,7 @@ void initSettingsScreen(ST7789_LCD* lcd, SettingsUiCache& cache, SettingsState& 
     cache.prev_cursor = cursor;
 }
 
+/** カーソル移動時に旧行と新行のみ部分更新する。UP/DOWN 入力時に呼ぶ */
 void updateSettingsCursor(ST7789_LCD* lcd, SettingsUiCache& cache, SettingsState& state,
                           int old_cursor, int new_cursor) {
     if (old_cursor >= 0 && old_cursor < kSettingsRowCount) {
@@ -244,6 +261,7 @@ void updateSettingsCursor(ST7789_LCD* lcd, SettingsUiCache& cache, SettingsState
 
 }  // namespace
 
+/** システム設定メニューのメインループ。ゲーム選択メニューから起動し LEFT で戻る */
 void SystemSettingsMenu::run(const Config& config) {
     if (!config.lcd || !config.buttons) {
         return;

@@ -15,6 +15,7 @@ public:
     bool init();
     /** A/B を GPIO 割り込みでデコード（テストモード向け） */
     bool initIrq();
+    /** A/B の GPIO 割り込みを無効化する */
     void disableIrq();
 
     /** SW ポーリング（A/B は IRQ 有効時は割り込み側で処理） */
@@ -23,19 +24,27 @@ public:
     /** GPIO 共有 IRQ コールバックから呼ぶ（initIrq 使用時） */
     void serviceIrq(unsigned int gpio);
 
+    /** 累積回転位置（カウント）を返す */
     int32_t position() const;
     /** 前回 consume 以降の累積デルタを返し、内部カウンタを 0 にする */
     int32_t consumeDelta();
 
+    /** エンコーダ SW が押下中か（アクティブロー） */
     bool isSwitchPressed() const;
+    /** 前回 update 以降に SW が押されたエッジがあれば true を返し消費する */
     bool wasSwitchPressed();
+    /** SW 押下回数（デバッグ用）を返す */
     uint32_t switchPressCount() const { return switch_press_count_; }
 
+    /** A 相ピンの現在レベルを返す（デバッグ表示用） */
     bool pinA() const;
+    /** B 相ピンの現在レベルを返す（デバッグ表示用） */
     bool pinB() const;
 
 private:
+    /** A/B/SW ピン初期化とクアドラチャデコード */
     void initPins();
+    /** グレイコード遷移から回転方向を 1 ステップ分デコードする */
     void decodeQuadratureStep();
 
     uint8_t last_ab_state_ = 0;

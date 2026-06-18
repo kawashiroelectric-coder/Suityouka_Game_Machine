@@ -13,6 +13,7 @@
 
 namespace {
 
+/** 負数対応の整数除算（床除算）を行う。タイル行・列範囲計算時に使う */
 int floorDiv(int a, int b) {
     if (b == 0) return 0;
     int q = a / b;
@@ -25,20 +26,24 @@ int floorDiv(int a, int b) {
 
 }  // namespace
 
+/** 全レイヤー状態を初期化する。インスタンス生成時に使う */
 TileLayerSystem::TileLayerSystem() : backdrop_color_(0) {
     reset();
 }
 
+/** 全レイヤーのタイル配列を解放する。インスタンス破棄時に使う */
 TileLayerSystem::~TileLayerSystem() {
     reset();
 }
 
+/** 1 レイヤーのタイル配列を free する。レイヤー再構成・クリア時の内部処理で使う */
 void TileLayerSystem::freeLayerTiles(Layer& layer) {
     free(layer.tiles);
     layer.tiles = nullptr;
     layer.tile_count = 0;
 }
 
+/** 全レイヤーと背景色を初期状態に戻す。ゲーム終了やレイヤー全消去時に呼ぶ */
 void TileLayerSystem::reset() {
     for (Layer& layer : layers_) {
         freeLayerTiles(layer);
@@ -47,6 +52,7 @@ void TileLayerSystem::reset() {
     backdrop_color_ = 0;
 }
 
+/** レイヤーのタイルセット・マップ寸法・スクロール等を設定する。Lua layers API から呼ぶ */
 bool TileLayerSystem::setLayerConfig(size_t layer_index, int tileset_id, int tile_w, int tile_h,
                                      int sheet_cols, int map_cols, int map_rows, int map_x,
                                      int map_y, int scroll_x, int scroll_y, bool enabled,
@@ -93,6 +99,7 @@ bool TileLayerSystem::setLayerConfig(size_t layer_index, int tileset_id, int til
     return true;
 }
 
+/** レイヤーのスクロールオフセットを更新する。カメラ移動やパララックス時に呼ぶ */
 bool TileLayerSystem::setLayerScroll(size_t layer_index, int scroll_x, int scroll_y) {
     if (layer_index >= kLayerCount) {
         return false;
@@ -102,6 +109,7 @@ bool TileLayerSystem::setLayerScroll(size_t layer_index, int scroll_x, int scrol
     return true;
 }
 
+/** レイヤーの有効／無効を切り替える。表示オンオフ時に呼ぶ */
 bool TileLayerSystem::setLayerEnabled(size_t layer_index, bool enabled) {
     if (layer_index >= kLayerCount) {
         return false;
@@ -110,6 +118,7 @@ bool TileLayerSystem::setLayerEnabled(size_t layer_index, bool enabled) {
     return true;
 }
 
+/** 指定レイヤーを解放して未設定状態に戻す。レイヤー削除時に呼ぶ */
 void TileLayerSystem::clearLayer(size_t layer_index) {
     if (layer_index >= kLayerCount) {
         return;
@@ -118,6 +127,7 @@ void TileLayerSystem::clearLayer(size_t layer_index) {
     layers_[layer_index] = Layer{};
 }
 
+/** レイヤーのタイルマップデータを一括設定する。マップ読込・更新時に呼ぶ */
 bool TileLayerSystem::setLayerTiles(size_t layer_index, const int* data, size_t count) {
     if (layer_index >= kLayerCount || !data) {
         return false;
@@ -132,6 +142,7 @@ bool TileLayerSystem::setLayerTiles(size_t layer_index, const int* data, size_t 
     return true;
 }
 
+/** 現在バンドへ下層から上層へタイルレイヤーを合成する。各バンドの game_draw 前に呼ぶ */
 void TileLayerSystem::composeBand(GameDisplay* disp,
                                   const TileLayerImageView* (*get_image)(int id, void* ctx),
                                   void* ctx) {

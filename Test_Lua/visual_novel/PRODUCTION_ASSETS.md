@@ -55,7 +55,7 @@
 | `gap_space` | 隙間／星の内部 | ルート A 中盤・紫の台詞が多い場面 |
 | `ending_true` | トゥルー ED 専用 | `ending` と色調を変える（任意） |
 
-**サイズ:** 320×168 RGB565（`png_to_rgb565bin.py --resize 320x168`）
+**サイズ:** 320×168 RGB565（`image_to_rgb565_bin.py --resize 320x168`）
 
 ### 立ち絵（優先度順）
 
@@ -74,7 +74,7 @@
 
 ## 4. 作者が用意する手順（素材追加時）
 
-1. PNG を用意 → `tool/png_to_rgb565bin.py` で `.bin` 化
+1. PNG を用意 → `tool/image_to_rgb565_bin.py` で `.bin` 化
 2. `Test_Lua/visual_novel/images/bg/` または `chars/` に配置
 3. **`assets.lua` に id を登録**（`w` / `h` / `file` / 立ち絵は `keyed = true`）
 4. **`scenario.lua` で `bg_image` / `character` id を指定**（未登録 id は執筆側が将来差し替え）

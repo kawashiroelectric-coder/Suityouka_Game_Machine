@@ -44,6 +44,7 @@ bool g_loaded = false;
 bool g_dirty = false;
 uint32_t g_dirty_since_ms = 0;
 
+/** CRC-16/CCITT-FALSE で data のチェックサムを計算する */
 uint16_t calcCrc16(const uint8_t* data, size_t len) {
     uint16_t crc = 0xFFFF;
     for (size_t i = 0; i < len; ++i) {
@@ -59,6 +60,7 @@ uint16_t calcCrc16(const uint8_t* data, size_t len) {
     return crc;
 }
 
+/** StoredSettings のペイロード部分の CRC を計算する */
 uint16_t payloadCrc(const StoredSettings& stored) {
     uint8_t payload[4] = {stored.volume_step, stored.brightness_percent, stored.reserved[0],
                           stored.reserved[1]};
@@ -70,6 +72,7 @@ uint16_t payloadCrc(const StoredSettings& stored) {
     return calcCrc16(block, sizeof(block));
 }
 
+/** 音量ステップを 0〜最大の範囲に収める */
 int clampVolumeStep(int step) {
     if (step < 0) {
         return 0;
@@ -80,6 +83,7 @@ int clampVolumeStep(int step) {
     return step;
 }
 
+/** 輝度パーセントを LCD 許容範囲に収める */
 int clampBrightnessPercent(int percent) {
     if (percent < ST7789_LCD::kBacklightMinPercent) {
         return ST7789_LCD::kBacklightMinPercent;
@@ -90,6 +94,7 @@ int clampBrightnessPercent(int percent) {
     return percent;
 }
 
+/** フラッシュ末尾から設定を読み込み、マジック・CRC を検証する */
 bool readStored(StoredSettings& out) {
     const auto* flash =
         reinterpret_cast<const StoredSettings*>(XIP_BASE + kFlashSettingsOffset);
@@ -100,11 +105,13 @@ bool readStored(StoredSettings& out) {
     return out.crc16 == payloadCrc(out);
 }
 
+/** RAM 上で実行: フラッシュセクタを消去して設定を書き込む（割り込み無効化中に呼ぶ） */
 void __no_inline_not_in_flash_func(flashWriteWorker)(FlashWriteContext* ctx) {
     flash_range_erase(ctx->offset, FLASH_SECTOR_SIZE);
     flash_range_program(ctx->offset, ctx->data, ctx->length);
 }
 
+/** 設定構造体をフラッシュ末尾 1 セクタへ書き込む */
 void writeStoredToFlash(const StoredSettings& stored) {
     alignas(4) static uint8_t sector[FLASH_SECTOR_SIZE];
     std::memset(sector, 0xFF, sizeof(sector));
@@ -120,11 +127,13 @@ void writeStoredToFlash(const StoredSettings& stored) {
     restore_interrupts(ints);
 }
 
+/** 設定変更を記録し、デバウンス用タイムスタンプを更新する */
 void markDirty() {
     g_dirty = true;
     g_dirty_since_ms = to_ms_since_boot(get_absolute_time());
 }
 
+/** デバウンス経過後に未保存の変更をフラッシュへ書き込む */
 void flushToFlashIfReady() {
     if (!g_dirty) {
         return;
@@ -150,6 +159,7 @@ void flushToFlashIfReady() {
 
 }  // namespace
 
+/** 起動時にフラッシュから音量・輝度を読み込む（失敗時はデフォルト値） */
 void DeviceSettings::load() {
     StoredSettings stored = {};
     if (readStored(stored)) {
@@ -167,6 +177,7 @@ void DeviceSettings::load() {
     g_dirty = false;
 }
 
+/** メインループから定期的に呼び、遅延フラッシュ書き込みを実行する */
 void DeviceSettings::service() {
     if (!g_loaded) {
         load();
@@ -174,6 +185,7 @@ void DeviceSettings::service() {
     flushToFlashIfReady();
 }
 
+/** 現在の音量ステップ（0 始まり）を返す。未読込なら load する */
 int DeviceSettings::volumeStep() {
     if (!g_loaded) {
         load();
@@ -181,6 +193,7 @@ int DeviceSettings::volumeStep() {
     return g_volume_step;
 }
 
+/** 現在の LCD 輝度（%）を返す。未読込なら load する */
 int DeviceSettings::brightnessPercent() {
     if (!g_loaded) {
         load();
@@ -188,6 +201,7 @@ int DeviceSettings::brightnessPercent() {
     return g_brightness_percent;
 }
 
+/** 音量ステップを設定し、遅延フラッシュ保存を予約する */
 void DeviceSettings::setVolumeStep(int step) {
     if (!g_loaded) {
         load();
@@ -200,6 +214,7 @@ void DeviceSettings::setVolumeStep(int step) {
     markDirty();
 }
 
+/** LCD 輝度（%）を設定し、遅延フラッシュ保存を予約する */
 void DeviceSettings::setBrightnessPercent(int percent) {
     if (!g_loaded) {
         load();

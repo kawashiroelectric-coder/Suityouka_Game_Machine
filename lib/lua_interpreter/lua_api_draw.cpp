@@ -16,6 +16,7 @@ extern "C" {
 #include "lauxlib.h"
 }
 
+/** Lua バインディング: machine.clear — 現在バンドを指定色でクリアする */
 int luaHostClear(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
@@ -25,6 +26,7 @@ int luaHostClear(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.fill_rect — 単一の塗りつぶし矩形を描画する */
 int luaHostFillRect(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
@@ -39,6 +41,7 @@ int luaHostFillRect(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.fill_rects — 矩形テーブルをバッチ描画する */
 int luaHostFillRects(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
@@ -94,6 +97,7 @@ int luaHostFillRects(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.band_index — 現在描画中のバンド index を返す */
 int luaHostBandIndex(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
@@ -103,6 +107,7 @@ int luaHostBandIndex(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.band_count — 画面のバンド総数を返す */
 int luaHostBandCount(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
@@ -112,6 +117,7 @@ int luaHostBandCount(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.band_top — 現在バンドの上端 Y 座標を返す */
 int luaHostBandTop(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
@@ -121,6 +127,7 @@ int luaHostBandTop(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.band_bottom — 現在バンドの下端 Y 座標を返す */
 int luaHostBandBottom(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
@@ -130,6 +137,7 @@ int luaHostBandBottom(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.band_height — 1 バンドの高さ（ピクセル）を返す */
 int luaHostBandHeight(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
@@ -139,6 +147,7 @@ int luaHostBandHeight(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.rect_in_band — 矩形が現在バンドと交差するか返す */
 int luaHostRectInBand(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
@@ -150,6 +159,7 @@ int luaHostRectInBand(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.draw_line — 直線を描画する */
 int luaHostDrawLine(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
@@ -163,6 +173,7 @@ int luaHostDrawLine(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.draw_circle — 円の輪郭を描画する */
 int luaHostDrawCircle(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
@@ -175,6 +186,7 @@ int luaHostDrawCircle(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.fill_circle — 円を塗りつぶす */
 int luaHostFillCircle(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
@@ -187,6 +199,7 @@ int luaHostFillCircle(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.load_image — SD から RGB565 画像を RAM に読み込む */
 int luaHostLoadImage(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -209,6 +222,7 @@ int luaHostLoadImage(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.draw_image — 読み込み済み画像を描画する */
 int luaHostDrawImage(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -240,6 +254,7 @@ int luaHostDrawImage(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.draw_image_keyed — 透過色付きで画像を描画する */
 int luaHostDrawImageKeyed(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -280,6 +295,7 @@ int luaHostDrawImageKeyed(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.free_image — 画像スロットを解放する */
 int luaHostFreeImage(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -290,6 +306,7 @@ int luaHostFreeImage(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.image_size — 画像の幅と高さを返す */
 int luaHostImageSize(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -305,6 +322,7 @@ int luaHostImageSize(lua_State* L) {
     return 2;
 }
 
+/** Lua バインディング: machine.draw_bg_stream — SD から背景をバンド単位でストリーム描画する */
 int luaHostDrawBgStream(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -324,6 +342,7 @@ int luaHostDrawBgStream(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.draw_vn_stream — VN 用に背景と立ち絵を合成描画する */
 int luaHostDrawVnStream(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -335,11 +354,16 @@ int luaHostDrawVnStream(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.load_sprite — load_image のエイリアス */
 int luaHostLoadSprite(lua_State* L) { return luaHostLoadImage(L); }
+/** Lua バインディング: machine.draw_sprite — draw_image のエイリアス */
 int luaHostDrawSprite(lua_State* L) { return luaHostDrawImage(L); }
+/** Lua バインディング: machine.draw_sprite_keyed — draw_image_keyed のエイリアス */
 int luaHostDrawSpriteKeyed(lua_State* L) { return luaHostDrawImageKeyed(L); }
+/** Lua バインディング: machine.free_sprite — free_image のエイリアス */
 int luaHostFreeSprite(lua_State* L) { return luaHostFreeImage(L); }
 
+/** Lua バインディング: machine.draw_tilemap — タイルマップを描画する */
 int luaHostDrawTilemap(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -403,6 +427,7 @@ int luaHostDrawTilemap(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.set_draw_mode — 描画モード（direct / layers）を設定する */
 int luaHostSetDrawMode(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -419,6 +444,7 @@ int luaHostSetDrawMode(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.draw_mode — 現在の描画モード文字列を返す */
 int luaHostDrawMode(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -430,11 +456,13 @@ int luaHostDrawMode(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.layer_count — タイルレイヤー数を返す */
 int luaHostLayerCount(lua_State* L) {
     lua_pushinteger(L, static_cast<lua_Integer>(TileLayerSystem::kLayerCount));
     return 1;
 }
 
+/** Lua バインディング: machine.set_layer_backdrop — レイヤー合成の背景色を設定する */
 int luaHostSetLayerBackdrop(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -446,6 +474,7 @@ int luaHostSetLayerBackdrop(lua_State* L) {
 
 namespace {
 
+/** Lua テーブルから整数フィールドを読み取る（必須/任意を指定可能） */
 bool tableFieldInteger(lua_State* L, int table_idx, const char* key, int* out, bool required) {
     lua_getfield(L, table_idx, key);
     if (lua_isnil(L, -1)) {
@@ -464,6 +493,7 @@ bool tableFieldInteger(lua_State* L, int table_idx, const char* key, int* out, b
     return true;
 }
 
+/** Lua テーブルから真偽値フィールドを読み取る（存在しなければ変更しない） */
 bool tableFieldBool(lua_State* L, int table_idx, const char* key, bool* out) {
     lua_getfield(L, table_idx, key);
     if (lua_isnil(L, -1)) {
@@ -477,6 +507,7 @@ bool tableFieldBool(lua_State* L, int table_idx, const char* key, bool* out) {
 
 }  // namespace
 
+/** Lua バインディング: machine.set_layer — タイルレイヤーの設定テーブルを適用する */
 int luaHostSetLayer(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -536,6 +567,7 @@ int luaHostSetLayer(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.set_layer_scroll — レイヤーのスクロール量を設定する */
 int luaHostSetLayerScroll(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -550,6 +582,7 @@ int luaHostSetLayerScroll(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.set_layer_tiles — レイヤーのタイルインデックス配列を設定する */
 int luaHostSetLayerTiles(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -585,6 +618,7 @@ int luaHostSetLayerTiles(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.clear_layer — 指定レイヤーをクリアする */
 int luaHostClearLayer(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -598,6 +632,7 @@ int luaHostClearLayer(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.clear_all_layers — 全タイルレイヤーをリセットする */
 int luaHostClearAllLayers(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {

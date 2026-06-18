@@ -2,7 +2,7 @@
 """
 Test_Lua 用 RGB565 タイルセット / スプライトを生成する。
 実行: python generate_assets.py
-出力: tiles/tiles.bin (128x128), tiles/player.bin (16x16)
+出力: tile_test/tiles/tiles.bin (128x128), tile_test/tiles/player.bin (16x16)
 """
 
 from __future__ import annotations
@@ -177,7 +177,7 @@ def sheet_to_bytes(tiles: list[list[list[int]]]) -> bytes:
 
 
 def main() -> None:
-    out_dir = Path(__file__).resolve().parent / "tiles"
+    out_dir = Path(__file__).resolve().parent / "tile_test" / "tiles"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     tiles = [fn() for fn in TILE_BUILDERS]

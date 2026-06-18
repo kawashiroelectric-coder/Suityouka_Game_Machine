@@ -8,8 +8,8 @@
 
 自作画像を使う場合:
     pip install pillow
-    python ../../tool/png_to_rgb565bin.py my_bg.png --resize 320x168 -o images/bg/my_bg.bin
-    python ../../tool/png_to_rgb565bin.py my_char.png --resize 128x168 -o images/chars/my_char.bin
+    python ../../tool/image_to_rgb565_bin.py my_bg.png --resize 320x168 -o images/bg/my_bg.bin
+    python ../../tool/image_to_rgb565_bin.py my_char.png --resize 128x168 -o images/chars/my_char.bin
     立ち絵は背景をマゼンタ (#FF00FF) にすると透過されます。
 """
 

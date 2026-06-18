@@ -27,6 +27,7 @@ int32_t g_volume_encoder_base = 0;
 
 }  // namespace
 
+/** 音声出力と Lua 音声エンジンを登録し、初期音量を適用する（main 起動時） */
 bool EncoderVolumeControl::init(AudioOutput* audio, LuaAudio* lua_audio) {
     g_audio = audio;
     g_lua_audio = lua_audio;
@@ -35,6 +36,7 @@ bool EncoderVolumeControl::init(AudioOutput* audio, LuaAudio* lua_audio) {
     return audio != nullptr;
 }
 
+/** エンコーダを IRQ モードで初期化し、現在位置を基準点にする（main 起動時） */
 bool EncoderVolumeControl::initEncoder() {
     if (!g_encoder.initIrq()) {
         printf("EncoderVolume: initIrq failed\n");
@@ -47,10 +49,13 @@ bool EncoderVolumeControl::initEncoder() {
     return true;
 }
 
+/** 共有 EncoderInput インスタンスへの参照を返す */
 EncoderInput& EncoderVolumeControl::encoder() { return g_encoder; }
 
+/** 現在の音量ステップ（0 始まり）を返す */
 int EncoderVolumeControl::volumeStep() { return g_volume_step; }
 
+/** 現在の音量を 0.0〜1.0 の float で返す */
 float EncoderVolumeControl::volumeFloat() {
     if (kVolumeStepMax <= 0) {
         return 1.0f;
@@ -58,6 +63,7 @@ float EncoderVolumeControl::volumeFloat() {
     return static_cast<float>(g_volume_step) / static_cast<float>(kVolumeStepMax);
 }
 
+/** 登録済み音声出力へ現在の音量を反映する */
 void EncoderVolumeControl::applyVolume() {
     const float vol = volumeFloat();
     if (g_lua_audio) {
@@ -67,12 +73,14 @@ void EncoderVolumeControl::applyVolume() {
     }
 }
 
+/** 音量変更時に音声反映・フラッシュ保存予約・シリアルログを行う */
 void EncoderVolumeControl::onVolumeChanged() {
     applyVolume();
     DeviceSettings::setVolumeStep(g_volume_step);
     printf("Volume: step %d/%d (%.2f)\n", g_volume_step + 1, kVolumeSteps, volumeFloat());
 }
 
+/** 起動時にフラッシュから読んだ音量ステップを復元する（フラッシュには書かない） */
 void EncoderVolumeControl::restoreVolumeStep(int step) {
     if (step < 0) {
         step = 0;
@@ -84,6 +92,7 @@ void EncoderVolumeControl::restoreVolumeStep(int step) {
     applyVolume();
 }
 
+/** エンコーダ回転を監視し音量変更と DeviceSettings 保存を行う（各フレーム 1 回） */
 void EncoderVolumeControl::service() {
     if (!g_encoder_ready) {
         return;

@@ -20,6 +20,7 @@ extern "C" {
 #include "lauxlib.h"
 }
 
+/** Lua バインディング: print — 引数をタブ区切りでシリアル出力する */
 int luaHostPrint(lua_State* L) {
     const int n = lua_gettop(L);
     for (int i = 1; i <= n; i++) {
@@ -37,6 +38,7 @@ int luaHostPrint(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: sleep_ms — 指定ミリ秒だけブロッキング待機する */
 int luaHostSleepMs(lua_State* L) {
     lua_Integer ms = luaL_checkinteger(L, 1);
     if (ms < 0) {
@@ -46,6 +48,7 @@ int luaHostSleepMs(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.text — 画面上にテキストを描画する */
 int luaHostLcdText(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -69,6 +72,7 @@ int luaHostLcdText(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.pressed — ボタン index が押されているか返す */
 int luaHostButtonPressed(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -85,6 +89,7 @@ int luaHostButtonPressed(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.jump_pressed — ジャンプ用ボタンのいずれかが押されているか返す */
 int luaHostJumpPressed(lua_State* L) {
     (void)L;
     LuaInterpreter* interp = luaApiActiveInterpreter();
@@ -107,34 +112,40 @@ int luaHostJumpPressed(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.set_present_mode — 互換用ノオペ（現行実装では未使用） */
 int luaHostSetPresentMode(lua_State* L) {
     (void)L;
     return 0;
 }
 
+/** Lua バインディング: machine.present — 互換用ノオペ（現行実装では未使用） */
 int luaHostPresent(lua_State* L) {
     (void)L;
     return 0;
 }
 
+/** Lua バインディング: machine.width — 画面幅（ピクセル）を返す */
 int luaHostWidth(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
     lua_pushinteger(L, disp ? disp->width() : 0);
     return 1;
 }
 
+/** Lua バインディング: machine.height — 画面高さ（ピクセル）を返す */
 int luaHostHeight(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
     lua_pushinteger(L, disp ? disp->height() : 0);
     return 1;
 }
 
+/** Lua バインディング: machine.time_ms — 起動からの経過ミリ秒を返す */
 int luaHostTimeMs(lua_State* L) {
     (void)L;
     lua_pushinteger(L, static_cast<lua_Integer>(to_ms_since_boot(get_absolute_time())));
     return 1;
 }
 
+/** Lua バインディング: machine.rgb — R,G,B から RGB565 色値を返す */
 int luaHostRgb(lua_State* L) {
     const int r = static_cast<int>(luaL_checkinteger(L, 1));
     const int g = static_cast<int>(luaL_checkinteger(L, 2));
@@ -144,18 +155,21 @@ int luaHostRgb(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.heap_used — ヒープ使用量（バイト）を返す */
 int luaHostHeapUsed(lua_State* L) {
     (void)L;
     lua_pushinteger(L, static_cast<lua_Integer>(HeapBudget::used()));
     return 1;
 }
 
+/** Lua バインディング: machine.heap_available — ヒープ残量（バイト）を返す */
 int luaHostHeapAvailable(lua_State* L) {
     (void)L;
     lua_pushinteger(L, static_cast<lua_Integer>(HeapBudget::available()));
     return 1;
 }
 
+/** Lua バインディング: machine.load_font — SD からゲーム用フォントを読み込む */
 int luaHostLoadFont(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -171,6 +185,7 @@ int luaHostLoadFont(lua_State* L) {
     return 2;
 }
 
+/** Lua バインディング: machine.font_loaded — フォントが読み込み済みか返す */
 int luaHostFontLoaded(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -182,6 +197,7 @@ int luaHostFontLoaded(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.font_height — スケール適用後のフォント高さを返す */
 int luaHostFontHeight(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -193,6 +209,7 @@ int luaHostFontHeight(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.font_advance — スケール適用後のデフォルト字送りを返す */
 int luaHostFontAdvance(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -204,6 +221,7 @@ int luaHostFontAdvance(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.set_font_scale — フォントの拡大率（分子/分母）を設定する */
 int luaHostSetFontScale(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -222,6 +240,7 @@ int luaHostSetFontScale(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.load_return — SD の .lua を実行し return 値を返す */
 int luaHostLoadReturn(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -236,6 +255,7 @@ int luaHostLoadReturn(lua_State* L) {
     return 2;
 }
 
+/** Lua バインディング: machine.script_dir — 実行中ゲームのスクリプトディレクトリを返す */
 int luaHostScriptDir(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -247,6 +267,7 @@ int luaHostScriptDir(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.resolve_path — 相対パスを SD 絶対パスに解決して返す */
 int luaHostResolvePath(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -259,6 +280,7 @@ int luaHostResolvePath(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.file_exists — SD 上にファイルが存在するか返す */
 int luaHostFileExists(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -270,6 +292,7 @@ int luaHostFileExists(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.save_data — Lua テーブルを SD に保存する */
 int luaHostSaveData(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -286,6 +309,7 @@ int luaHostSaveData(lua_State* L) {
     return 2;
 }
 
+/** Lua バインディング: machine.load_data — SD から Lua テーブルを読み込む */
 int luaHostLoadData(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -300,6 +324,7 @@ int luaHostLoadData(lua_State* L) {
     return 2;
 }
 
+/** print / sleep_ms / machine.* を Lua グローバルに登録する */
 void luaRegisterHostApi(lua_State* L) {
     lua_pushcfunction(L, luaHostPrint);
     lua_setglobal(L, "print");
@@ -430,4 +455,5 @@ void luaRegisterHostApi(lua_State* L) {
     lua_setglobal(L, "machine");
 }
 
+/** luaRegisterHostApi のラッパー（LuaInterpreter から呼ばれる） */
 void LuaInterpreter::registerLuaHostApi(lua_State* L) { luaRegisterHostApi(L); }

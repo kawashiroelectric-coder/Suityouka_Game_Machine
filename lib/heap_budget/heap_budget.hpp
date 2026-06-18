@@ -23,8 +23,11 @@ void release(void* ptr, size_t bytes);
 void* reallocBlock(void* ptr, size_t osize, size_t nsize);
 
 size_t used();
+/** 予約分を除いた残り確保可能バイト数を返す。 */
 size_t available();
+/** ヒープ全体予算（バイト）を返す。 */
 size_t budget();
+/** 常に確保しておく予約バイト数を返す。 */
 size_t reserve();
 
 /** デバッグ: 使用量を 0 にリセット（実際の malloc は解放しない） */

@@ -58,6 +58,7 @@ static void print_r1(const char* step, uint32_t r1) {
     printf("\n");
 }
 
+/** SD 初期化の段階別診断をシリアルへ出力する（main 起動時・マウント失敗時の切り分け用） */
 void sd_debug_run_diagnostics(void) {
     printf("\n========== SD DEBUG START ==========\n");
 

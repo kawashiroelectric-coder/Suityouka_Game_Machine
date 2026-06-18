@@ -30,7 +30,7 @@ constexpr uint32_t DEFAULT_SAMPLE_RATE_HZ = AudioConfig::SAMPLE_RATE;
 }  // namespace PCM5102I2S
 
 /**
- * PCM5102 用 32bit I2S PIO を 1 本の SM で起動するヘルパ。
+ * PCM5102 用 32bit I2S PIO ステートマシンを初期化する。
  * pio_add_program 済みの offset を渡すこと。
  */
 inline void pcm5102_i2s_init_sm(PIO pio, uint sm, uint offset,

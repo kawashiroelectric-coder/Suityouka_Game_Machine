@@ -24,6 +24,7 @@ bool g_sd_mounted = false;
 
 }  // namespace
 
+// SD カードの挿入状態を GPIO 通信テストで確認する（マウント前でも可）
 bool SdService::isCardPresent() {
     sd_card_t* card = sd_get_by_num(0);
     if (!card || !card->sd_test_com) {
@@ -32,8 +33,10 @@ bool SdService::isCardPresent() {
     return card->sd_test_com(card);
 }
 
+// FatFS がマウント済みかどうかを返す
 bool SdService::isMounted() { return g_sd_mounted; }
 
+// FatFS をマウントし、カード情報をログ出力する。成功時 true
 bool SdService::mount() {
     FRESULT fr = f_mount(&g_sd_fs, "", 1);
     if (fr != FR_OK) {
@@ -59,6 +62,7 @@ bool SdService::mount() {
     return true;
 }
 
+// FatFS をアンマウントし、マウント状態フラグをクリアする
 void SdService::unmount() {
     if (g_sd_mounted) {
         f_unmount("");
@@ -66,6 +70,7 @@ void SdService::unmount() {
     }
 }
 
+// 一度アンマウントしてから再マウントする（ゲーム終了後の FatFS 復旧用）
 bool SdService::remount() {
     const bool was_mounted = g_sd_mounted;
     unmount();
@@ -76,6 +81,7 @@ bool SdService::remount() {
     return mount();
 }
 
+// ルートディレクトリのファイル名とサイズを printf で一覧表示する（デバッグ用）
 void SdService::listRoot() {
     DIR dir;
     FILINFO fno;

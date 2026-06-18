@@ -23,6 +23,7 @@ constexpr uint32_t kEncoderIrqEvents = GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL;
 
 EncoderInput* g_irq_encoder = nullptr;
 
+/** A/B ピンの GPIO 共有 IRQ コールバック（initIrq 使用時） */
 void encoder_gpio_irq(uint gpio, uint32_t events) {
     (void)events;
     if (g_irq_encoder != nullptr) {
@@ -32,6 +33,7 @@ void encoder_gpio_irq(uint gpio, uint32_t events) {
 
 }  // namespace
 
+/** A/B/SW ピンを入力＋プルアップに設定し、内部状態をリセットする */
 void EncoderInput::initPins() {
     gpio_init(EncoderConfig::PIN_A);
     gpio_set_dir(EncoderConfig::PIN_A, GPIO_IN);
@@ -54,6 +56,7 @@ void EncoderInput::initPins() {
     pending_delta_ = 0;
 }
 
+/** ポーリング用初期化（A/B は update() で読む） */
 bool EncoderInput::init() {
     if (irq_enabled_) {
         disableIrq();
@@ -62,6 +65,7 @@ bool EncoderInput::init() {
     return true;
 }
 
+/** A/B を GPIO 割り込みでデコードする初期化（音量制御などで使用） */
 bool EncoderInput::initIrq() {
     if (irq_enabled_) {
         disableIrq();
@@ -76,6 +80,7 @@ bool EncoderInput::initIrq() {
     return true;
 }
 
+/** A/B の GPIO 割り込みを無効化する */
 void EncoderInput::disableIrq() {
     if (!irq_enabled_) {
         return;
@@ -88,6 +93,7 @@ void EncoderInput::disableIrq() {
     irq_enabled_ = false;
 }
 
+/** グレイコード遷移から回転方向をデコードし position_ を更新する */
 void EncoderInput::decodeQuadratureStep() {
     const uint8_t a = gpio_get(EncoderConfig::PIN_A) ? 1u : 0u;
     const uint8_t b = gpio_get(EncoderConfig::PIN_B) ? 1u : 0u;
@@ -101,6 +107,7 @@ void EncoderInput::decodeQuadratureStep() {
     last_ab_state_ = ab;
 }
 
+/** GPIO IRQ から呼ばれ、A/B ピンのクアドラチャを 1 ステップ処理する */
 void EncoderInput::serviceIrq(unsigned int gpio) {
     if (gpio != EncoderConfig::PIN_A && gpio != EncoderConfig::PIN_B) {
         return;
@@ -108,6 +115,7 @@ void EncoderInput::serviceIrq(unsigned int gpio) {
     decodeQuadratureStep();
 }
 
+/** SW をポーリングする（IRQ 無効時は A/B もここでデコード） */
 void EncoderInput::update() {
     if (!irq_enabled_) {
         decodeQuadratureStep();
@@ -121,6 +129,7 @@ void EncoderInput::update() {
     switch_last_ = sw;
 }
 
+/** 累積回転位置（カウント）を返す（割り込み安全） */
 int32_t EncoderInput::position() const {
     uint32_t irq_state = save_and_disable_interrupts();
     const int32_t pos = position_;
@@ -128,6 +137,7 @@ int32_t EncoderInput::position() const {
     return pos;
 }
 
+/** 前回 consume 以降の累積デルタを返し、内部カウンタを 0 にする */
 int32_t EncoderInput::consumeDelta() {
     uint32_t irq_state = save_and_disable_interrupts();
     const int32_t delta = pending_delta_;
@@ -136,8 +146,10 @@ int32_t EncoderInput::consumeDelta() {
     return delta;
 }
 
+/** エンコーダ SW が押下中か（アクティブロー） */
 bool EncoderInput::isSwitchPressed() const { return !gpio_get(EncoderConfig::PIN_SW); }
 
+/** 前回 update 以降に SW が押されたエッジがあれば true を返しフラグを消費する */
 bool EncoderInput::wasSwitchPressed() {
     if (!switch_pressed_edge_) {
         return false;
@@ -146,6 +158,8 @@ bool EncoderInput::wasSwitchPressed() {
     return true;
 }
 
+/** A 相ピンの現在レベルを返す（デバッグ表示用） */
 bool EncoderInput::pinA() const { return gpio_get(EncoderConfig::PIN_A); }
 
+/** B 相ピンの現在レベルを返す（デバッグ表示用） */
 bool EncoderInput::pinB() const { return gpio_get(EncoderConfig::PIN_B); }

@@ -34,7 +34,7 @@ public:
         uint32_t frame_interval_ms = 50;
     };
 
-    /** SD の有無に関わらずメニューを表示し続ける。ゲーム起動は on_run_game へ委譲 */
+    /** ゲーム選択メニューのメインループを開始する。game_machine_main から起動時に呼ぶ */
     static bool run(const Config& config);
 };
 

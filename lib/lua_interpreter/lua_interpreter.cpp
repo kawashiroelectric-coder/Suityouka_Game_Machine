@@ -33,6 +33,7 @@ extern "C" {
 
 namespace {
 
+/** ゲームスクリプトに game_init / game_update / game_draw が定義されているか検証する */
 static bool requireGameCallbacks(lua_State* L) {
     static const char* kRequired[] = {"game_init", "game_update", "game_draw"};
     for (const char* name : kRequired) {
@@ -50,6 +51,7 @@ static bool requireGameCallbacks(lua_State* L) {
 static bool g_lua_teardown = false;
 static bool g_session_teardown = false;
 
+/** ゲーム終了時に大きな Lua グローバル変数を nil で解放してメモリを節約する */
 static void trimLargeLuaGlobals(lua_State* L) {
     static const char* kKeys[] = {"SCENES", "ASSETS", "state", "SCENARIO_PATHS", "ASSET_PATHS"};
     for (const char* key : kKeys) {
@@ -58,6 +60,7 @@ static void trimLargeLuaGlobals(lua_State* L) {
     }
 }
 
+/** Lua VM 用カスタムアロケータ。通常時は HeapBudget、teardown 中は素の realloc/free */
 static void* luaHeapAlloc(void* ud, void* ptr, size_t osize, size_t nsize) {
     (void)ud;
     if (g_lua_teardown) {
@@ -72,6 +75,7 @@ static void* luaHeapAlloc(void* ud, void* ptr, size_t osize, size_t nsize) {
 
 }  // namespace
 
+/** コンストラクタ: 初期状態を設定する */
 LuaInterpreter::LuaInterpreter()
     : hooks_(),
       draw_mode_(LuaDrawMode::Direct),
@@ -85,11 +89,13 @@ LuaInterpreter::LuaInterpreter()
     game_script_dir_[0] = '\0';
 }
 
+/** デストラクタ: ゲーム状態と画像スロットを解放する */
 LuaInterpreter::~LuaInterpreter() {
     closeGameState();
     freeAllImages();
 }
 
+/** 画像・フォント・SD ストリーム等（Lua VM 以外）のゲームアセットを解放する */
 void LuaInterpreter::releaseGameAssets() {
     printf("[MENU-DBG] releaseGameAssets begin\n");
     fflush(stdout);
@@ -112,6 +118,7 @@ void LuaInterpreter::releaseGameAssets() {
     fflush(stdout);
 }
 
+/** trim 済み Lua VM を lua_close して完全解放する */
 void LuaInterpreter::releaseGameLuaVm() {
     if (!game_lua_) {
         return;
@@ -135,6 +142,7 @@ void LuaInterpreter::releaseGameLuaVm() {
 //   2. closePendingGameSession … lua_close / 画像 / フォントの完全解放
 // ---------------------------------------------------------------------------
 
+/** ゲームループ終了直後の軽量終了処理（音声停止・グローバル trim、lua_close は行わない） */
 void LuaInterpreter::finishGameSession() {
     audio_engine_.stop();
     closeBgStream();
@@ -155,6 +163,7 @@ void LuaInterpreter::finishGameSession() {
     fflush(stdout);
 }
 
+/** 遅延解放が必要なゲームセッション（Lua VM やフォント）が残っているか */
 bool LuaInterpreter::hasPendingGameSession() const {
     if (game_lua_ != nullptr) {
         return true;
@@ -162,6 +171,7 @@ bool LuaInterpreter::hasPendingGameSession() const {
     return FontRenderer::active() == &font_renderer_;
 }
 
+/** 遅延していた Lua VM とアセットを段階的に解放する */
 void LuaInterpreter::closeDeferredSession() {
     printf("[MENU-DBG] closeDeferredSession begin\n");
     fflush(stdout);
@@ -187,6 +197,7 @@ void LuaInterpreter::closeDeferredSession() {
     fflush(stdout);
 }
 
+/** 保留中のゲームセッションを完全に解放する（次ゲーム起動前にも使用） */
 void LuaInterpreter::closePendingGameSession() {
     printf("[MENU-DBG] closePendingGameSession begin\n");
     fflush(stdout);
@@ -212,14 +223,17 @@ void LuaInterpreter::closePendingGameSession() {
     fflush(stdout);
 }
 
+/** ゲーム状態をすべて終了する（音声停止＋遅延セッション解放） */
 void LuaInterpreter::closeGameState() {
     audio_engine_.stop();
     closeBgStream();
     closeDeferredSession();
 }
 
+/** 実行中ゲームのスクリプトディレクトリをクリアする */
 void LuaInterpreter::clearGameScriptDir() { game_script_dir_[0] = '\0'; }
 
+/** スクリプトパスからゲーム用の基準ディレクトリを抽出して保持する */
 void LuaInterpreter::setGameScriptFromPath(const char* script_path) {
     if (!script_path || script_path[0] == '\0') {
         clearGameScriptDir();
@@ -231,11 +245,13 @@ void LuaInterpreter::setGameScriptFromPath(const char* script_path) {
     printf("Lua script dir: %s (from %s)\n", game_script_dir_, norm);
 }
 
+/** 相対パスをゲームスクリプト基準の SD 絶対パスに解決する */
 void LuaInterpreter::resolveGamePath(const char* path, char* out, size_t out_len) const {
     const char* dir = (game_script_dir_[0] != '\0') ? game_script_dir_ : nullptr;
     resolveSdPath(dir, path, out, out_len);
 }
 
+/** SD から MISF サブセットフォントを読み込み、GameDisplay に適用する */
 bool LuaInterpreter::loadFont(const char* path) {
     if (!sd_mounted_) {
         printf("loadFont: SD not mounted\n");
@@ -253,6 +269,7 @@ bool LuaInterpreter::loadFont(const char* path) {
     return true;
 }
 
+/** 読み込み済みフォントをアンロードし、グローバル参照を解除する */
 void LuaInterpreter::unloadFont() {
     if (g_session_teardown) {
         font_renderer_.unloadRaw();
@@ -265,6 +282,7 @@ void LuaInterpreter::unloadFont() {
     GameDisplay::setFontRenderer(nullptr);
 }
 
+/** タイルレイヤー合成時の画像 ID から ImageSlot を TileLayerImageView に変換する */
 const TileLayerImageView* LuaInterpreter::tileLayerLookupImage(int id, void* ctx) {
     auto* self = static_cast<LuaInterpreter*>(ctx);
     if (!self) {
@@ -281,6 +299,7 @@ const TileLayerImageView* LuaInterpreter::tileLayerLookupImage(int id, void* ctx
     return &view;
 }
 
+/** SD から RGB565 画像を読み込み、空きスロットに格納して ID を返す */
 int LuaInterpreter::loadImage(const char* path, uint16_t w, uint16_t h) {
     if (!sd_mounted_) {
         printf("loadImage: SD not mounted\n");
@@ -349,6 +368,7 @@ int LuaInterpreter::loadImage(const char* path, uint16_t w, uint16_t h) {
     return slot_id;
 }
 
+/** 背景ストリーム用に開いている SD ファイルを閉じ、状態をリセットする */
 void LuaInterpreter::closeBgStream() {
     if (bg_stream_.open) {
         f_close(&bg_stream_.file);
@@ -364,6 +384,7 @@ void LuaInterpreter::closeBgStream() {
     bg_stream_.prefetch.display_band = -1;
 }
 
+/** 次バンド用に背景ストリームの行データを先読みしてバッファに載せる */
 void LuaInterpreter::prefetchBgStreamBand(int display_band) {
     bg_stream_.prefetch.valid = false;
     if (!bg_stream_.open || display_band < 0) {
@@ -392,6 +413,7 @@ void LuaInterpreter::prefetchBgStreamBand(int display_band) {
     bg_stream_.prefetch.buf_slot = slot;
 }
 
+/** SD から現在バンド分だけ背景画像を読み込み、画面に描画する */
 bool LuaInterpreter::drawBgStreamFromSd(const char* path, int dx, int dy, uint16_t w, uint16_t h) {
     if (!path || path[0] == '\0' || w == 0 || h == 0) {
         return false;
@@ -474,6 +496,7 @@ bool LuaInterpreter::drawBgStreamFromSd(const char* path, int dx, int dy, uint16
     return true;
 }
 
+/** 画像スロット ID に対応する ImageSlot を返す。無効なら nullptr */
 const ImageSlot* LuaInterpreter::getImage(int id) const {
     if (id < 0 || id >= kMaxImageSlots) {
         return nullptr;
@@ -484,6 +507,7 @@ const ImageSlot* LuaInterpreter::getImage(int id) const {
     return &images_[id];
 }
 
+/** 指定 ID の画像スロットを解放する */
 void LuaInterpreter::freeImage(int id) {
     if (id < 0 || id >= kMaxImageSlots) {
         return;
@@ -501,6 +525,7 @@ void LuaInterpreter::freeImage(int id) {
     images_[id] = ImageSlot();
 }
 
+/** すべての画像スロットを解放する */
 void LuaInterpreter::freeAllImages() {
     for (int i = 0; i < kMaxImageSlots; i++) {
         if (images_[i].used) {
@@ -512,8 +537,10 @@ void LuaInterpreter::freeAllImages() {
     }
 }
 
+/** LCD 描画・ボタン入力用のホストコールバックを登録する */
 void LuaInterpreter::setHostHooks(const LuaHostHooks& hooks) { hooks_ = hooks; }
 
+/** AudioOutput を接続し、Lua 音声 API のストリーミングを開始する */
 void LuaInterpreter::setAudioOutput(AudioOutput* audio) {
     audio_engine_.attach(audio, AudioConfig::SAMPLE_RATE);
     if (audio) {
@@ -523,13 +550,16 @@ void LuaInterpreter::setAudioOutput(AudioOutput* audio) {
     }
 }
 
+/** SD マウント状態を interpreter と音声エンジンに伝える */
 void LuaInterpreter::setSdMounted(bool mounted) {
     sd_mounted_ = mounted;
     audio_engine_.setSdMounted(mounted);
 }
 
+/** 読み込み可能な Lua スクリプトの最大バイト数を設定する */
 void LuaInterpreter::setMaxScriptBytes(size_t max_bytes) { max_script_bytes_ = max_bytes; }
 
+/** SD 上に通常ファイルが存在するか（ディレクトリは除外） */
 bool LuaInterpreter::sdFileExists(const char* path) const {
     char norm[FF_LFN_BUF + 4];
     resolveGamePath(path, norm, sizeof(norm));
@@ -540,6 +570,7 @@ bool LuaInterpreter::sdFileExists(const char* path) const {
     return !(fno.fattrib & AM_DIR);
 }
 
+/** SD 上のファイルサイズ（バイト）を返す。存在しないかディレクトリなら 0 */
 size_t LuaInterpreter::sdFileSize(const char* path) const {
     char norm[FF_LFN_BUF + 4];
     resolveGamePath(path, norm, sizeof(norm));
@@ -553,6 +584,7 @@ size_t LuaInterpreter::sdFileSize(const char* path) const {
     return static_cast<size_t>(fno.fsize);
 }
 
+/** 直近のエラーメッセージを内部バッファに保存する */
 void LuaInterpreter::setLastError(const char* msg) {
     if (!msg) {
         last_error_[0] = '\0';
@@ -562,6 +594,7 @@ void LuaInterpreter::setLastError(const char* msg) {
     last_error_[sizeof(last_error_) - 1] = '\0';
 }
 
+/** LCD にステータス行を表示し、last_error_ も更新する */
 void LuaInterpreter::showStatus(const char* line1, const char* line2, uint16_t color, uint16_t bg) {
     if (line2) {
         setLastError(line2);
@@ -578,8 +611,10 @@ void LuaInterpreter::showStatus(const char* line1, const char* line2, uint16_t c
     }
 }
 
+/** HeapBudget 連携のカスタムアロケータで新しい Lua VM を生成する */
 lua_State* LuaInterpreter::newLuaState() { return lua_newstate(luaHeapAlloc, nullptr); }
 
+/** SD ファイルをヒープに読み込み、バッファと長さを返す */
 bool LuaInterpreter::readSdFileToBuffer(const char* path, char** out_buf, size_t* out_len) {
     *out_buf = nullptr;
     *out_len = 0;
@@ -629,6 +664,7 @@ bool LuaInterpreter::readSdFileToBuffer(const char* path, char** out_buf, size_t
     return true;
 }
 
+/** バッファ内の Lua ソースをロードして実行する */
 bool LuaInterpreter::loadScriptIntoState(lua_State* L, const char* path, char* source, size_t len) {
     auto release_source = [&]() {
         if (source) {
@@ -655,6 +691,7 @@ bool LuaInterpreter::loadScriptIntoState(lua_State* L, const char* path, char* s
     return true;
 }
 
+/** SD 上の .lua を実行し、return 値 1 個を Lua スタックに push する */
 bool LuaInterpreter::pushLoadReturnFromSd(lua_State* L, const char* path) {
     if (!sd_mounted_) {
         setLastError("SD not mounted");
@@ -685,6 +722,7 @@ bool LuaInterpreter::pushLoadReturnFromSd(lua_State* L, const char* path) {
     return true;
 }
 
+/** ファイル名が .lua 拡張子で終わるか（大文字小文字無視） */
 bool LuaInterpreter::endsWithLuaExt(const char* name) const {
     const size_t len = strlen(name);
     if (len < 4) {
@@ -696,6 +734,7 @@ bool LuaInterpreter::endsWithLuaExt(const char* name) const {
            tolower(static_cast<unsigned char>(ext[3])) == 'a';
 }
 
+/** 指定パスの .lua を SD から読み込んで1回だけ実行する */
 bool LuaInterpreter::runScriptFromSd(const char* path) {
     char* source = nullptr;
     size_t len = 0;
@@ -734,6 +773,7 @@ bool LuaInterpreter::runScriptFromSd(const char* path) {
     return ok;
 }
 
+/** game_init / game_update / game_draw ループ付きで SD 上のゲームを実行する */
 bool LuaInterpreter::runGameLoopFromSd(const char* path) {
     setLastError(nullptr);
     if (!sd_mounted_) {
@@ -904,6 +944,7 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
     return !failed;
 }
 
+/** SD ルートの優先スクリプトまたは最初の .lua を1回実行する */
 bool LuaInterpreter::executeOnSdRoot() {
     if (!sd_mounted_) {
         printf("Lua: SD not mounted\n");

@@ -22,6 +22,7 @@ extern "C" {
 
 namespace {
 
+/** VN 合成レイヤー用に開いている SD ファイルを閉じる */
 void closeVnLayerFile(VnStreamLayer* layer, bool abandon_open_files) {
     if (layer->open) {
         if (abandon_open_files) {
@@ -42,6 +43,7 @@ void closeVnLayerFile(VnStreamLayer* layer, bool abandon_open_files) {
     layer->height = 0;
 }
 
+/** VN レイヤーのファイルと描画パラメータを初期状態に戻す */
 void resetVnLayer(VnStreamLayer* layer, bool abandon_open_files) {
     closeVnLayerFile(layer, abandon_open_files);
     layer->active = false;
@@ -51,6 +53,7 @@ void resetVnLayer(VnStreamLayer* layer, bool abandon_open_files) {
     layer->keyed = true;
 }
 
+/** Lua テーブルから任意の整数フィールドを読み取る（無ければデフォルト値） */
 bool readOptionalIntField(lua_State* L, int tbl, const char* key, int* out, int default_value) {
     lua_getfield(L, tbl, key);
     if (lua_isinteger(L, -1)) {
@@ -62,6 +65,7 @@ bool readOptionalIntField(lua_State* L, int tbl, const char* key, int* out, int 
     return true;
 }
 
+/** Lua テーブルから任意の RGB565 色フィールドを読み取る */
 bool readOptionalColorField(lua_State* L, int tbl, const char* key, uint16_t* out,
                             uint16_t default_value) {
     lua_getfield(L, tbl, key);
@@ -74,6 +78,7 @@ bool readOptionalColorField(lua_State* L, int tbl, const char* key, uint16_t* ou
     return true;
 }
 
+/** Lua レイヤー指定テーブル（path/x/y/w/h/key）をパースする */
 bool parseLayerTable(lua_State* L, int tbl, char* path_out, size_t path_len, int* dx, int* dy,
                      uint16_t* w, uint16_t* h, uint16_t* key_color, bool* keyed) {
     lua_getfield(L, tbl, "path");
@@ -124,6 +129,7 @@ bool parseLayerTable(lua_State* L, int tbl, char* path_out, size_t path_len, int
     return true;
 }
 
+/** レイヤー用 SD ファイルを開く。パスやサイズ変更時は再オープンする */
 bool ensureLayerOpen(VnStreamLayer* layer, const char* norm, uint16_t w,
                      uint16_t h, const char* tag) {
     if (layer->fail_path[0] != '\0' && std::strcmp(layer->fail_path, norm) == 0) {
@@ -164,6 +170,7 @@ bool ensureLayerOpen(VnStreamLayer* layer, const char* norm, uint16_t w,
     return true;
 }
 
+/** パース済みレイヤー仕様を状態に反映し、必要なら SD ファイルを開く */
 bool applyLayerSpec(LuaInterpreter* interp, VnStreamLayer* layer,
                     const char* rel_path, int dx, int dy, uint16_t w, uint16_t h,
                     uint16_t key_color, bool keyed, const char* tag) {
@@ -184,6 +191,7 @@ bool applyLayerSpec(LuaInterpreter* interp, VnStreamLayer* layer,
     return true;
 }
 
+/** 1 レイヤーについて現在バンド分を SD から読み込み描画する */
 bool drawLayerBand(GameDisplay* disp, VnStreamLayer* layer, int band_index,
                    uint8_t buf_slot) {
     // readBgStreamChunk でバンド行を buf 先頭に載せ、drawImageSub( sy=0 ) で転送。
@@ -225,6 +233,7 @@ bool drawLayerBand(GameDisplay* disp, VnStreamLayer* layer, int band_index,
     return true;
 }
 
+/** 合成状態の全レイヤーを非アクティブにする */
 void deactivateAllLayers(VnStreamComposeState* st) {
     st->bg.active = false;
     for (int i = 0; i < kVnStreamCharLayers; ++i) {
@@ -232,6 +241,7 @@ void deactivateAllLayers(VnStreamComposeState* st) {
     }
 }
 
+/** Lua テーブル（bg/chars）から VN 合成レイヤー状態を同期する */
 bool syncLayersFromTable(LuaInterpreter* interp, VnStreamComposeState* st, lua_State* L,
                          int table_index) {
     deactivateAllLayers(st);
@@ -281,6 +291,7 @@ bool syncLayersFromTable(LuaInterpreter* interp, VnStreamComposeState* st, lua_S
 
 }  // namespace
 
+/** VN 合成用に開いている全 SD ファイルを閉じ、状態をリセットする */
 void vnStreamComposeClose(LuaInterpreter* interp, bool abandon_open_files) {
     if (!interp) {
         return;
@@ -293,6 +304,7 @@ void vnStreamComposeClose(LuaInterpreter* interp, bool abandon_open_files) {
     st->char_count = 0;
 }
 
+/** 現在バンド分を背景→立ち絵の順に SD ストリーム合成描画する */
 bool vnStreamComposeDraw(LuaInterpreter* interp, lua_State* L, int table_index) {
     if (!interp || !L) {
         return false;
@@ -323,6 +335,7 @@ bool vnStreamComposeDraw(LuaInterpreter* interp, lua_State* L, int table_index) 
     return true;
 }
 
+/** machine.draw_vn_stream から呼ばれる VN 合成描画のエントリ */
 bool LuaInterpreter::drawVnStreamCompose(lua_State* L, int table_index) {
     if (!sd_mounted_) {
         return false;
@@ -330,6 +343,7 @@ bool LuaInterpreter::drawVnStreamCompose(lua_State* L, int table_index) {
     return vnStreamComposeDraw(this, L, table_index);
 }
 
+/** vn_stream_ の全 FIL を閉じる（フレーム末・ゲーム終了時） */
 void LuaInterpreter::closeVnStreamCompose(bool abandon_open_files) {
     vnStreamComposeClose(this, abandon_open_files);
 }

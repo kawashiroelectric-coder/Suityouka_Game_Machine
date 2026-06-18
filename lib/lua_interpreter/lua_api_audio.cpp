@@ -13,6 +13,7 @@ extern "C" {
 #include "lauxlib.h"
 }
 
+/** Lua バインディング: machine.play_tone — 指定周波数のトーンを一定時間再生する */
 int luaHostPlayTone(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -25,6 +26,7 @@ int luaHostPlayTone(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.play_wav — SD 上の WAV を BGM としてストリーミング再生する */
 int luaHostPlayWav(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -44,6 +46,7 @@ int luaHostPlayWav(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.play_se — SD 上の WAV を SE として RAM 載せ加算再生する */
 int luaHostPlaySe(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -63,6 +66,7 @@ int luaHostPlaySe(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.stop_sound — BGM / SE / トーンをすべて停止する */
 int luaHostStopSound(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
@@ -72,6 +76,7 @@ int luaHostStopSound(lua_State* L) {
     return 0;
 }
 
+/** Lua バインディング: machine.set_volume — マスター音量（0.0〜1.0）を設定する */
 int luaHostSetVolume(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {

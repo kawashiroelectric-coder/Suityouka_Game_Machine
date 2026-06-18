@@ -26,7 +26,7 @@ public:
         uint32_t frame_interval_ms = 50;
     };
 
-    /** LEFT / Back で抜けるまでブロック */
+    /** システム設定メニューを起動し LEFT/Back で戻るまでループする。ゲーム選択メニューから呼ぶ */
     static void run(const Config& config);
 };
 
