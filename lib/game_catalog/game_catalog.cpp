@@ -351,23 +351,53 @@ bool pickPreviewPath(const char* game_dir, const char* script_path, char* out_pr
     return false;
 }
 
+/** games_dir 直下の 1 エントリがゲーム候補か判定する（登録はしない） */
+bool isGameCatalogCandidate(const char* games_dir, const FILINFO& fno) {
+    if (fno.fname[0] == '.' || (fno.fattrib & AM_DIR) == 0) {
+        if (fno.fname[0] == '.' || !endsWithLuaExt(fno.fname)) {
+            return false;
+        }
+        char script_path[96];
+        return pathJoin(games_dir, fno.fname, script_path, sizeof(script_path));
+    }
+    char game_dir[96];
+    if (!pathJoin(games_dir, fno.fname, game_dir, sizeof(game_dir))) {
+        return false;
+    }
+    char script_path[96];
+    uint32_t script_size = 0;
+    return pickScriptInDir(game_dir, script_path, sizeof(script_path), &script_size);
+}
+
 }  // namespace
 
 /** games_dir 直下のフォルダと .lua を走査しメニュー用エントリ配列を構築する。メニュー読込時に呼ぶ */
-int GameCatalog::loadEntries(const char* games_dir, GameCatalogEntry* out_entries, int max_entries) {
+int GameCatalog::loadEntries(const char* games_dir, GameCatalogEntry* out_entries, int max_entries,
+                           bool* out_truncated) {
+    if (out_truncated) {
+        *out_truncated = false;
+    }
     if (!games_dir || !out_entries || max_entries <= 0) {
         return 0;
     }
 
     int count = 0;
+    bool truncated = false;
     DIR dir;
     FILINFO fno;
     if (f_opendir(&dir, games_dir) != FR_OK) {
         return 0;
     }
 
-    while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != 0 && count < max_entries) {
+    while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != 0) {
         if (fno.fname[0] == '.') {
+            continue;
+        }
+
+        if (count >= max_entries) {
+            if (isGameCatalogCandidate(games_dir, fno)) {
+                truncated = true;
+            }
             continue;
         }
 
@@ -400,6 +430,9 @@ int GameCatalog::loadEntries(const char* games_dir, GameCatalogEntry* out_entrie
         count++;
     }
     f_closedir(&dir);
+    if (out_truncated) {
+        *out_truncated = truncated;
+    }
     return count;
 }
 

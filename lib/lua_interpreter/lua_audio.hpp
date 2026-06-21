@@ -54,6 +54,8 @@ public:
                              uint32_t sample_rate);
     /** BGM / SE / トーンをすべて停止する */
     void stop();
+    /** BGM のみ停止（I2S 出力は維持。メニュー SE 用） */
+    void stopBgm();
     /** マスター音量（0.0〜1.0）を設定する */
     void setVolume(float volume);
 
@@ -119,6 +121,9 @@ private:
     bool fillStreamSlot(StreamSlot& slot);
     /** BGM ファイルから次の1オーディオフレームを読み込む */
     bool readNextBgmFrame(int16_t* out_l, int16_t* out_r);
+    /** ファイル BGM のリサンプル用: target_idx 位置の L/R と次フレームを用意する */
+    bool advanceFileResampleHold(size_t target_idx, int16_t* s0l, int16_t* s0r, int16_t* s1l,
+                                 int16_t* s1r);
     /** 再生開始前にストリームバッファをプリロードする */
     void primeStreamBuffers();
     /** READY 状態のストリームスロット数を返す */
@@ -156,6 +161,10 @@ private:
     size_t bgm_file_frame_next_;
     int16_t bgm_cur_l_;
     int16_t bgm_cur_r_;
+    int16_t bgm_next_l_;
+    int16_t bgm_next_r_;
+    size_t bgm_resample_base_;
+    bool bgm_resample_primed_;
 
     SeChannel se_channels_[kSeChannels];
     uint32_t se_load_counter_;

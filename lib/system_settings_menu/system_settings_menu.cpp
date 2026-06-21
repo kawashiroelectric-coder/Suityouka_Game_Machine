@@ -11,6 +11,8 @@
 #include "config.hpp"
 #include "device_settings.hpp"
 #include "encoder_volume.hpp"
+#include "battery_monitor.hpp"
+#include "menu_cursor_se.hpp"
 #include "pico/stdlib.h"
 #include "st7789_lcd.hpp"
 
@@ -19,16 +21,22 @@ namespace {
 constexpr uint16_t kSettingsBg = Color::rgb(15, 22, 34);
 constexpr uint16_t kSettingsSelBg = Color::rgb(30, 70, 110);
 constexpr int kSettingsPanelW = 260;
-constexpr int kSettingsPanelH = 176;
 constexpr int kSettingsPanelX = (GameConfig::SCREEN_WIDTH - kSettingsPanelW) / 2;
 constexpr int kSettingsPanelY = 34;
-constexpr int kSettingsRowFirstY = kSettingsPanelY + 16;
-constexpr int kSettingsRowPitch = 24;
+constexpr int kSettingsPanelPadTop = 10;
+constexpr int kSettingsPanelPadBottom = 10;
+constexpr int kSettingsRowPitch = 18;
 constexpr int kSettingsRowBgH = 8;
+constexpr int kSettingsRowFirstY = kSettingsPanelY + kSettingsPanelPadTop;
 
-constexpr int kSettingsRowCount = 6;
+constexpr int kSettingsRowCount = 7;
+constexpr int kSettingsPanelH =
+    kSettingsPanelPadTop + kSettingsRowCount * kSettingsRowPitch + kSettingsPanelPadBottom;
 constexpr int kVolumeRowIndex = 2;
 constexpr int kBrightnessRowIndex = 3;
+constexpr int kBatteryLedRowIndex = 4;
+constexpr int kInputTestRowIndex = 5;
+constexpr int kBackRowIndex = 6;
 constexpr int kBacklightStepPercent = 10;
 constexpr int kSettingsFooterTextY = 222;
 constexpr int kSettingsFooterClearY = 216;
@@ -37,6 +45,7 @@ constexpr int kSettingsFooterClearH = GameConfig::SCREEN_HEIGHT - kSettingsFoote
 struct SettingsState {
     int volume_step = EncoderVolumeControl::kVolumeStepMax;
     int brightness_percent = 80;
+    DeviceSettings::BatteryLedMode battery_led_mode = DeviceSettings::BatteryLedMode::AlwaysOn;
     bool editing_brightness = false;
     char row_labels[kSettingsRowCount][48] = {};
 };
@@ -132,6 +141,23 @@ void buildVolumeMeterLine(char* out, size_t out_len, int step) {
                   EncoderVolumeControl::kVolumeSteps);
 }
 
+/** バッテリー LED 表示モード行のラベルを整形する */
+void buildBatteryLedLine(char* out, size_t out_len, DeviceSettings::BatteryLedMode mode) {
+    if (!out || out_len == 0) {
+        return;
+    }
+    if (mode == DeviceSettings::BatteryLedMode::AlwaysOn) {
+        std::snprintf(out, out_len, "Batt LED: Always On");
+        return;
+    }
+    const unsigned long pulse_ms = static_cast<unsigned long>(BatteryConfig::LED_PULSE_MS);
+    if (pulse_ms >= 1000u && (pulse_ms % 1000u) == 0u) {
+        std::snprintf(out, out_len, "Batt LED: Pulse %lus", pulse_ms / 1000u);
+    } else {
+        std::snprintf(out, out_len, "Batt LED: Pulse %lums", pulse_ms);
+    }
+}
+
 /** 全設定行の表示ラベルを最新状態で再構築する。音量・明るさ変更後に呼ぶ */
 void refreshSettingsRowLabels(SettingsState& state) {
     std::snprintf(state.row_labels[0], sizeof(state.row_labels[0]), "WiFi: [CONNECTED]");
@@ -139,8 +165,9 @@ void refreshSettingsRowLabels(SettingsState& state) {
     buildVolumeMeterLine(state.row_labels[2], sizeof(state.row_labels[2]), state.volume_step);
     buildMeterLine(state.row_labels[3], sizeof(state.row_labels[3]), "Brightness:",
                    state.brightness_percent);
-    std::snprintf(state.row_labels[4], sizeof(state.row_labels[4]), "Input Test Mode");
-    std::snprintf(state.row_labels[5], sizeof(state.row_labels[5]), "Back");
+    buildBatteryLedLine(state.row_labels[4], sizeof(state.row_labels[4]), state.battery_led_mode);
+    std::snprintf(state.row_labels[5], sizeof(state.row_labels[5]), "Input Test Mode");
+    std::snprintf(state.row_labels[6], sizeof(state.row_labels[6]), "Back");
 }
 
 /** 指定行の表示ラベル文字列を返す。行描画時に使う */
@@ -163,6 +190,24 @@ void syncBrightnessFromLcd(ST7789_LCD* lcd, SettingsState& state) {
 /** エンコーダ音量ステップを状態へ同期しラベルを更新する。画面初期化時に呼ぶ */
 void syncVolumeFromEncoder(SettingsState& state) {
     state.volume_step = EncoderVolumeControl::volumeStep();
+    refreshSettingsRowLabels(state);
+}
+
+/** 永続設定からバッテリー LED モードを状態へ同期する */
+void syncBatteryLedFromSettings(SettingsState& state) {
+    state.battery_led_mode = DeviceSettings::batteryLedMode();
+    refreshSettingsRowLabels(state);
+}
+
+/** バッテリー LED 表示モードを切り替え、LED へ即反映する */
+void toggleBatteryLedMode(SettingsState& state) {
+    const DeviceSettings::BatteryLedMode next =
+        (state.battery_led_mode == DeviceSettings::BatteryLedMode::AlwaysOn)
+            ? DeviceSettings::BatteryLedMode::PulseOnChange
+            : DeviceSettings::BatteryLedMode::AlwaysOn;
+    DeviceSettings::setBatteryLedMode(next);
+    state.battery_led_mode = next;
+    BatteryMonitor::onDisplayModeChanged();
     refreshSettingsRowLabels(state);
 }
 
@@ -239,6 +284,7 @@ void initSettingsScreen(ST7789_LCD* lcd, SettingsUiCache& cache, SettingsState& 
     state.editing_brightness = false;
     syncVolumeFromEncoder(state);
     syncBrightnessFromLcd(lcd, state);
+    syncBatteryLedFromSettings(state);
     cache.ready = false;
     cache.prev_cursor = -1;
     drawSettingsStaticChrome(lcd, state.editing_brightness);
@@ -283,6 +329,7 @@ void SystemSettingsMenu::run(const Config& config) {
         bool cursor_changed = false;
         bool brightness_changed = false;
         bool volume_changed = false;
+        bool battery_led_changed = false;
         bool ui_changed = false;
 
         const int encoder_volume_step = EncoderVolumeControl::volumeStep();
@@ -324,11 +371,14 @@ void SystemSettingsMenu::run(const Config& config) {
                     state.editing_brightness = true;
                     drawSettingsFooterHint(config.lcd, true);
                     ui_changed = true;
-                } else if (cursor == 4 && config.on_run_input_test) {
+                } else if (cursor == kBatteryLedRowIndex) {
+                    toggleBatteryLedMode(state);
+                    battery_led_changed = true;
+                } else if (cursor == kInputTestRowIndex && config.on_run_input_test) {
                     config.on_run_input_test(config.user_data);
                     waitForButtonRelease(config.buttons);
                     initSettingsScreen(config.lcd, cache, state, cursor);
-                } else if (cursor == 5) {
+                } else if (cursor == kBackRowIndex) {
                     break;
                 }
             }
@@ -336,12 +386,16 @@ void SystemSettingsMenu::run(const Config& config) {
 
         if (brightness_changed || ui_changed) {
             drawSettingsRow(config.lcd, state, kBrightnessRowIndex, cursor);
+        } else if (battery_led_changed) {
+            drawSettingsRow(config.lcd, state, kBatteryLedRowIndex, cursor);
         } else if (volume_changed) {
             drawSettingsRow(config.lcd, state, kVolumeRowIndex, cursor);
         } else if (cursor_changed) {
+            playMenuCursorSe(config.audio);
             updateSettingsCursor(config.lcd, cache, state, old_cursor, cursor);
         }
         sleep_ms(config.frame_interval_ms);
     }
+    DeviceSettings::flushPending();
     waitForButtonRelease(config.buttons);
 }

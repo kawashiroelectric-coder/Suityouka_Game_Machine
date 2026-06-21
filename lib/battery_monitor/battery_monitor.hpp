@@ -25,6 +25,15 @@ public:
     /** 直近の残量 LED マスク（下位 3bit）を返す */
     static uint8_t lastLedMask();
 
+    /** true の間は tick が LED を更新しない（入力テスト等で手動制御する） */
+    static void setLedUpdatePaused(bool paused);
+    /** LED 自動更新が一時停止中か */
+    static bool isLedUpdatePaused();
+    /** 入力テスト終了後など、設定に従った LED 表示へ復帰する */
+    static void resumeLedAutoUpdate();
+    /** 表示モード変更時に LED 表示を即反映する */
+    static void onDisplayModeChanged();
+
 private:
     /** 電圧（V）から残量 LED マスクへ変換する */
     static uint8_t voltageToLedMask(float voltage_v);

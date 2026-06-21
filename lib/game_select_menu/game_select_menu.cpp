@@ -11,6 +11,7 @@
 #include "config.hpp"
 #include "game_catalog.hpp"
 #include "heap_budget.hpp"
+#include "menu_cursor_se.hpp"
 #include "pico/stdlib.h"
 #include "sd_service.hpp"
 #include "st7789_lcd.hpp"
@@ -18,7 +19,6 @@
 
 namespace {
 
-constexpr int kMaxVisibleRows = 10;
 constexpr int kMenuListFirstRowY = 26;
 constexpr int kMenuRowPitch = 18;
 constexpr int kMenuRowBgH = 8;
@@ -36,6 +36,9 @@ constexpr int kMenuDividerYTop = kMenuTopChromeH;
 constexpr int kMenuContentY0 = kMenuDividerYTop + 1;
 constexpr int kMenuDividerYBottom = GameConfig::SCREEN_HEIGHT - kMenuBottomChromeH - 1;
 constexpr int kMenuContentY1 = kMenuDividerYBottom - 1;
+constexpr int kMaxVisibleRows =
+    (kMenuContentY1 - kMenuListFirstRowY + 1) / kMenuRowPitch;
+static_assert(kMaxVisibleRows >= 4, "game list area too small");
 constexpr int kMenuBottomChromeY = kMenuDividerYBottom + 1;
 constexpr int kMenuContentH = kMenuContentY1 - kMenuContentY0 + 1;
 constexpr int kMenuListDividerX = kMenuListX + kMenuListW + 7;
@@ -65,6 +68,8 @@ constexpr uint32_t kTitleScrollHoldMs = 600;
 constexpr uint32_t kTitleScrollStepMs = 180;
 constexpr uint32_t kTitleScrollLoopGapMs = 500;
 constexpr uint32_t kSdMountRetryMs = 2000;
+constexpr size_t kGameCatalogByteSize =
+    static_cast<size_t>(GameCatalog::kMaxEntries) * sizeof(GameCatalogEntry);
 
 /** メニュー表示中だけ HeapBudget から確保するプレビュー RGB565 バッファ */
 struct PreviewPixelBuffer {
@@ -105,16 +110,30 @@ struct PreviewPixelBuffer {
 };
 
 struct MenuState {
-    GameCatalogEntry games[GameCatalog::kMaxEntries];
+    GameCatalogEntry* games = nullptr;
     int count = 0;
     int selected = 0;
+    int view_offset = 0;
+    bool catalog_truncated = false;
     int loaded_preview_index = -1;
     bool preview_loaded = false;
+
+    ~MenuState() {
+        if (games) {
+            HeapBudget::release(games, kGameCatalogByteSize);
+            games = nullptr;
+        }
+    }
+
+    MenuState() = default;
+    MenuState(const MenuState&) = delete;
+    MenuState& operator=(const MenuState&) = delete;
 };
 
 struct MenuUiCache {
     bool ready = false;
     int prev_selected = -1;
+    int prev_view_offset = -1;
     char prev_scroll_title[48] = {};
 };
 
@@ -187,19 +206,96 @@ void waitForButtonRelease(ButtonInput* buttons) {
     }
 }
 
-/** SD 上の games_dir を走査しメニュー用ゲーム一覧を再構築する。マウント直後や更新時に呼ぶ */
-void loadGameMenuEntries(MenuState& state, const char* games_dir) {
+/** 一覧末尾に上限メッセージ行を出すか（256 件超かつ最下部表示時） */
+bool showTruncationRow(const MenuState& state) {
+    if (!state.catalog_truncated || state.count <= 0) {
+        return false;
+    }
+    const int game_rows = kMaxVisibleRows - 1;
+    return state.view_offset + game_rows >= state.count;
+}
+
+/** ゲーム行として使える可視行数（上限メッセージ行分を除く） */
+int visibleGameRowCount(const MenuState& state) {
+    return showTruncationRow(state) ? kMaxVisibleRows - 1 : kMaxVisibleRows;
+}
+
+/** selected が常に可視範囲に入るよう view_offset を更新する */
+void syncViewOffset(MenuState& state) {
+    if (state.count <= 0) {
+        state.view_offset = 0;
+        return;
+    }
+    for (int pass = 0; pass < 2; pass++) {
+        const int game_rows = visibleGameRowCount(state);
+        int max_offset = 0;
+        if (state.count > game_rows) {
+            max_offset = state.count - game_rows;
+        }
+        if (state.selected < state.view_offset) {
+            state.view_offset = state.selected;
+        } else if (state.selected >= state.view_offset + game_rows) {
+            state.view_offset = state.selected - game_rows + 1;
+        }
+        if (state.view_offset > max_offset) {
+            state.view_offset = max_offset;
+        }
+        if (state.view_offset < 0) {
+            state.view_offset = 0;
+        }
+    }
+}
+
+/** ゲーム一覧バッファを HeapBudget へ返却する（ゲーム起動前・SD 抜去時） */
+void releaseGameCatalog(MenuState& state) {
+    if (state.games) {
+        HeapBudget::release(state.games, kGameCatalogByteSize);
+        state.games = nullptr;
+    }
     state.count = 0;
     state.selected = 0;
+    state.view_offset = 0;
+    state.catalog_truncated = false;
     state.loaded_preview_index = -1;
     state.preview_loaded = false;
-    state.count =
-        GameCatalog::loadEntries(games_dir, state.games, GameCatalog::kMaxEntries);
+}
+
+/** ゲーム一覧バッファを HeapBudget から確保する（メニュー表示中のみ保持） */
+bool ensureGameCatalogBuffer(MenuState& state) {
+    if (state.games) {
+        return true;
+    }
+    void* ptr = nullptr;
+    if (!HeapBudget::tryAlloc(kGameCatalogByteSize, &ptr)) {
+        printf("GameSelectMenu: catalog alloc failed (%u bytes)\n",
+               static_cast<unsigned>(kGameCatalogByteSize));
+        return false;
+    }
+    state.games = static_cast<GameCatalogEntry*>(ptr);
+    std::memset(state.games, 0, kGameCatalogByteSize);
+    return true;
+}
+
+/** SD 上の games_dir を走査しメニュー用ゲーム一覧を再構築する。マウント直後や更新時に呼ぶ */
+void loadGameMenuEntries(MenuState& state, const char* games_dir) {
+    state.selected = 0;
+    state.view_offset = 0;
+    state.catalog_truncated = false;
+    state.loaded_preview_index = -1;
+    state.preview_loaded = false;
+    state.count = 0;
+    if (!ensureGameCatalogBuffer(state)) {
+        return;
+    }
+    std::memset(state.games, 0, kGameCatalogByteSize);
+    state.count = GameCatalog::loadEntries(games_dir, state.games, GameCatalog::kMaxEntries,
+                                           &state.catalog_truncated);
+    syncViewOffset(state);
 }
 
 /** 選択中ゲームのプレビュー画像を SD から読み込む。右パネル描画の直前に呼ぶ（キャッシュあり） */
 bool loadPreviewForSelected(MenuState& state, PreviewPixelBuffer& preview_buf) {
-    if (state.selected < 0 || state.selected >= state.count) {
+    if (!state.games || state.selected < 0 || state.selected >= state.count) {
         state.preview_loaded = false;
         state.loaded_preview_index = -1;
         return false;
@@ -372,28 +468,70 @@ bool serviceSdHotplug(const GameSelectMenu::Config& config, uint32_t now_ms,
     return *sd_state_changed;
 }
 
-/** ゲーム一覧の 1 行を描画または更新する。初期表示・カーソル移動時に呼ぶ */
-void drawMenuListRow(ST7789_LCD* lcd, const MenuState& state, int index) {
-    if (!lcd || index < 0 || index >= state.count || index >= kMaxVisibleRows) {
+/** 左リスト領域を背景色でクリアする */
+void clearMenuListPanel(ST7789_LCD* lcd) {
+    if (!lcd) {
         return;
     }
-    const int row_top = kMenuListFirstRowY + index * kMenuRowPitch;
+    lcd->fillRect(kMenuListX, kMenuListFirstRowY, kMenuListW,
+                  kMenuContentY1 - kMenuListFirstRowY + 1, kMenuBg);
+}
+
+/** 256 件上限の案内行（選択不可）を描く */
+void drawTruncationNoticeRow(ST7789_LCD* lcd, int visible_slot) {
+    if (!lcd || visible_slot < 0 || visible_slot >= kMaxVisibleRows) {
+        return;
+    }
+    const int row_top = kMenuListFirstRowY + visible_slot * kMenuRowPitch;
+    const int bg_y = row_top + (kMenuRowPitch - kMenuRowBgH) / 2;
+    lcd->fillRect(kMenuListX, bg_y, kMenuListW, kMenuRowBgH, kMenuRowBg);
+    lcd->drawTextBg(kMenuListX + 2, bg_y, " ", Color::GRAY, kMenuRowBg);
+    lcd->drawTextBg(kMenuListX + 12, bg_y, "Limit:256 max", Color::GRAY, kMenuRowBg);
+}
+
+/** ゲーム一覧の 1 行を描画する（game_index = 実際のゲーム番号 0 始まり） */
+void drawMenuGameRow(ST7789_LCD* lcd, const MenuState& state, int visible_slot, int game_index) {
+    if (!lcd || !state.games || visible_slot < 0 || visible_slot >= kMaxVisibleRows ||
+        game_index < 0 || game_index >= state.count) {
+        return;
+    }
+    const int row_top = kMenuListFirstRowY + visible_slot * kMenuRowPitch;
     const int bg_y = row_top + (kMenuRowPitch - kMenuRowBgH) / 2;
     char title_part[40];
     char line[48];
-    const int number = index + 1;
+    const int number = game_index + 1;
     char num_prefix[8];
     const int prefix_len = std::snprintf(num_prefix, sizeof(num_prefix), "%d.", number);
     const int max_title_chars =
         kMenuListTitleChars - prefix_len > 0 ? kMenuListTitleChars - prefix_len : 1;
-    buildTruncatedTitle(state.games[index].title, title_part, sizeof(title_part), max_title_chars);
+    buildTruncatedTitle(state.games[game_index].title, title_part, sizeof(title_part),
+                        max_title_chars);
     std::snprintf(line, sizeof(line), "%d.%s", number, title_part);
-    const bool selected = (index == state.selected);
+    const bool selected = (game_index == state.selected);
     const uint16_t fg = selected ? Color::rgb(255, 180, 70) : Color::WHITE;
     const uint16_t bg = selected ? kMenuSelBg : kMenuRowBg;
     lcd->fillRect(kMenuListX, bg_y, kMenuListW, kMenuRowBgH, bg);
     lcd->drawTextBg(kMenuListX + 2, bg_y, selected ? ">" : " ", fg, bg);
     lcd->drawTextBg(kMenuListX + 12, bg_y, line, fg, bg);
+}
+
+/** 左リスト全体を view_offset に従って再描画する */
+void drawMenuListPanel(ST7789_LCD* lcd, const MenuState& state) {
+    if (!lcd || !state.games || state.count <= 0) {
+        return;
+    }
+    clearMenuListPanel(lcd);
+    const int game_rows = visibleGameRowCount(state);
+    const bool truncation = showTruncationRow(state);
+    for (int slot = 0; slot < game_rows; slot++) {
+        const int game_index = state.view_offset + slot;
+        if (game_index < state.count) {
+            drawMenuGameRow(lcd, state, slot, game_index);
+        }
+    }
+    if (truncation) {
+        drawTruncationNoticeRow(lcd, kMaxVisibleRows - 1);
+    }
 }
 
 /** ゲーム描画後の DMA 転送を完了させメニュー直描画の準備をする。メニュー再表示の直前に呼ぶ */
@@ -466,7 +604,7 @@ void drawRightPreviewPanel(const GameSelectMenu::Config& config, MenuState& stat
 
 /** 選択中ゲームのスクリプトサイズ行を右パネルに描く。選択変更時に呼ぶ */
 void drawRightSizeLine(ST7789_LCD* lcd, const MenuState& state) {
-    if (!lcd || state.selected < 0 || state.selected >= state.count) {
+    if (!lcd || !state.games || state.selected < 0 || state.selected >= state.count) {
         return;
     }
     const GameCatalogEntry& e = state.games[state.selected];
@@ -479,7 +617,7 @@ void drawRightSizeLine(ST7789_LCD* lcd, const MenuState& state) {
 
 /** 右パネルのスクロールタイトルを描画する。変化があったとき true を返す。アニメ tick 時に呼ぶ */
 bool drawRightTitleScroll(ST7789_LCD* lcd, MenuState& state, MenuUiCache& cache) {
-    if (!lcd || state.selected < 0 || state.selected >= state.count) {
+    if (!lcd || !state.games || state.selected < 0 || state.selected >= state.count) {
         return false;
     }
     char title_view[48];
@@ -509,16 +647,17 @@ void initGameSelectMenu(const GameSelectMenu::Config& config, MenuState& state, 
     fflush(stdout);
     cache.ready = false;
     cache.prev_selected = -1;
+    cache.prev_view_offset = -1;
     cache.prev_scroll_title[0] = '\0';
     drawMenuStaticChrome(lcd);
-    for (int i = 0; i < state.count && i < kMaxVisibleRows; i++) {
-        drawMenuListRow(lcd, state, i);
-    }
+    syncViewOffset(state);
+    drawMenuListPanel(lcd, state);
     drawRightTitleScroll(lcd, state, cache);
     drawRightSizeLine(lcd, state);
     drawRightPreviewPanel(config, state, preview_buf);
     cache.ready = true;
     cache.prev_selected = state.selected;
+    cache.prev_view_offset = state.view_offset;
     printf("[MENU-DBG] initGameSelectMenu: done\n");
     fflush(stdout);
 }
@@ -531,10 +670,29 @@ void updateGameSelectSelection(const GameSelectMenu::Config& config, MenuState& 
     if (!lcd) {
         return;
     }
-    if (old_selected >= 0 && old_selected < state.count) {
-        drawMenuListRow(lcd, state, old_selected);
+    syncViewOffset(state);
+    if (state.view_offset != cache.prev_view_offset) {
+        drawMenuListPanel(lcd, state);
+    } else {
+        const auto slot_of = [&](int game_index) -> int {
+            if (game_index < state.view_offset) {
+                return -1;
+            }
+            const int slot = game_index - state.view_offset;
+            return slot < visibleGameRowCount(state) ? slot : -1;
+        };
+        const int old_slot = slot_of(old_selected);
+        const int new_slot = slot_of(state.selected);
+        if (old_slot >= 0) {
+            drawMenuGameRow(lcd, state, old_slot, old_selected);
+        }
+        if (new_slot >= 0) {
+            drawMenuGameRow(lcd, state, new_slot, state.selected);
+        }
+        if (showTruncationRow(state)) {
+            drawTruncationNoticeRow(lcd, kMaxVisibleRows - 1);
+        }
     }
-    drawMenuListRow(lcd, state, state.selected);
     state.loaded_preview_index = -1;
     state.preview_loaded = false;
     cache.prev_scroll_title[0] = '\0';
@@ -542,13 +700,16 @@ void updateGameSelectSelection(const GameSelectMenu::Config& config, MenuState& 
     drawRightSizeLine(lcd, state);
     drawRightPreviewPanel(config, state, preview_buf);
     cache.prev_selected = state.selected;
+    cache.prev_view_offset = state.view_offset;
 }
 
 /** システム設定メニューを起動する。LEFT ボタン押下時に呼ぶ */
 void runSettingsFromMenu(const GameSelectMenu::Config& config) {
+    playMenuCursorSe(config.audio);
     SystemSettingsMenu::Config settings = {};
     settings.lcd = config.lcd;
     settings.buttons = config.buttons;
+    settings.audio = config.audio;
     settings.on_frame = config.on_frame;
     settings.on_run_input_test = config.on_run_input_test;
     settings.user_data = config.user_data;
@@ -594,6 +755,7 @@ bool GameSelectMenu::run(const Config& config) {
         } else if (state.selected >= state.count && state.count > 0) {
             state.selected = state.count - 1;
         }
+        syncViewOffset(state);
 
         if (state.count <= 0) {
             drawEmptyGamesScreen(config.lcd, SdService::isMounted());
@@ -619,11 +781,9 @@ bool GameSelectMenu::run(const Config& config) {
                     } else if (state.selected >= state.count && state.count > 0) {
                         state.selected = state.count - 1;
                     }
+                    syncViewOffset(state);
                 } else {
-                    state.count = 0;
-                    state.selected = 0;
-                    state.loaded_preview_index = -1;
-                    state.preview_loaded = false;
+                    releaseGameCatalog(state);
                 }
                 if (state.count <= 0) {
                     drawEmptyGamesScreen(config.lcd, SdService::isMounted());
@@ -659,6 +819,7 @@ bool GameSelectMenu::run(const Config& config) {
             const bool selection_changed =
                 state.count > 0 && ui_cache.ready && state.selected != ui_cache.prev_selected;
             if (selection_changed) {
+                playMenuCursorSe(config.audio);
                 updateGameSelectSelection(config, state, ui_cache, old_selected, preview_buf);
             }
             if (config.buttons->wasPressed(Button::NEAR) ||
@@ -671,7 +832,8 @@ bool GameSelectMenu::run(const Config& config) {
                 } else if (state.count <= 0) {
                     loadGameMenuEntries(state, games_dir);
                     need_full_redraw = true;
-                } else if (config.on_run_game) {
+                } else if (config.on_run_game && state.games && state.selected >= 0 &&
+                           state.selected < state.count) {
                     std::snprintf(pending_launch_path, sizeof(pending_launch_path), "%s",
                                   state.games[state.selected].script_path);
                     resume_selected = state.selected;
@@ -691,6 +853,7 @@ bool GameSelectMenu::run(const Config& config) {
         }
 
         preview_buf.release();
+        releaseGameCatalog(state);
         if (pending_launch && config.on_run_game) {
             printf("[MENU-DBG] menu: calling on_run_game %s\n", pending_launch_path);
             fflush(stdout);

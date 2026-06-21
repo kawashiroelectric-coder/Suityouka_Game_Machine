@@ -13,6 +13,14 @@ class DeviceSettings {
 public:
     static constexpr int kDefaultBrightnessPercent = 80;
 
+    /** バッテリー残量 LED の表示モード */
+    enum class BatteryLedMode : uint8_t {
+        /** 常に現在の残量 LED を表示 */
+        AlwaysOn = 0,
+        /** 起動時・残量変化時のみ LED_PULSE_MS だけ表示 */
+        PulseOnChange = 1,
+    };
+
     /** 起動時にフラッシュから音量・輝度を読み込む */
     static void load();
     /** 遅延フラッシュ書き込み（メインループから定期的に呼ぶ） */
@@ -25,6 +33,12 @@ public:
     static void setVolumeStep(int step);
     /** LCD 輝度（%）を設定し遅延フラッシュ保存を予約する */
     static void setBrightnessPercent(int percent);
+    /** バッテリー LED 表示モードを返す */
+    static BatteryLedMode batteryLedMode();
+    /** バッテリー LED 表示モードを設定し遅延フラッシュ保存を予約する */
+    static void setBatteryLedMode(BatteryLedMode mode);
+    /** 未保存なら即時フラッシュ（メニュー退場時など） */
+    static void flushPending();
 };
 
 #endif  // DEVICE_SETTINGS_HPP

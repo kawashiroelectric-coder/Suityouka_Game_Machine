@@ -59,6 +59,7 @@ private:
     volatile bool playing_;
     volatile bool start_requested_;
     volatile bool stop_requested_;
+    volatile bool dma_in_flight_;
 
     PIO pio_;
     uint sm_;
@@ -74,8 +75,6 @@ private:
 
     static AudioOutput* instance_;
 
-    /** DMA 完了割り込みハンドラ（IRQ から呼ばれる） */
-    static void dmaIrqHandler();
     /** DMA 完了時に次バッファを充填して再キックする */
     void onDmaComplete();
     /** コールバック結果を 32bit ステレオ DMA バッファへ変換する */

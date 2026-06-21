@@ -55,6 +55,7 @@ add_executable(Suityouka_Game_Machine
     lib/game_catalog/game_catalog.cpp
     lib/game_select_menu/game_select_menu.cpp
     lib/system_settings_menu/system_settings_menu.cpp
+    lib/boot_splash/boot_splash.cpp
     lib/encoder_volume/encoder_volume.cpp
     lib/device_settings/device_settings.cpp
     
@@ -119,6 +120,7 @@ target_include_directories(Suityouka_Game_Machine PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/lib/input_test_mode # SD 未検知時入力テスト
     ${CMAKE_CURRENT_LIST_DIR}/lib/game_catalog    # /games ゲーム検出
     ${CMAKE_CURRENT_LIST_DIR}/lib/game_select_menu # ゲーム選択メニュー
+    ${CMAKE_CURRENT_LIST_DIR}/lib/boot_splash      # 起動スプラッシュ
     ${CMAKE_CURRENT_LIST_DIR}/lib/system_settings_menu # システム設定メニュー
     ${CMAKE_CURRENT_LIST_DIR}/lib/encoder_volume  # エンコーダ音量
     ${CMAKE_CURRENT_LIST_DIR}/lib/device_settings # フラッシュ永続設定
@@ -133,7 +135,8 @@ target_include_directories(Suityouka_Game_Machine PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/lib/ST7789         # ST7789 LCD ドライバヘッダー
     ${CMAKE_CURRENT_LIST_DIR}/lib/pcm5102_i2s    # PCM5102 32bit I2S PIO
     ${CMAKE_CURRENT_LIST_DIR}/lib/sd_service       # SD マウント管理
-    ${CMAKE_CURRENT_LIST_DIR}/lib/sd_card_hw     # SD ピン定義 (sd_pins.h)
+    ${CMAKE_CURRENT_LIST_DIR}/lib/sd_card_hw       # hw_config.h / sd_debug.h
+    ${CMAKE_CURRENT_LIST_DIR}/assets               # GameLogo / boot_chime 等
     # Lua headers will be provided by FetchContent-built library
 )
 
@@ -205,6 +208,7 @@ target_link_libraries(Suityouka_Game_Machine
     hardware_gpio     # GPIO制御
     hardware_pwm      # LCD バックライト (BLK)
     hardware_flash    # 音量・輝度の永続化
+    pico_flash        # Core1 稼働中の安全なフラッシュ書き込み
 
     # SDカード/FatFSライブラリ
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico

@@ -7,6 +7,7 @@
 //   main()
 //     → ハードウェア初期化（I2C / SD / LCD+DMA / 音声 / エンコーダ）
 //     → bindLuaRuntimeToHardware() … LuaInterpreter に GameDisplay・入力を接続
+//     → BootSplash::run() … 起動ロゴ＋ジングル（任意ボタンでスキップ）
 //     → GameSelectMenu::run() … ゲーム選択メニュー（ここで永久ループ）
 //
 // 【ゲーム起動の流れ】（メニューから .lua を選んだとき）
@@ -45,6 +46,7 @@
 #include "device_settings.hpp"
 #include "sd_service.hpp"
 #include "game_select_menu.hpp"
+#include "boot_splash.hpp"
 
 #include <cstring>
 
@@ -108,7 +110,7 @@ static void showGameStartFailureScreen(const char* script_path);
 static void waitForAllButtonsReleased(ButtonInput* btn_input, const char* log_tag);
 
 // ---------------------------------------------------------------------------
-// 入力テスト画面（SD 未マウント時など）
+// 入力テスト画面
 // ---------------------------------------------------------------------------
 
 static void inputTestIdleFrameTick(void* user_data);
@@ -462,28 +464,35 @@ int main() {
     initLcdSpiDma(*lcd);
     bindLuaRuntimeToHardware();
 
-    bootScreenClear(Color::GRAY);
-    bootScreenDrawText(10, 100, "LCD init", Color::WHITE, Color::BLACK);
-
     // --- 音声（Core1 I2S）---
     printf("音声出力初期化中 (PCM5102 I2S)...\n");
     BatteryMonitor::attach(buttons);
     audio = new AudioOutput();
     if (!audio->init()) {
-        bootScreenDrawText(10, 120, "Audio fail", Color::RED, Color::GRAY);
+        printf("Audio init failed\n");
     } else {
         g_luaInterpreter.setAudioOutput(audio);
-        bootScreenDrawText(10, 120, "Audio I2S OK", Color::WHITE, Color::GRAY);
     }
 
     EncoderVolumeControl::init(audio, &g_luaInterpreter.audioEngine());
     EncoderVolumeControl::restoreVolumeStep(DeviceSettings::volumeStep());
     if (!EncoderVolumeControl::initEncoder()) {
-        bootScreenDrawText(10, 132, "Enc IRQ fail", Color::ORANGE, Color::GRAY);
+        printf("Encoder IRQ init failed\n");
     }
 
     printf("=== 初期化完了 ===\n");
-    bootScreenDrawText(10, 140, "Game select menu", Color::WHITE, Color::BLACK);
+
+    // --- 起動スプラッシュ（ロゴ＋ジングル）→ ゲーム選択メニュー ---
+    BootSplash::Config splash = {};
+    splash.lcd = lcd;
+    splash.display = &g_gameDisplay;
+    splash.buttons = buttons;
+    splash.audio = &g_luaInterpreter.audioEngine();
+    splash.on_frame = menuIdleFrameTick;
+    splash.dma_channel = lcd_spi_dma_channel;
+    splash.dma_buffer = lcd_spi_dma_buffer;
+    splash.dma_buffer_size = sizeof(lcd_spi_dma_buffer);
+    BootSplash::run(splash);
 
     g_gameDisplay.waitForTransferComplete();
     lcd->finishDrawRawImageDMA();
@@ -492,6 +501,7 @@ int main() {
     GameSelectMenu::Config menu = {};
     menu.lcd = lcd;
     menu.buttons = buttons;
+    menu.audio = &g_luaInterpreter.audioEngine();
     menu.games_dir = GameConfig::GAMES_DIR;
     menu.on_frame = menuIdleFrameTick;
     menu.on_run_game = menuLaunchGameCallback;

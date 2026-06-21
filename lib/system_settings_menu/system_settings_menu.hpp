@@ -10,6 +10,7 @@
 
 class ST7789_LCD;
 class ButtonInput;
+class LuaAudio;
 
 /** WiFi / 音量等のシステム設定画面 */
 class SystemSettingsMenu {
@@ -20,6 +21,7 @@ public:
     struct Config {
         ST7789_LCD* lcd = nullptr;
         ButtonInput* buttons = nullptr;
+        LuaAudio* audio = nullptr;
         FrameCallback on_frame = nullptr;
         RunInputTestCallback on_run_input_test = nullptr;
         void* user_data = nullptr;

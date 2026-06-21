@@ -60,10 +60,11 @@ int luaHostLcdText(lua_State* L) {
     const lua_Integer y = luaL_checkinteger(L, 2);
     const char* text = luaL_checkstring(L, 3);
     const uint16_t fg = (lua_gettop(L) >= 4) ? luaApiParseColor(L, 4) : Color::WHITE;
-    const uint16_t bg = (lua_gettop(L) >= 5) ? luaApiParseColor(L, 5) : Color::BLACK;
+    const bool use_bg = (lua_gettop(L) >= 5);
+    const uint16_t bg = use_bg ? luaApiParseColor(L, 5) : 0;
 
     if (hooks.display) {
-        hooks.display->drawTextBg(static_cast<int>(x), static_cast<int>(y), text, fg, bg);
+        hooks.display->drawTextBg(static_cast<int>(x), static_cast<int>(y), text, fg, bg, use_bg);
         return 0;
     }
     if (hooks.draw_text_bg) {

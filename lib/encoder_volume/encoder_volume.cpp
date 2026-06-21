@@ -71,13 +71,15 @@ void EncoderVolumeControl::applyVolume() {
     } else if (g_audio) {
         g_audio->setVolume(vol);
     }
+    if (vol <= 0.0f) {
+        printf("EncoderVolume: WARNING volume step=%d -> output muted (0.0)\n", g_volume_step);
+    }
 }
 
 /** 音量変更時に音声反映・フラッシュ保存予約・シリアルログを行う */
 void EncoderVolumeControl::onVolumeChanged() {
     applyVolume();
     DeviceSettings::setVolumeStep(g_volume_step);
-    printf("Volume: step %d/%d (%.2f)\n", g_volume_step + 1, kVolumeSteps, volumeFloat());
 }
 
 /** 起動時にフラッシュから読んだ音量ステップを復元する（フラッシュには書かない） */

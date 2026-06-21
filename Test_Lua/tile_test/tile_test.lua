@@ -52,7 +52,24 @@ local on_ground = false
 
 local stars_total = 0
 local stars_left = 0
-local state = "play" -- play | win | dead
+local state = "title" -- title | play | win | dead
+
+local function draw_center_text(y, text, fg, bg)
+  local x = (W - #text * 8) // 2
+  machine.text(x, y, text, fg, bg)
+end
+
+local function draw_title_screen()
+  local bg = machine.rgb(12, 18, 40)
+  machine.fill_rect(0, 0, W, H, bg)
+  draw_center_text(72, "STAR HOP", machine.rgb(255, 220, 100), bg)
+  draw_center_text(96, "TILE SCROLL DEMO", machine.rgb(180, 200, 230), bg)
+  if (math.floor(machine.time_ms() / 500) % 2) == 0 then
+    draw_center_text(136, "PRESS BUTTON", machine.rgb(255, 255, 255), bg)
+  end
+  draw_center_text(160, "L/R MOVE  UP/NEAR JUMP", machine.rgb(140, 160, 190), bg)
+  draw_center_text(184, "Collect all stars!", machine.rgb(120, 140, 170), bg)
+end
 
 local function map_index(col, row)
     return row * MAP_COLS + col + 1
@@ -324,11 +341,23 @@ function game_init()
         print("tile_test: load tiles/player.bin failed")
     end
 
-    reset_game()
+    -- タイトル表示用にマップだけ構築（プレイ開始まで state=title）
+    ground_map = build_level_map()
+    machine.set_layer_tiles(0, ground_map)
+    stars_total = count_stars()
+    stars_left = stars_total
+    state = "title"
     print("tile_test: init OK")
 end
 
 function game_update(dt)
+    if state == "title" then
+        if machine.jump_pressed() then
+            reset_game()
+        end
+        return false
+    end
+
     if state ~= "play" then
         if machine.jump_pressed() then
             reset_game()
@@ -397,6 +426,11 @@ function game_update(dt)
 end
 
 function game_draw()
+    if state == "title" then
+        draw_title_screen()
+        return
+    end
+
     if player_id then
         local sx = math.floor(player_x - scroll_x)
         local sy = math.floor(player_y)

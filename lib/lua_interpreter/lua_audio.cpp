@@ -35,6 +35,19 @@ int32_t clampSample(int32_t v) {
     return v;
 }
 
+/** 2 点間を線形補間して int16_t サンプルを得る（リサンプル用） */
+int16_t lerpSample16(int16_t a, int16_t b, double frac) {
+    if (frac <= 0.0) {
+        return a;
+    }
+    if (frac >= 1.0) {
+        return b;
+    }
+    const double v =
+        static_cast<double>(a) + (static_cast<double>(b) - static_cast<double>(a)) * frac;
+    return static_cast<int16_t>(clampSample(static_cast<int32_t>(std::lround(v))));
+}
+
 /** リトルエンディアン 32bit 整数をバイト列から読み取る */
 uint32_t readLe32(const uint8_t* p) {
     return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
@@ -161,6 +174,10 @@ LuaAudio::LuaAudio()
       bgm_file_frame_next_(0),
       bgm_cur_l_(0),
       bgm_cur_r_(0),
+      bgm_next_l_(0),
+      bgm_next_r_(0),
+      bgm_resample_base_(0),
+      bgm_resample_primed_(false),
       se_load_counter_(0) {
     instance_ = this;
     resetStreamSlotsLocked();
@@ -239,6 +256,10 @@ void LuaAudio::stopBgmLocked() {
     bgm_file_frame_next_ = 0;
     bgm_cur_l_ = 0;
     bgm_cur_r_ = 0;
+    bgm_next_l_ = 0;
+    bgm_next_r_ = 0;
+    bgm_resample_base_ = 0;
+    bgm_resample_primed_ = false;
 }
 
 /** トーン生成状態を停止する */
@@ -291,18 +312,24 @@ void LuaAudio::closeBgmFileLocked() {
 
 /** BGM / SE / トーンをすべて停止し、ファイルとバッファを解放する */
 void LuaAudio::stop() {
+    stopBgm();
     uint32_t irq = save_and_disable_interrupts();
-    stopBgmLocked();
     stopSeLocked();
     stopToneLocked();
-    resetStreamSlotsLocked();
     restore_interrupts(irq);
-
-    closeBgmFileLocked();
 
     if (output_) {
         output_->stop();
     }
+}
+
+/** BGM のみ停止（I2S DMA は止めない） */
+void LuaAudio::stopBgm() {
+    uint32_t irq = save_and_disable_interrupts();
+    stopBgmLocked();
+    resetStreamSlotsLocked();
+    restore_interrupts(irq);
+    closeBgmFileLocked();
 }
 
 /** 指定周波数・時間のサイン波トーンを再生する */
@@ -354,6 +381,10 @@ bool LuaAudio::openBgmForStream(const char* path, char* errbuf, size_t errbuf_le
     bgm_file_frame_next_ = 0;
     bgm_cur_l_ = 0;
     bgm_cur_r_ = 0;
+    bgm_next_l_ = 0;
+    bgm_next_r_ = 0;
+    bgm_resample_base_ = 0;
+    bgm_resample_primed_ = false;
     bgm_eof_ = false;
     return true;
 }
@@ -407,6 +438,56 @@ bool LuaAudio::readNextBgmFrame(int16_t* out_l, int16_t* out_r) {
     return true;
 }
 
+/** ファイル BGM のリサンプル用: target_idx の L/R と次フレームを 2 点分用意する */
+bool LuaAudio::advanceFileResampleHold(size_t target_idx, int16_t* s0l, int16_t* s0r, int16_t* s1l,
+                                        int16_t* s1r) {
+    if (!bgm_file_open_) {
+        return false;
+    }
+
+    if (!bgm_resample_primed_) {
+        if (!readNextBgmFrame(&bgm_cur_l_, &bgm_cur_r_)) {
+            return false;
+        }
+        bgm_resample_base_ = 0;
+        bgm_resample_primed_ = true;
+        if (bgm_data_remaining_ > 0) {
+            if (!readNextBgmFrame(&bgm_next_l_, &bgm_next_r_)) {
+                bgm_next_l_ = bgm_cur_l_;
+                bgm_next_r_ = bgm_cur_r_;
+            }
+        } else {
+            bgm_next_l_ = bgm_cur_l_;
+            bgm_next_r_ = bgm_cur_r_;
+        }
+    }
+
+    while (bgm_resample_base_ < target_idx) {
+        bgm_cur_l_ = bgm_next_l_;
+        bgm_cur_r_ = bgm_next_r_;
+        bgm_resample_base_++;
+        if (bgm_data_remaining_ > 0) {
+            if (!readNextBgmFrame(&bgm_next_l_, &bgm_next_r_)) {
+                bgm_next_l_ = bgm_cur_l_;
+                bgm_next_r_ = bgm_cur_r_;
+            }
+        } else {
+            bgm_next_l_ = bgm_cur_l_;
+            bgm_next_r_ = bgm_cur_r_;
+        }
+    }
+
+    if (bgm_resample_base_ != target_idx) {
+        return false;
+    }
+
+    *s0l = bgm_cur_l_;
+    *s0r = bgm_cur_r_;
+    *s1l = bgm_next_l_;
+    *s1r = bgm_next_r_;
+    return true;
+}
+
 /** BGM データをリサンプルしながら1ストリームスロット分を埋める */
 bool LuaAudio::fillStreamSlot(StreamSlot& slot) {
     if (!bgm_file_open_ && !bgm_embed_active_) {
@@ -417,34 +498,74 @@ bool LuaAudio::fillStreamSlot(StreamSlot& slot) {
         (bgm_source_rate_ > 0 && sample_rate_ > 0)
             ? static_cast<double>(bgm_source_rate_) / static_cast<double>(sample_rate_)
             : 1.0;
+    const bool resample = (rate_step != 1.0);
 
     size_t out = 0;
 
     while (out < kStreamFrames) {
-        const size_t src_idx = static_cast<size_t>(bgm_src_pos_);
-        while (bgm_file_frame_next_ <= src_idx &&
-               (bgm_data_remaining_ > 0 || bgm_embed_frames_remaining_ > 0)) {
-            if (!readNextBgmFrame(&bgm_cur_l_, &bgm_cur_r_)) {
+        const double src_pos = bgm_src_pos_;
+
+        if (bgm_embed_active_) {
+            const size_t idx = static_cast<size_t>(src_pos);
+            if (idx >= bgm_embed_frame_count_) {
                 break;
             }
+            const double frac = src_pos - static_cast<double>(idx);
+            const size_t idx1 =
+                (idx + 1 < bgm_embed_frame_count_) ? idx + 1 : idx;
+            if (bgm_channels_ == 1) {
+                const int16_t s =
+                    lerpSample16(bgm_embed_pcm_[idx], bgm_embed_pcm_[idx1], frac);
+                slot.left[out] = s;
+                slot.right[out] = s;
+            } else {
+                slot.left[out] = lerpSample16(bgm_embed_pcm_[idx * 2], bgm_embed_pcm_[idx1 * 2],
+                                             frac);
+                slot.right[out] =
+                    lerpSample16(bgm_embed_pcm_[idx * 2 + 1], bgm_embed_pcm_[idx1 * 2 + 1], frac);
+            }
+        } else if (resample) {
+            const size_t src_idx = static_cast<size_t>(src_pos);
+            const double frac = src_pos - static_cast<double>(src_idx);
+            int16_t s0l = 0;
+            int16_t s0r = 0;
+            int16_t s1l = 0;
+            int16_t s1r = 0;
+            if (!advanceFileResampleHold(src_idx, &s0l, &s0r, &s1l, &s1r)) {
+                break;
+            }
+            slot.left[out] = lerpSample16(s0l, s1l, frac);
+            slot.right[out] = lerpSample16(s0r, s1r, frac);
+        } else {
+            const size_t src_idx = static_cast<size_t>(src_pos);
+            while (bgm_file_frame_next_ <= src_idx && bgm_data_remaining_ > 0) {
+                if (!readNextBgmFrame(&bgm_cur_l_, &bgm_cur_r_)) {
+                    break;
+                }
+            }
+
+            if (src_idx >= bgm_file_frame_next_ && bgm_data_remaining_ == 0) {
+                break;
+            }
+            if (bgm_file_frame_next_ == 0) {
+                break;
+            }
+
+            slot.left[out] = bgm_cur_l_;
+            slot.right[out] = bgm_cur_r_;
         }
 
-        if (src_idx >= bgm_file_frame_next_ && bgm_data_remaining_ == 0 &&
-            bgm_embed_frames_remaining_ == 0) {
-            break;
-        }
-        if (bgm_file_frame_next_ == 0) {
-            break;
-        }
-
-        slot.left[out] = bgm_cur_l_;
-        slot.right[out] = bgm_cur_r_;
         out++;
         bgm_src_pos_ += rate_step;
     }
 
     if (out == 0) {
-        if (bgm_data_remaining_ == 0 && bgm_embed_frames_remaining_ == 0) {
+        if (bgm_embed_active_) {
+            if (bgm_src_pos_ >= static_cast<double>(bgm_embed_frame_count_)) {
+                bgm_embed_frames_remaining_ = 0;
+                bgm_eof_ = true;
+            }
+        } else if (bgm_data_remaining_ == 0) {
             bgm_eof_ = true;
         }
         return false;
@@ -453,9 +574,20 @@ bool LuaAudio::fillStreamSlot(StreamSlot& slot) {
     if (out < kStreamFrames) {
         memset(slot.left + out, 0, (kStreamFrames - out) * sizeof(int16_t));
         memset(slot.right + out, 0, (kStreamFrames - out) * sizeof(int16_t));
-        if (bgm_data_remaining_ == 0 && bgm_embed_frames_remaining_ == 0) {
+    }
+
+    if (bgm_embed_active_) {
+        if (bgm_src_pos_ >= static_cast<double>(bgm_embed_frame_count_)) {
+            bgm_embed_frames_remaining_ = 0;
             bgm_eof_ = true;
+        } else {
+            const size_t remaining =
+                bgm_embed_frame_count_ - static_cast<size_t>(bgm_src_pos_);
+            bgm_embed_frames_remaining_ = remaining;
         }
+    } else if (bgm_data_remaining_ == 0 &&
+               bgm_src_pos_ >= static_cast<double>(bgm_file_frame_next_)) {
+        bgm_eof_ = true;
     }
 
     slot.frames = kStreamFrames;
@@ -737,6 +869,10 @@ bool LuaAudio::playBgmFromEmbedded(const int16_t* pcm, size_t frame_count, uint1
     bgm_file_frame_next_ = 0;
     bgm_cur_l_ = 0;
     bgm_cur_r_ = 0;
+    bgm_next_l_ = 0;
+    bgm_next_r_ = 0;
+    bgm_resample_base_ = 0;
+    bgm_resample_primed_ = false;
     bgm_eof_ = false;
     bgm_active_ = true;
     restore_interrupts(irq);
@@ -801,13 +937,16 @@ void LuaAudio::mixSeChannels(int16_t* left, int16_t* right, size_t samples) {
                 break;
             }
 
+            const double frac = pos - static_cast<double>(idx);
+            const size_t idx1 = (idx + 1 < ch.frame_count) ? idx + 1 : idx;
+
             int32_t sl;
             int32_t sr;
             if (ch.channels == 1) {
-                sl = sr = ch.pcm[idx];
+                sl = sr = lerpSample16(ch.pcm[idx], ch.pcm[idx1], frac);
             } else {
-                sl = ch.pcm[idx * 2];
-                sr = ch.pcm[idx * 2 + 1];
+                sl = lerpSample16(ch.pcm[idx * 2], ch.pcm[idx1 * 2], frac);
+                sr = lerpSample16(ch.pcm[idx * 2 + 1], ch.pcm[idx1 * 2 + 1], frac);
             }
 
             left[i] = static_cast<int16_t>(clampSample(static_cast<int32_t>(left[i]) + sl));

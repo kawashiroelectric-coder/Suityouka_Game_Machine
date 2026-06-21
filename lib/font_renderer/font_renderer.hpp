@@ -57,7 +57,7 @@ public:
      * band_rows / band_y0: GameDisplay の現在バンド座標系。
      */
     void drawTextBg(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, int band_y0, int x, int y,
-                    const char* utf8, uint16_t fg, uint16_t bg) const;
+                    const char* utf8, uint16_t fg, uint16_t bg, bool use_bg = true) const;
 
     /** グローバルアクティブフォント（GameDisplay が参照） */
     static FontRenderer* active() { return s_active_; }
@@ -96,7 +96,7 @@ private:
     const IndexEntry* findGlyph(uint32_t codepoint) const;
     /** 1 グリフをバンド FB へ描画する */
     void drawGlyph(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, int band_y0, int x, int y,
-                   const uint8_t* glyph, uint16_t fg, uint16_t bg) const;
+                   const uint8_t* glyph, uint16_t fg, uint16_t bg, bool use_bg) const;
 };
 
 #endif  // FONT_RENDERER_HPP

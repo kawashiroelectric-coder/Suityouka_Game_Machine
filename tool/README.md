@@ -17,6 +17,7 @@
 | `rgb565_bin_to_png.py` | `.bin` → PNG（プレビュー・デバッグ用） |
 | `png_to_c_header.py` | PNG → C ヘッダー `.h`（ファームウェア埋め込み用） |
 | `wav_to_pcm_header.py` | WAV → PCM C ヘッダー `.h`（ファームウェア音声埋め込み用） |
+| `lua_preview/` | **対話型 Lua プレビュー**（320×240 / pygame）。詳細は `lua_preview/README.md` |
 
 ### フォーマット
 
@@ -95,7 +96,7 @@ python tool/png_to_c_header.py assets/icon.png -d assets -n my_icon
 Lua の SD 用 WAV とは別経路です。
 
 ```bash
-# 短い SE（既定で 22050Hz にリサンプル、32KB 以下）
+# 短い SE（既定で 44100Hz にリサンプル、32KB 以下）
 python tool/wav_to_pcm_header.py click.wav -d assets -n click
 
 # 長い BGM を flash 埋め込み（サイズ警告のみ）
@@ -135,7 +136,7 @@ BGM 再生中はメニュー等で `audio.pumpStream()` を定期的に呼んで
 
 - `-d`, `--output-dir` : 出力ディレクトリ（既定: `assets`）
 - `-n`, `--name` : 変数名ベース
-- `--rate` : 出力サンプルレート（既定: 22050）
+- `--rate` : 出力サンプルレート（既定: 44100）
 - `--keep-rate` : WAV の元レートを維持（リサンプルしない）
 - `--max-kb` : SE 向けサイズ上限 KB（既定: 32）
 - `--bgm` : BGM 埋め込み向け（上限緩和）

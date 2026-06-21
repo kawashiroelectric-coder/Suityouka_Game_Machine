@@ -208,7 +208,7 @@ const FontRenderer::IndexEntry* FontRenderer::findGlyph(uint32_t codepoint) cons
 // 1 グリフをバンドフレームバッファへ描画する（倍率対応・背景色あり）
 void FontRenderer::drawGlyph(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, int band_y0,
                              int x, int y, const uint8_t* glyph, uint16_t fg,
-                             uint16_t bg) const {
+                             uint16_t bg, bool use_bg) const {
     if (!fb || !glyph) {
         return;
     }
@@ -231,8 +231,12 @@ void FontRenderer::drawGlyph(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, in
                 if (px < 0 || px >= static_cast<int>(fb_w)) {
                     continue;
                 }
-                const uint16_t color = glyphPixel(glyph, row, col) ? fg : bg;
-                fb[static_cast<uint32_t>(local_y) * fb_w + static_cast<uint32_t>(px)] = color;
+                const bool on = glyphPixel(glyph, row, col);
+                if (on) {
+                    fb[static_cast<uint32_t>(local_y) * fb_w + static_cast<uint32_t>(px)] = fg;
+                } else if (use_bg) {
+                    fb[static_cast<uint32_t>(local_y) * fb_w + static_cast<uint32_t>(px)] = bg;
+                }
             }
         }
         return;
@@ -251,8 +255,12 @@ void FontRenderer::drawGlyph(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, in
                 continue;
             }
             const int src_col = (ox * static_cast<int>(glyph_w_)) / out_w;
-            const uint16_t color = glyphPixel(glyph, src_row, src_col) ? fg : bg;
-            fb[static_cast<uint32_t>(local_y) * fb_w + static_cast<uint32_t>(px)] = color;
+            const bool on = glyphPixel(glyph, src_row, src_col);
+            if (on) {
+                fb[static_cast<uint32_t>(local_y) * fb_w + static_cast<uint32_t>(px)] = fg;
+            } else if (use_bg) {
+                fb[static_cast<uint32_t>(local_y) * fb_w + static_cast<uint32_t>(px)] = bg;
+            }
         }
     }
 }
@@ -315,7 +323,8 @@ bool utf8Next(const char*& p, uint32_t& codepoint) {
 
 // UTF-8 テキストをバンドフレームバッファへ描画する（改行・欠損グリフのフォールバック対応）
 void FontRenderer::drawTextBg(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, int band_y0, int x,
-                              int y, const char* utf8, uint16_t fg, uint16_t bg) const {
+                              int y, const char* utf8, uint16_t fg, uint16_t bg,
+                              bool use_bg) const {
     if (!fb || !utf8 || !glyph_data_) {
         return;
     }
@@ -357,7 +366,7 @@ void FontRenderer::drawTextBg(uint16_t* fb, uint16_t fb_w, uint16_t band_rows, i
             glyph = glyph_data_ + static_cast<size_t>(fallback->glyph_index) * bytes_per_glyph_;
         }
 
-        drawGlyph(fb, fb_w, band_rows, band_y0, cx, cy, glyph, fg, bg);
+        drawGlyph(fb, fb_w, band_rows, band_y0, cx, cy, glyph, fg, bg, use_bg);
         cx += scaleValue(advance);
     }
 }

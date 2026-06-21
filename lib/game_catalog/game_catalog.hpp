@@ -20,14 +20,18 @@ struct GameCatalogEntry {
 /** SD 上のゲームフォルダ / .lua から起動スクリプトとプレビューを解決する */
 class GameCatalog {
 public:
-    static constexpr int kMaxEntries = 32;
+    static constexpr int kMaxEntries = 256;
     static constexpr int kPreviewW = 100;
     static constexpr int kPreviewH = 100;
     static constexpr size_t kPreviewBytes =
         static_cast<size_t>(kPreviewW) * static_cast<size_t>(kPreviewH) * 2;
 
-    /** games_dir を走査してゲームエントリ一覧を構築する。メニュー初期化時に呼ぶ */
-    static int loadEntries(const char* games_dir, GameCatalogEntry* out_entries, int max_entries);
+    /**
+     * games_dir を走査してゲームエントリ一覧を構築する。メニュー初期化時に呼ぶ。
+     * out_truncated: max_entries 超のゲームが SD 上にあった場合 true。
+     */
+    static int loadEntries(const char* games_dir, GameCatalogEntry* out_entries, int max_entries,
+                           bool* out_truncated = nullptr);
 
     /** プレビュー .bin を 100x100 RGB565 バッファへ読み込む。選択ゲームのプレビュー表示時に呼ぶ */
     static bool loadPreviewRgb565(const char* preview_path, uint16_t* pixels, size_t pixel_count);

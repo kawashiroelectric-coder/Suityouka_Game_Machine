@@ -250,6 +250,9 @@ void InputTestMode::run(const Config& config) {
     (void)encoder->consumeDelta();
     initUiState(config.lcd, config.buttons, *encoder, ui_state);
 
+    BatteryMonitor::setLedUpdatePaused(true);
+    config.buttons->setBatteryLedMask(BatteryLedConfig::PORT1_MASK);
+
     uint32_t last_mount_attempt_ms = 0;
     absolute_time_t last_frame = get_absolute_time();
 
@@ -281,6 +284,8 @@ void InputTestMode::run(const Config& config) {
         sleep_until(target);
         last_frame = target;
     }
+
+    BatteryMonitor::resumeLedAutoUpdate();
 
     if (owns_encoder) {
         encoder->disableIrq();

@@ -1,12 +1,7 @@
 // ============================================
 // ファイル: pcm5102_i2s.hpp
-// PCM5102 向け 32bit I2S PIO（AudioOutput が Core 1 で使用）
+// PCM5102A 向け I2S PIO（BCK=64fs, 32bit スロット、Core 1 で使用）
 // ============================================
-//
-// ビルド時に pcm5102_i2s.pio から pcm5102_i2s.pio.h が生成される。
-// 初期化: pcm5102_i2s_32_program_init() / pcm5102_i2s_32_start()
-//
-// DMA: ステレオ int32_t[L,R,...] を 32bit 幅で TX FIFO へ（audio_output.cpp）
 
 #ifndef PCM5102_I2S_HPP
 #define PCM5102_I2S_HPP
@@ -17,26 +12,18 @@
 #include "hardware/pio.h"
 #include "pcm5102_i2s.pio.h"
 
-/** config.hpp AudioConfig::I2S */
 namespace PCM5102I2S {
 constexpr uint8_t PIN_DATA = AudioConfig::I2S::PIN_DATA;
 constexpr uint8_t PIN_LRCK = AudioConfig::I2S::PIN_LRCK;
 constexpr uint8_t PIN_BCK = AudioConfig::I2S::PIN_BCK;
-/** sideset 連続ピンの基点（LRCK = base, BCK = base+1） */
 constexpr uint8_t PIN_CLOCK_BASE = PIN_LRCK;
-
-/** デフォルトサンプルレート（AudioConfig と揃えやすい値） */
 constexpr uint32_t DEFAULT_SAMPLE_RATE_HZ = AudioConfig::SAMPLE_RATE;
 }  // namespace PCM5102I2S
 
-/**
- * PCM5102 用 32bit I2S PIO ステートマシンを初期化する。
- * pio_add_program 済みの offset を渡すこと。
- */
 inline void pcm5102_i2s_init_sm(PIO pio, uint sm, uint offset,
                                 uint32_t sample_rate_hz = PCM5102I2S::DEFAULT_SAMPLE_RATE_HZ) {
-    pcm5102_i2s_32_program_init(pio, sm, offset, PCM5102I2S::PIN_DATA, PCM5102I2S::PIN_CLOCK_BASE,
-                                sample_rate_hz);
+    pcm5102_i2s_program_init(pio, sm, offset, PCM5102I2S::PIN_DATA, PCM5102I2S::PIN_CLOCK_BASE,
+                             sample_rate_hz);
 }
 
 #endif  // PCM5102_I2S_HPP

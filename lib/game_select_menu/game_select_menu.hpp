@@ -11,6 +11,7 @@
 
 class ST7789_LCD;
 class ButtonInput;
+class LuaAudio;
 
 /** /games 配下のゲーム一覧から起動する GUI メニュー */
 class GameSelectMenu {
@@ -23,6 +24,7 @@ public:
     struct Config {
         ST7789_LCD* lcd = nullptr;
         ButtonInput* buttons = nullptr;
+        LuaAudio* audio = nullptr;
         const char* games_dir = nullptr;
         FrameCallback on_frame = nullptr;
         RunGameCallback on_run_game = nullptr;

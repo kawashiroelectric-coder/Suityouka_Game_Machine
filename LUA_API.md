@@ -170,7 +170,7 @@ python tool/image_to_rgb565_bin.py artwork.png --resize 100x100 -o games/dino/di
 
 | 関数 | 引数 | 戻り値 | 意味 |
 |------|------|--------|------|
-| `machine.text(x, y, str [, fg [, bg]])` | `x`, `y` … 左上座標（ピクセル）<br>`str` … 文字列（UTF-8）<br>`fg` … 前景色（省略時: 白）<br>`bg` … 背景色（省略時: 黒） | なし | テキスト描画。`load_font` 済みなら **UTF-8 日本語（美咲サブセット）**＋`set_font_scale` の拡大を反映。未 load 時は組み込み **8×8 ASCII** にフォールバック（改行は 8px 送り）。 |
+| `machine.text(x, y, str [, fg [, bg]])` | `x`, `y` … 左上座標（ピクセル）<br>`str` … 文字列（UTF-8）<br>`fg` … 前景色（省略時: 白）<br>`bg` … 背景色（**省略時: 透明**。グリフのオフビットは描画せず、下の絵がそのまま見える） | なし | テキスト描画。`load_font` 済みなら **UTF-8 日本語（美咲サブセット）**＋`set_font_scale` の拡大を反映。未 load 時は組み込み **8×8 ASCII** にフォールバック（改行は 8px 送り）。 |
 | `machine.load_font(path)` | SD 上の MISF v1 `.bin`（`generate_font.py` 生成） | `true` / `nil`, errmsg | 美咲フォントサブセットを読み込み、`machine.text` を UTF-8 対応にする。 |
 | `machine.font_loaded()` | なし | `boolean` | フォント読込済みか。 |
 | `machine.font_height()` | なし | `integer` | スケール適用後の行高（未 load 時 **8**）。 |
@@ -270,7 +270,7 @@ python tool/image_to_rgb565_bin.py artwork.png --resize 100x100 -o games/dino/di
 | 関数 | 引数 | 戻り値 | 意味 |
 |------|------|--------|------|
 | `machine.play_tone(freq_hz, duration_ms)` | 周波数（Hz）、長さ（ミリ秒） | `boolean` | サイン波を BGM/SE に加算。新しいトーンは前のトーンのみ置き換え。 |
-| `machine.play_wav(path)` | SD 上の WAV パス | 成功: `true`<br>失敗: `nil`, `errmsg` | **BGM** 用。16bit PCM WAV を SD からストリーミング再生。SE は止めない。**22050Hz**（`AudioConfig::SAMPLE_RATE`）推奨。 |
+| `machine.play_wav(path)` | SD 上の WAV パス | 成功: `true`<br>失敗: `nil`, `errmsg` | **BGM** 用。16bit PCM WAV を SD からストリーミング再生。SE は止めない。**44100Hz**（`AudioConfig::SAMPLE_RATE`）推奨。 |
 | `machine.play_se(path)` | SD 上の WAV パス | 成功: `true`<br>失敗: `nil`, `errmsg` | **SE** 用。16bit PCM WAV を RAM 載せで BGM に加算。**最大 8 系統**、超過時は最も古い SE を上書き。1 ファイル最大 **32KB**。 |
 | `machine.stop_sound()` | なし | なし | BGM・SE・トーンをすべて停止。 |
 | `machine.set_volume(vol)` | `vol` … 0.0〜1.0 | なし | マスター音量。 |
@@ -414,7 +414,10 @@ end
 function game_draw()
     machine.clear(machine.rgb(0, 0, 0))
     machine.fill_rect(10, 10, 40, 40, machine.rgb(255, 0, 0))
-    machine.text(8, 8, "HELLO", machine.rgb(255, 255, 255), machine.rgb(0, 0, 0))
+    -- 背景透明（fg のみ指定）
+    machine.text(8, 8, "HELLO", machine.rgb(255, 255, 255))
+    -- 背景色付き
+    machine.text(8, 20, "BOX", machine.rgb(255, 255, 255), machine.rgb(0, 0, 0))
 end
 ```
 

@@ -500,12 +500,13 @@ void GameDisplay::fillRects(const FillRect* rects, size_t count) {
     }
 }
 
-/** 背景付きテキストを描く。FontRenderer 未使用時は 8x8 ASCII にフォールバックする */
-void GameDisplay::drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bg_color) {
+/** テキストを描く。FontRenderer 未使用時は 8x8 ASCII にフォールバックする */
+void GameDisplay::drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bg_color,
+                             bool use_bg) {
     if (!work_buffer_ || !text) return;
     if (font_renderer_ && font_renderer_->isLoaded()) {
         font_renderer_->drawTextBg(work_buffer_, width_, band_rows_, band_y0_, x, y, text, color,
-                                   bg_color);
+                                   bg_color, use_bg);
         return;
     }
     int cx = x;
@@ -516,7 +517,7 @@ void GameDisplay::drawTextBg(int x, int y, const char* text, uint16_t color, uin
         } else {
             // y はバンドローカル座標に変換（drawCharFb は [0, band_rows_) でクリップ）
             drawCharFb(work_buffer_, width_, (uint16_t)band_rows_, cx, y - band_y0_, *text, color,
-                       bg_color, true);
+                       bg_color, use_bg);
             cx += 8;
         }
         text++;

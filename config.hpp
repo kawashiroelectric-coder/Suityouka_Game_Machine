@@ -46,18 +46,39 @@
 #define CFG_ENCODER_PIN_SW    26
 
 // 音声 (PCM5102 I2S)
-#define CFG_AUDIO_SAMPLE_RATE     22050u
+#define CFG_AUDIO_SAMPLE_RATE     44100u
+/** エンコーダ音量とは別の固定ゲイン（1.0=等倍）。小さい場合は 2.0〜3.0 程度に上げる */
+#define CFG_AUDIO_CODE_VOLUME_GAIN  0.6f
 
-#define CFG_AUDIO_I2S_PIN_SPMUTE     22
+/** I2S 信号 */
 #define CFG_AUDIO_I2S_PIN_BCK     21
 #define CFG_AUDIO_I2S_PIN_LRCK    20
 #define CFG_AUDIO_I2S_PIN_DATA    19
-#define CFG_AUDIO_I2S_PIN_MUTE    18
+/**
+ * PCM5102A XSMT（ソフトミュート）を Pico GPIO で駆動する場合のピン番号。
+ * XSMT=HIGH でアンミュート。基板で 3.3V 固定なら -1。
+ * ※ DEMP/FLT/SCK/FMT とは別ピン。XSMT を GND のままにすると無音。
+ */
+#define CFG_AUDIO_I2S_PIN_XSMT    18
+/** XSMT アンミュート時の GPIO レベル（1=HIGH=アンミュート, 0=LOW=アンミュートの基板向け） */
+#define CFG_AUDIO_I2S_XSMT_UNMUTE_LEVEL  1
+/** 旧基板用の第 2 ミュート線。未使用なら -1 */
+#define CFG_AUDIO_I2S_PIN_SPMUTE  (-1)
+
+// 起動スプラッシュ（BootSplash）
+/** ロゴ最低表示時間 (ms)。BGM が短い場合もこの時間は表示を続ける */
+#define CFG_BOOT_SPLASH_MIN_DISPLAY_MS   2200u
+/** 1=ボタンでスキップ可能、0=不可 */
+#define CFG_BOOT_SPLASH_SKIPPABLE          1
+/** スキップ入力を有効にする最短表示時間 (ms) */
+#define CFG_BOOT_SPLASH_SKIP_MIN_MS        300u
 
 
 // バッテリー ADC
 #define CFG_BATTERY_PIN_ADC   28
 #define CFG_BATTERY_ADC_CH    2
+/** 残量 LED パルス表示時間 (ms)。Pulse モード時、起動・残量変化後にこの時間だけ点灯 */
+#define CFG_BATTERY_LED_PULSE_MS  1000u
 
 // --- C 互換マクロ（lib/sd_card_hw/*.c） ---
 #define SD_PIN_CLK    CFG_SD_PIN_CLK
@@ -129,23 +150,32 @@ namespace EncoderConfig {
 
 namespace AudioConfig {
     constexpr uint32_t SAMPLE_RATE = CFG_AUDIO_SAMPLE_RATE;
+    /** エンコーダ / Lua set_volume とは独立。最終出力 = ユーザー音量 × この値 */
+    constexpr float CODE_VOLUME_GAIN = CFG_AUDIO_CODE_VOLUME_GAIN;
     /** Core0 ストリーム / Core1 I2S DMA の 1 チャンクあたりフレーム数 */
     constexpr size_t STREAM_BUFFER_FRAMES = 256;
     /** SE 同時再生数（超過時は最も古い SE を上書き） */
     constexpr size_t SE_CHANNEL_COUNT = 8;
-    /** 1 SE あたりの最大バイト数（RAM 載せ） */
-    constexpr size_t SE_MAX_BYTES = 32 * 1024;
+    /** 1 SE あたりの最大バイト数（SD から RAM 載せ / 埋め込み SE 共通） */
+    constexpr size_t SE_MAX_BYTES = 96 * 1024;
 
-    /** PCM5102 I2S（GP19=DIN, GP20=LRCK, GP21=BCK） */
+    /** PCM5102 I2S（GP19=DIN, GP20=LRCK, GP21=BCK, GP18=XSMT 任意） */
     namespace I2S {
         constexpr uint8_t PIN_BCK = CFG_AUDIO_I2S_PIN_BCK;
         constexpr uint8_t PIN_LRCK = CFG_AUDIO_I2S_PIN_LRCK;
         constexpr uint8_t PIN_DATA = CFG_AUDIO_I2S_PIN_DATA;
-        constexpr uint8_t PIN_MUTE = CFG_AUDIO_I2S_PIN_MUTE;
-        constexpr uint8_t PIN_SPMUTE = CFG_AUDIO_I2S_PIN_SPMUTE;
+        constexpr int8_t PIN_XSMT = CFG_AUDIO_I2S_PIN_XSMT;
+        constexpr int8_t PIN_SPMUTE = CFG_AUDIO_I2S_PIN_SPMUTE;
+        constexpr bool XSMT_UNMUTE_LEVEL = (CFG_AUDIO_I2S_XSMT_UNMUTE_LEVEL != 0);
     }
 }
 
+
+namespace BootSplashConfig {
+    constexpr uint32_t MIN_DISPLAY_MS = CFG_BOOT_SPLASH_MIN_DISPLAY_MS;
+    constexpr bool SKIPPABLE = (CFG_BOOT_SPLASH_SKIPPABLE != 0);
+    constexpr uint32_t SKIP_MIN_MS = CFG_BOOT_SPLASH_SKIP_MIN_MS;
+}
 
 namespace BatteryConfig {
     constexpr uint8_t PIN_ADC = CFG_BATTERY_PIN_ADC;
@@ -160,6 +190,8 @@ namespace BatteryConfig {
     constexpr float THRESHOLD_FULL_V = 1.1f;
     /** MID 表示: THRESHOLD_MID_V <= V < THRESHOLD_FULL_V */
     constexpr float THRESHOLD_MID_V = 0.9f;
+    /** Pulse モード: 起動・残量変化後に LED を点灯する時間 (ms) */
+    constexpr uint32_t LED_PULSE_MS = CFG_BATTERY_LED_PULSE_MS;
 }
 
 namespace BatteryLedConfig {

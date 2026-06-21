@@ -225,6 +225,9 @@ local ebullets = {}
 local enemies = {}
 local spawn_serial = 0
 
+-- SD セーブ（起動スクリプトのフォルダ内。stg / stg_fast は別ディレクトリなので同名で可）
+local SAVE_PATH = "hi_score.dat"
+
 -- ---------------------------------------------------------------------------
 -- ユーティリティ
 -- ---------------------------------------------------------------------------
@@ -246,6 +249,35 @@ end
 
 local function confirm_pressed()
   return machine.jump_pressed()
+end
+
+-- SD からハイスコアを読み込む（game_init で呼ぶ）
+local function load_hi_score()
+  if not machine.file_exists(SAVE_PATH) then
+    return
+  end
+  local data, err = machine.load_data(SAVE_PATH)
+  if data and type(data.hi_score) == "number" then
+    hi_score = math.max(0, math.floor(data.hi_score))
+  elseif err then
+    print("hi_score load failed:", err)
+  end
+end
+
+-- 現在の hi_score を SD に保存する
+local function save_hi_score()
+  local ok, err = machine.save_data(SAVE_PATH, { hi_score = hi_score })
+  if not ok then
+    print("hi_score save failed:", err)
+  end
+end
+
+-- ゲームオーバー / 全クリア時: スコアを反映してセーブ
+local function record_hi_score_and_save()
+  if score > hi_score then
+    hi_score = score
+  end
+  save_hi_score()
 end
 
 -- game_init から呼ぶ。フォント・画像は失敗してもゲーム続行（図形／ASCII にフォールバック）。
@@ -526,9 +558,7 @@ end
 local function on_stage_cleared()
   if stage_idx >= #STAGES then
     mode = "victory"
-    if score > hi_score then
-      hi_score = score
-    end
+    record_hi_score_and_save()
     blink = 0
     return
   end
@@ -543,9 +573,7 @@ local function on_player_dead()
   if lives <= 0 then
     mode = "gameover"
     blink = 0
-    if score > hi_score then
-      hi_score = score
-    end
+    record_hi_score_and_save()
     return
   end
   reset_player_pos()
@@ -898,7 +926,7 @@ local function draw_center_text(y, text, col)
     return
   end
   local x = (W - #text * 8) // 2
-  machine.text(x, y, text, col, COL_BG0)
+  machine.text(x, y, text, col)
 end
 
 local function draw_title()
@@ -913,6 +941,7 @@ local function draw_title()
   end
   draw_center_text(176, "MOVE: D-PAD", COL_HUD_DIM)
   draw_center_text(192, "FIRE: NEAR", COL_HUD_DIM)
+  draw_center_text(208, "2026 @ Kawashiro Electric", COL_HUD_DIM)
   if hi_score > 0 then
     draw_center_text(214, "HI " .. hi_score, COL_HUD_DIM)
   end
@@ -953,8 +982,9 @@ local function draw_victory()
   end
   draw_center_text(108, "MISSION COMPLETE", machine.rgb(120, 255, 200))
   draw_center_text(132, "SCORE " .. score, COL_HUD)
+  draw_center_text(148, "HI-SCORE " .. hi_score, COL_HUD_DIM)
   if (math.floor(blink / 500) % 2) == 0 then
-    draw_center_text(168, "PRESS TO TITLE", COL_HUD_DIM)
+    draw_center_text(176, "PRESS TO TITLE", COL_HUD_DIM)
   end
 end
 
@@ -989,6 +1019,7 @@ function game_init()
   load_assets()
   mode = "title"
   hi_score = 0
+  load_hi_score()
   blink = 0
   enemies = {}
   clear_bullets()

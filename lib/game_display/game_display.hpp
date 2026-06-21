@@ -104,8 +104,9 @@ public:
     /** 透過色付きでタイル 1 枚を転写する。タイルレイヤー合成時に呼ぶ */
     void drawTileKeyed(int dx, int dy, int tile_w, int tile_h, int sheet_cols, const uint16_t* tileset,
                        int sheet_w, int sheet_h, int tile_index, uint16_t key_color, bool key_enabled);
-    /** 背景付きテキストを描く。UI やデバッグ文字列表示時に呼ぶ */
-    void drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bg_color);
+    /** テキストを描く。use_bg=false のときグリフのオフビットは描画しない（透明背景） */
+    void drawTextBg(int x, int y, const char* text, uint16_t color, uint16_t bg_color,
+                    bool use_bg = true);
 
     /** 関連付けた ST7789_LCD を返す。低レベル操作が必要なときに使う */
     ST7789_LCD* lcd() const { return lcd_; }

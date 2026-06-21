@@ -10,6 +10,7 @@ playBgmFromEmbedded から再生できる。
     python tool/wav_to_pcm_header.py sound.wav -d assets -n boot_chime
     python tool/wav_to_pcm_header.py sound.wav --rate 22050
     python tool/wav_to_pcm_header.py bgm.wav --bgm -d assets -n title_bgm
+    python tool/wav_to_pcm_header.py your_jingle.wav -d assets -n boot_chime --bgm
 
 SE 向けは PCM データ 32KB 以下（--max-kb 32 が既定）。
 長い BGM は --bgm を付ける（サイズ警告のみ緩和）。
@@ -28,7 +29,7 @@ import wave
 from pathlib import Path
 
 
-DEFAULT_RATE = 22050
+DEFAULT_RATE = 44100
 DEFAULT_MAX_KB = 32
 
 

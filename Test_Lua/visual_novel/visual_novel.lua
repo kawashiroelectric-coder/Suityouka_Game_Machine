@@ -133,6 +133,8 @@ local KEY_COLOR = 0xF81F
 local scene_by_id = {}
 local state = {}
 local vn_stream_fail = {}
+local game_phase = "title" -- title（起動画面）| play（本編）
+local title_blink_ms = 0
 
 local function rgb_from_scene(bg)
   if type(bg) ~= "table" then
@@ -690,6 +692,48 @@ local function draw_footer_hint(text, wrap_page_count)
   machine.text(MARGIN_X, footer_text_y(), ellipsize_text(text, max_chars), COL_HINT, COL_BOX)
 end
 
+local function draw_center_text(y, text, fg, bg)
+  if not text or text == "" then
+    return
+  end
+  local tw = text_width_px(text)
+  local x = math.floor((W - tw) / 2)
+  if x < 0 then
+    x = 0
+  end
+  machine.text(x, y, text, fg, bg)
+end
+
+-- 起動タイトル画面（本編シーン開始前）
+local function draw_game_title_screen()
+  local def = get_asset_def("bg", "title_night")
+  local drew_bg = false
+  if def then
+    local path = resolve_image_path(def.file)
+    if path then
+      drew_bg = machine.draw_vn_stream({
+        bg = { path = path, x = 0, y = 0, w = def.w, h = def.h },
+      })
+    end
+  end
+  if not drew_bg then
+    machine.clear(machine.rgb(15, 20, 45))
+    draw_stars(machine.time_ms())
+  end
+
+  local plate = machine.rgb(10, 10, 25)
+  machine.fill_rect(0, TEXT_BOX_Y, W, TEXT_BOX_H, plate)
+  machine.fill_rect(0, TEXT_BOX_Y, W, 1, COL_BOX_EDGE)
+
+  draw_center_text(88, "星降る夜に", COL_NAME, plate)
+  draw_center_text(108, "VISUAL NOVEL", machine.rgb(180, 200, 230), plate)
+  if (math.floor(title_blink_ms / 500) % 2) == 0 then
+    draw_center_text(136, "PRESS BUTTON", COL_TEXT, plate)
+  end
+  draw_center_text(160, "A-R / NEAR: Start", COL_HINT, plate)
+  draw_center_text(176, "FAR hold: Exit to menu", COL_HINT, plate)
+end
+
 -- ============================================================================
 -- ホストが呼ぶコールバック
 -- ============================================================================
@@ -715,18 +759,19 @@ function game_init()
   load_assets()
   load_scenes()
   build_scene_index()
-  state.scene_id = "title"
+  game_phase = "title"
+  title_blink_ms = 0
+  state.scene_id = ""
   state.scene = nil
   state.line_index = 1
   state.wrap_page = 1
   state.mode = "lines"
   state.choice_index = 1
-  state.bg_color = machine.rgb(0, 0, 0)
+  state.bg_color = machine.rgb(15, 20, 45)
   state.prev_confirm = false
   state.prev_up = false
   state.prev_down = false
   state.exit_hold = 0
-  enter_scene("title")
 end
 
 function game_update(dt)
@@ -748,6 +793,15 @@ function game_update(dt)
     state.exit_hold = 0
   end
 
+  if game_phase == "title" then
+    title_blink_ms = title_blink_ms + dt
+    if any_confirm_edge(prev_c) then
+      game_phase = "play"
+      enter_scene("title")
+    end
+    return false
+  end
+
   if state.mode == "choice" then
     update_choice_input(prev_u, prev_d)
     if any_confirm_edge(prev_c) then
@@ -765,6 +819,11 @@ function game_update(dt)
 end
 
 function game_draw()
+  if game_phase == "title" then
+    draw_game_title_screen()
+    return
+  end
+
   local scene = state.scene
   local page = scene and get_line_page(scene, state.line_index) or { text = "" }
 

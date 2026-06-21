@@ -10,8 +10,7 @@
 
 #include "encoder_volume.hpp"
 #include "hardware/flash.h"
-#include "hardware/sync.h"
-#include "pico/platform.h"
+#include "pico/flash.h"
 #include "pico/stdlib.h"
 #include "st7789_lcd.hpp"
 
@@ -21,7 +20,8 @@ constexpr uint32_t kMagic = 0x474D5331u;  // "GSM1"
 constexpr uint16_t kVersion = 1;
 constexpr uint32_t kFlashSettingsOffset =
     static_cast<uint32_t>(PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE);
-constexpr uint32_t kSaveDebounceMs = 250;
+constexpr uint32_t kSaveDebounceMs = 2000;
+constexpr uint32_t kFlashSafeTimeoutMs = 1000;
 
 struct StoredSettings {
     uint32_t magic = 0;
@@ -40,6 +40,7 @@ struct FlashWriteContext {
 
 int g_volume_step = EncoderVolumeControl::kVolumeStepMax;
 int g_brightness_percent = DeviceSettings::kDefaultBrightnessPercent;
+uint8_t g_battery_led_mode = static_cast<uint8_t>(DeviceSettings::BatteryLedMode::AlwaysOn);
 bool g_loaded = false;
 bool g_dirty = false;
 uint32_t g_dirty_since_ms = 0;
@@ -94,6 +95,13 @@ int clampBrightnessPercent(int percent) {
     return percent;
 }
 
+DeviceSettings::BatteryLedMode clampBatteryLedMode(uint8_t raw) {
+    if (raw == static_cast<uint8_t>(DeviceSettings::BatteryLedMode::PulseOnChange)) {
+        return DeviceSettings::BatteryLedMode::PulseOnChange;
+    }
+    return DeviceSettings::BatteryLedMode::AlwaysOn;
+}
+
 /** フラッシュ末尾から設定を読み込み、マジック・CRC を検証する */
 bool readStored(StoredSettings& out) {
     const auto* flash =
@@ -105,14 +113,15 @@ bool readStored(StoredSettings& out) {
     return out.crc16 == payloadCrc(out);
 }
 
-/** RAM 上で実行: フラッシュセクタを消去して設定を書き込む（割り込み無効化中に呼ぶ） */
-void __no_inline_not_in_flash_func(flashWriteWorker)(FlashWriteContext* ctx) {
+/** RAM 上で実行: フラッシュセクタを消去して設定を書き込む */
+void __no_inline_not_in_flash_func(flashWriteWorker)(void* param) {
+    auto* ctx = static_cast<FlashWriteContext*>(param);
     flash_range_erase(ctx->offset, FLASH_SECTOR_SIZE);
     flash_range_program(ctx->offset, ctx->data, ctx->length);
 }
 
-/** 設定構造体をフラッシュ末尾 1 セクタへ書き込む */
-void writeStoredToFlash(const StoredSettings& stored) {
+/** 設定構造体をフラッシュ末尾 1 セクタへ書き込む（Core1 ロックアウト付き） */
+bool writeStoredToFlash(const StoredSettings& stored) {
     alignas(4) static uint8_t sector[FLASH_SECTOR_SIZE];
     std::memset(sector, 0xFF, sizeof(sector));
     std::memcpy(sector, &stored, sizeof(stored));
@@ -122,9 +131,8 @@ void writeStoredToFlash(const StoredSettings& stored) {
     ctx.data = sector;
     ctx.length = FLASH_SECTOR_SIZE;
 
-    const uint32_t ints = save_and_disable_interrupts();
-    flashWriteWorker(&ctx);
-    restore_interrupts(ints);
+    const int rc = flash_safe_execute(flashWriteWorker, &ctx, kFlashSafeTimeoutMs);
+    return rc == PICO_OK;
 }
 
 /** 設定変更を記録し、デバウンス用タイムスタンプを更新する */
@@ -134,12 +142,12 @@ void markDirty() {
 }
 
 /** デバウンス経過後に未保存の変更をフラッシュへ書き込む */
-void flushToFlashIfReady() {
+void flushToFlashIfReady(bool force) {
     if (!g_dirty) {
         return;
     }
     const uint32_t now = to_ms_since_boot(get_absolute_time());
-    if (now - g_dirty_since_ms < kSaveDebounceMs) {
+    if (!force && now - g_dirty_since_ms < kSaveDebounceMs) {
         return;
     }
 
@@ -148,13 +156,14 @@ void flushToFlashIfReady() {
     stored.version = kVersion;
     stored.volume_step = static_cast<uint8_t>(g_volume_step);
     stored.brightness_percent = static_cast<uint8_t>(g_brightness_percent);
+    stored.reserved[0] = g_battery_led_mode;
     stored.crc16 = payloadCrc(stored);
 
-    printf("DeviceSettings: saving volume=%d brightness=%d%%\n", g_volume_step + 1,
-           g_brightness_percent);
-    writeStoredToFlash(stored);
+    if (!writeStoredToFlash(stored)) {
+        printf("DeviceSettings: flash save failed\n");
+        return;
+    }
     g_dirty = false;
-    printf("DeviceSettings: save complete\n");
 }
 
 }  // namespace
@@ -165,13 +174,18 @@ void DeviceSettings::load() {
     if (readStored(stored)) {
         g_volume_step = clampVolumeStep(stored.volume_step);
         g_brightness_percent = clampBrightnessPercent(stored.brightness_percent);
-        printf("DeviceSettings: loaded volume=%d/%d brightness=%d%%\n", g_volume_step + 1,
-               EncoderVolumeControl::kVolumeSteps, g_brightness_percent);
+        g_battery_led_mode =
+            static_cast<uint8_t>(clampBatteryLedMode(stored.reserved[0]));
+        printf("DeviceSettings: loaded volume=%d/%d brightness=%d%% batt_led=%u\n",
+               g_volume_step + 1, EncoderVolumeControl::kVolumeSteps, g_brightness_percent,
+               static_cast<unsigned>(g_battery_led_mode));
     } else {
         g_volume_step = EncoderVolumeControl::kVolumeStepMax;
         g_brightness_percent = kDefaultBrightnessPercent;
-        printf("DeviceSettings: using defaults volume=%d/%d brightness=%d%%\n", g_volume_step + 1,
-               EncoderVolumeControl::kVolumeSteps, g_brightness_percent);
+        g_battery_led_mode = static_cast<uint8_t>(DeviceSettings::BatteryLedMode::AlwaysOn);
+        printf("DeviceSettings: using defaults volume=%d/%d brightness=%d%% batt_led=%u\n",
+               g_volume_step + 1, EncoderVolumeControl::kVolumeSteps, g_brightness_percent,
+               static_cast<unsigned>(g_battery_led_mode));
     }
     g_loaded = true;
     g_dirty = false;
@@ -182,7 +196,15 @@ void DeviceSettings::service() {
     if (!g_loaded) {
         load();
     }
-    flushToFlashIfReady();
+    flushToFlashIfReady(false);
+}
+
+/** 未保存の変更があればデバウンスを待たず即時フラッシュする（メニュー退場時など） */
+void DeviceSettings::flushPending() {
+    if (!g_loaded) {
+        load();
+    }
+    flushToFlashIfReady(true);
 }
 
 /** 現在の音量ステップ（0 始まり）を返す。未読込なら load する */
@@ -224,5 +246,26 @@ void DeviceSettings::setBrightnessPercent(int percent) {
         return;
     }
     g_brightness_percent = next;
+    markDirty();
+}
+
+/** バッテリー LED 表示モードを返す */
+DeviceSettings::BatteryLedMode DeviceSettings::batteryLedMode() {
+    if (!g_loaded) {
+        load();
+    }
+    return clampBatteryLedMode(g_battery_led_mode);
+}
+
+/** バッテリー LED 表示モードを設定し、遅延フラッシュ保存を予約する */
+void DeviceSettings::setBatteryLedMode(BatteryLedMode mode) {
+    if (!g_loaded) {
+        load();
+    }
+    const uint8_t next = static_cast<uint8_t>(mode);
+    if (next == g_battery_led_mode) {
+        return;
+    }
+    g_battery_led_mode = next;
     markDirty();
 }
