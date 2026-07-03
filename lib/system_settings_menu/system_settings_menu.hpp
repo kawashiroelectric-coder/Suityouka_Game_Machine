@@ -13,7 +13,7 @@ class ButtonInput;
 class LuaAudio;
 
 /** 音量・明るさ等のシステム設定画面。
- *  コードバージョン表示文字列は system_settings_menu.cpp の kSettingsVersionText を編集。 */
+ *  About（Code Ver）表示文字列は system_settings_menu.cpp の kAboutLines を編集。 */
 class SystemSettingsMenu {
 public:
     using FrameCallback = void (*)(void* user_data);

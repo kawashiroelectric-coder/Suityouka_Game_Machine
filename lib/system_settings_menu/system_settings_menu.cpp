@@ -30,18 +30,22 @@ constexpr int kSettingsRowPitch = 18;
 constexpr int kSettingsRowBgH = 8;
 constexpr int kSettingsRowFirstY = kSettingsPanelY + kSettingsPanelPadTop;
 
-constexpr int kSettingsRowCount = 6;
+constexpr int kSettingsRowCount = 7;
 constexpr int kSettingsPanelH =
     kSettingsPanelPadTop + kSettingsRowCount * kSettingsRowPitch + kSettingsPanelPadBottom;
 
 // ---------------------------------------------------------------------------
-// システム設定メニュー — コードバージョン表示
-// 表示内容を変えるときは kSettingsVersionText の 1 行だけ編集してください。
-// 表示位置を変えるときは kSettingsVersionTextY を編集してください。
+// About 画面（Code Ver 等）— NEAR で入場、FAR で設定メニューへ戻る
+// 表示内容を変えるときは kAboutLines を編集してください。
 // サードパーティの正式なライセンス表記は THIRD_PARTY_NOTICES.md を参照してください。
 // ---------------------------------------------------------------------------
-constexpr const char kSettingsVersionText[] = "Code Ver 1.0.0\nSD: Apache2.0 carlk3";
-constexpr int kSettingsVersionTextY = kSettingsPanelY + kSettingsPanelH - 14;
+constexpr const char* kAboutLines[] = {
+    "Code Ver 1.0.0",
+    "SD: Apache2.0 carlk3",
+};
+constexpr int kAboutLineCount = static_cast<int>(sizeof(kAboutLines) / sizeof(kAboutLines[0]));
+constexpr int kAboutLinePitch = 14;
+constexpr int kAboutFirstLineY = 96;
 
 // WiFi 未使用のため行を非表示（将来用にインデックスのみ残す）
 // constexpr int kWifiRowIndex = 0;
@@ -51,7 +55,8 @@ constexpr int kBrightnessRowIndex = 1;
 constexpr int kBatteryLedRowIndex = 2;
 constexpr int kBgGalleryRowIndex = 3;
 constexpr int kInputTestRowIndex = 4;
-constexpr int kBackRowIndex = 5;
+constexpr int kAboutRowIndex = 5;
+constexpr int kBackRowIndex = 6;
 constexpr int kBacklightStepPercent = 10;
 constexpr int kSettingsFooterTextY = 222;
 constexpr int kSettingsFooterClearY = 216;
@@ -61,6 +66,7 @@ enum class SettingsFooterMode : uint8_t {
     Normal,
     BrightnessEdit,
     BgGallery,
+    About,
 };
 
 struct SettingsState {
@@ -69,6 +75,7 @@ struct SettingsState {
     DeviceSettings::BatteryLedMode battery_led_mode = DeviceSettings::BatteryLedMode::AlwaysOn;
     bool editing_brightness = false;
     bool viewing_bg = false;
+    bool viewing_about = false;
     int bg_index = 0;
     char row_labels[kSettingsRowCount][48] = {};
 };
@@ -191,7 +198,8 @@ void refreshSettingsRowLabels(SettingsState& state) {
     buildBatteryLedLine(state.row_labels[2], sizeof(state.row_labels[2]), state.battery_led_mode);
     std::snprintf(state.row_labels[3], sizeof(state.row_labels[3]), "BG Gallery");
     std::snprintf(state.row_labels[4], sizeof(state.row_labels[4]), "Input Test Mode");
-    std::snprintf(state.row_labels[5], sizeof(state.row_labels[5]), "Back");
+    std::snprintf(state.row_labels[5], sizeof(state.row_labels[5]), "About / Code Ver");
+    std::snprintf(state.row_labels[6], sizeof(state.row_labels[6]), "Back");
 }
 
 /** 指定行の表示ラベル文字列を返す。行描画時に使う */
@@ -269,6 +277,8 @@ void drawSettingsFooterHint(ST7789_LCD* lcd, SettingsFooterMode mode) {
         hint = "[L/R] Brightness  [FAR] Back";
     } else if (mode == SettingsFooterMode::BgGallery) {
         hint = "[L/R] BG Change  [FAR] Back";
+    } else if (mode == SettingsFooterMode::About) {
+        hint = "[FAR] Back";
     }
     drawTextCenteredBg(lcd, kSettingsFooterTextY, hint, Color::GREEN, kSettingsBg);
 }
@@ -290,13 +300,20 @@ void drawBgGalleryScreen(ST7789_LCD* lcd, int bg_index) {
     drawSettingsFooterHint(lcd, SettingsFooterMode::BgGallery);
 }
 
-/** パネル下部にコードバージョンを描く（内容は kSettingsVersionText） */
-void drawSettingsVersionLine(ST7789_LCD* lcd) {
+/** About 画面（Code Ver 等）を描く。NEAR 入場時に呼ぶ */
+void drawAboutScreen(ST7789_LCD* lcd) {
     if (!lcd) {
         return;
     }
-    drawTextCenteredBg(lcd, kSettingsVersionTextY, kSettingsVersionText, Color::rgb(120, 140, 170),
-                       kSettingsBg);
+    lcd->fill(kSettingsBg);
+    lcd->drawRect(kSettingsPanelX, kSettingsPanelY, kSettingsPanelW, kSettingsPanelH, Color::CYAN);
+    drawTextCenteredBg(lcd, kSettingsPanelY - 18, "== ABOUT ==", Color::CYAN, kSettingsBg);
+    const uint16_t line_fg = Color::rgb(200, 220, 240);
+    for (int i = 0; i < kAboutLineCount; i++) {
+        drawTextCenteredBg(lcd, kAboutFirstLineY + i * kAboutLinePitch, kAboutLines[i], line_fg,
+                           kSettingsBg);
+    }
+    drawSettingsFooterHint(lcd, SettingsFooterMode::About);
 }
 
 /** 設定画面の固定枠（パネル・タイトル・フッター）を描く。初期化や全面再描画時に呼ぶ */
@@ -308,7 +325,6 @@ void drawSettingsStaticChrome(ST7789_LCD* lcd) {
     lcd->drawRect(kSettingsPanelX, kSettingsPanelY, kSettingsPanelW, kSettingsPanelH, Color::CYAN);
     drawTextCenteredBg(lcd, kSettingsPanelY - 18, "== SYSTEM MENU ==", Color::CYAN, kSettingsBg);
     drawSettingsFooterHint(lcd, SettingsFooterMode::Normal);
-    drawSettingsVersionLine(lcd);
 }
 
 /** 設定メニューの 1 行を描画または更新する。カーソル移動・値変更時に呼ぶ */
@@ -334,6 +350,7 @@ void drawSettingsRow(ST7789_LCD* lcd, const SettingsState& state, int row_index,
 void initSettingsScreen(ST7789_LCD* lcd, SettingsUiCache& cache, SettingsState& state, int cursor) {
     state.editing_brightness = false;
     state.viewing_bg = false;
+    state.viewing_about = false;
     syncVolumeFromEncoder(state);
     syncBrightnessFromLcd(lcd, state);
     syncBatteryLedFromSettings(state);
@@ -392,7 +409,13 @@ void SystemSettingsMenu::run(const Config& config) {
             volume_changed = true;
         }
 
-        if (state.viewing_bg) {
+        if (state.viewing_about) {
+            if (config.buttons->wasPressed(Button::FAR)) {
+                state.viewing_about = false;
+                initSettingsScreen(config.lcd, cache, state, cursor);
+                ui_changed = true;
+            }
+        } else if (state.viewing_bg) {
             if (config.buttons->wasPressed(Button::LEFT)) {
                 state.bg_index = (state.bg_index + kMenuBackgroundCount - 1) % kMenuBackgroundCount;
                 bg_changed = true;
@@ -450,6 +473,11 @@ void SystemSettingsMenu::run(const Config& config) {
                     config.on_run_input_test(config.user_data);
                     waitForButtonRelease(config.buttons);
                     initSettingsScreen(config.lcd, cache, state, cursor);
+                } else if (cursor == kAboutRowIndex) {
+                    state.viewing_about = true;
+                    drawAboutScreen(config.lcd);
+                    waitForButtonRelease(config.buttons);
+                    ui_changed = true;
                 } else if (cursor == kBackRowIndex) {
                     break;
                 }
@@ -459,6 +487,8 @@ void SystemSettingsMenu::run(const Config& config) {
         if (bg_changed) {
             playMenuCursorSe(config.audio);
             drawBgGalleryScreen(config.lcd, state.bg_index);
+        } else if (state.viewing_about) {
+            // About 画面は入場時に全面描画済み。FAR で戻るまで部分更新しない。
         } else if (!state.viewing_bg && (brightness_changed || ui_changed)) {
             drawSettingsRow(config.lcd, state, kBrightnessRowIndex, cursor);
         } else if (!state.viewing_bg && battery_led_changed) {
