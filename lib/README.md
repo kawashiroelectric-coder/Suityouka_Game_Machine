@@ -77,7 +77,8 @@ flowchart TD
 | [`lua_interpreter/`](lua_interpreter/) | Lua 5.4 + `machine.*` | `LuaInterpreter` | 上記ほぼすべて |
 | [`battery_monitor/`](battery_monitor/) | Core1 ADC 監視 | `BatteryMonitor` | button_input |
 
-> **`no-OS-FatFS-SD-SDIO-SPI-RPi-Pico/`** は vendored サードパーティです。通常は直接編集しません。
+> **`no-OS-FatFS-SD-SDIO-SPI-RPi-Pico/`** は vendored サードパーティです。  
+> upstream からの **改変内容** は [`no-OS-FatFS-SD-SDIO-SPI-RPi-Pico/MODIFICATIONS.md`](no-OS-FatFS-SD-SDIO-SPI-RPi-Pico/MODIFICATIONS.md) を参照してください。
 
 ---
 
