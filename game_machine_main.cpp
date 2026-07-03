@@ -415,7 +415,7 @@ static void initLcdSpiDma(ST7789_LCD& lcd_ref) {
 int main() {
     stdio_init_all();
     // デバッグ時: USB シリアル接続を待つとログ取りやすい
-    // while (!stdio_usb_connected()) { sleep_ms(10); }
+    //while (!stdio_usb_connected()) { sleep_ms(10); }
     printf("=== ゲーム機初期化開始 ===\n");
 
     // --- I2C（ボタン・バッテリー LED）---

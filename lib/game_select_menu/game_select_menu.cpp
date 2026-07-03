@@ -11,7 +11,9 @@
 #include "config.hpp"
 #include "game_catalog.hpp"
 #include "heap_budget.hpp"
+#include "menu_backgrounds.hpp"
 #include "menu_cursor_se.hpp"
+#include "pico/rand.h"
 #include "pico/stdlib.h"
 #include "sd_service.hpp"
 #include "st7789_lcd.hpp"
@@ -70,6 +72,92 @@ constexpr uint32_t kTitleScrollLoopGapMs = 500;
 constexpr uint32_t kSdMountRetryMs = 2000;
 constexpr size_t kGameCatalogByteSize =
     static_cast<size_t>(GameCatalog::kMaxEntries) * sizeof(GameCatalogEntry);
+
+/** 背景画像の上に重ねる UI 色の不透明度（0=透明, 255=不透明） */
+constexpr uint8_t kMenuChromeOverlayAlpha = 200;
+constexpr uint8_t kMenuContentOverlayAlpha = 170;
+constexpr uint8_t kMenuRowSelOverlayAlpha = 210;
+constexpr uint8_t kMenuPreviewOverlayAlpha = 150;
+
+struct MenuBgLayer {
+    const uint16_t* pixels = nullptr;
+    int width = GameConfig::SCREEN_WIDTH;
+    int height = GameConfig::SCREEN_HEIGHT;
+};
+
+void prepareLcdForMenuDraw(ST7789_LCD* lcd);
+
+/** RGB565 2 色を alpha 合成する（alpha=前景の重み 0〜255） */
+uint16_t blendRgb565(uint16_t dst, uint16_t src, uint8_t alpha) {
+    if (alpha == 0) {
+        return dst;
+    }
+    if (alpha >= 255) {
+        return src;
+    }
+    const uint32_t inv = 255u - static_cast<uint32_t>(alpha);
+    const uint32_t a = static_cast<uint32_t>(alpha);
+    const uint32_t dr = (dst >> 11) & 0x1Fu;
+    const uint32_t dg = (dst >> 5) & 0x3Fu;
+    const uint32_t db = dst & 0x1Fu;
+    const uint32_t sr = (src >> 11) & 0x1Fu;
+    const uint32_t sg = (src >> 5) & 0x3Fu;
+    const uint32_t sb = src & 0x1Fu;
+    const uint32_t r = (dr * inv + sr * a) / 255u;
+    const uint32_t g = (dg * inv + sg * a) / 255u;
+    const uint32_t b = (db * inv + sb * a) / 255u;
+    return static_cast<uint16_t>((r << 11) | (g << 5) | b);
+}
+
+/** 背景画像 1 枚分を全面に描画する */
+void drawMenuFullBackground(ST7789_LCD* lcd, const MenuBgLayer& bg) {
+    if (!lcd || !bg.pixels) {
+        return;
+    }
+    prepareLcdForMenuDraw(lcd);
+    lcd->drawRawImage(0, 0, static_cast<uint16_t>(bg.width), static_cast<uint16_t>(bg.height),
+                      bg.pixels);
+}
+
+/** 背景画像の該当矩形に UI 色を半透明で重ねる */
+void fillRectTranslucent(ST7789_LCD* lcd, int x, int y, int w, int h, uint16_t color,
+                         uint8_t alpha, const MenuBgLayer& bg) {
+    if (!lcd || !bg.pixels || w <= 0 || h <= 0) {
+        return;
+    }
+    if (x >= bg.width || y >= bg.height) {
+        return;
+    }
+    if (x < 0) {
+        w += x;
+        x = 0;
+    }
+    if (y < 0) {
+        h += y;
+        y = 0;
+    }
+    if (x + w > bg.width) {
+        w = bg.width - x;
+    }
+    if (y + h > bg.height) {
+        h = bg.height - y;
+    }
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+
+    static uint16_t row_buf[GameConfig::SCREEN_WIDTH];
+    for (int row = 0; row < h; row++) {
+        const int py = y + row;
+        const int row_base = py * bg.width;
+        for (int col = 0; col < w; col++) {
+            const int px = x + col;
+            row_buf[col] = blendRgb565(bg.pixels[row_base + px], color, alpha);
+        }
+        lcd->drawRawImage(static_cast<uint16_t>(x), static_cast<uint16_t>(py),
+                          static_cast<uint16_t>(w), 1, row_buf);
+    }
+}
 
 /** メニュー表示中だけ HeapBudget から確保するプレビュー RGB565 バッファ */
 struct PreviewPixelBuffer {
@@ -134,8 +222,24 @@ struct MenuUiCache {
     bool ready = false;
     int prev_selected = -1;
     int prev_view_offset = -1;
+    int bg_index = -1;
+    MenuBgLayer bg = {};
     char prev_scroll_title[48] = {};
 };
+
+/** メニュー入場時に BG1〜4 から 1 枚を乱数で選ぶ（pico_rand + 直前と被りにくくする） */
+void pickRandomMenuBackground(MenuUiCache& cache) {
+    static int s_last_bg_index = -1;
+    int idx = static_cast<int>(get_rand_32() % 4);
+    if (s_last_bg_index >= 0 && idx == s_last_bg_index) {
+        idx = static_cast<int>((static_cast<uint32_t>(s_last_bg_index) + 1u + (get_rand_32() % 3u)) % 4u);
+    }
+    s_last_bg_index = idx;
+    cache.bg.pixels = kMenuBackgrounds[idx].pixels;
+    cache.bg.width = kMenuBackgrounds[idx].width;
+    cache.bg.height = kMenuBackgrounds[idx].height;
+    cache.bg_index = idx;
+}
 
 /** 8x8 フォント前提で文字列の描画幅（px）を返す。中央揃え計算時に使う */
 int textWidthPx(const char* text) {
@@ -145,7 +249,17 @@ int textWidthPx(const char* text) {
     return static_cast<int>(std::strlen(text)) * 8;
 }
 
-/** 画面幅中央に背景付きテキストを描く。ヘッダー・フッター表示時に使う */
+/** 画面幅中央に前景色のみでテキストを描く（背景は半透明レイヤー済み想定） */
+void drawTextCentered(ST7789_LCD* lcd, int y, const char* text, uint16_t fg) {
+    if (!lcd || !text) {
+        return;
+    }
+    const int x = (GameConfig::SCREEN_WIDTH - textWidthPx(text)) / 2;
+    lcd->setTextColor(fg);
+    lcd->drawText(x < 0 ? 0 : x, y, text);
+}
+
+/** 画面幅中央に背景付きテキストを描く。タイトル・フッター表示時に使う */
 void drawTextCenteredBg(ST7789_LCD* lcd, int y, const char* text, uint16_t fg, uint16_t bg) {
     if (!lcd) {
         return;
@@ -294,17 +408,26 @@ void loadGameMenuEntries(MenuState& state, const char* games_dir) {
 }
 
 /** 選択中ゲームのプレビュー画像を SD から読み込む。右パネル描画の直前に呼ぶ（キャッシュあり） */
-bool loadPreviewForSelected(MenuState& state, PreviewPixelBuffer& preview_buf) {
+bool loadPreviewForSelected(MenuState& state, PreviewPixelBuffer& preview_buf, const char* games_dir) {
     if (!state.games || state.selected < 0 || state.selected >= state.count) {
         state.preview_loaded = false;
         state.loaded_preview_index = -1;
         return false;
     }
-    if (state.loaded_preview_index == state.selected) {
-        return state.preview_loaded;
+    if (state.loaded_preview_index == state.selected && state.preview_loaded) {
+        return true;
     }
+
     state.loaded_preview_index = state.selected;
     state.preview_loaded = false;
+
+    if (!games_dir || games_dir[0] == '\0') {
+        return false;
+    }
+    if (!GameCatalog::refreshEntryPaths(games_dir, state.games[state.selected])) {
+        printf("GameCatalog: refresh failed for %s\n", state.games[state.selected].install_name);
+        return false;
+    }
 
     const GameCatalogEntry& e = state.games[state.selected];
     if (e.preview_path[0] == '\0') {
@@ -377,37 +500,40 @@ void buildScrollingTitle(const char* title, char* out, size_t out_len, int max_c
 }
 
 /** メニューの固定枠を描く（前方宣言）。drawEmptyGamesScreen から呼ばれる */
-void drawMenuStaticChrome(ST7789_LCD* lcd);
+void drawMenuStaticChrome(ST7789_LCD* lcd, const MenuBgLayer& menu_bg);
 
-/** 左リスト領域に背景付きテキストを描く。空一覧メッセージ等の表示時に使う */
-void drawTextInListPanel(ST7789_LCD* lcd, int y, const char* text, uint16_t fg, uint16_t bg) {
+/** 左リスト領域に前景色のみでテキストを描く */
+void drawTextInListPanel(ST7789_LCD* lcd, int y, const char* text, uint16_t fg) {
     if (!lcd || !text) {
         return;
     }
-    lcd->drawTextBg(kMenuListX + 4, y, text, fg, bg);
+    lcd->setTextColor(fg);
+    lcd->drawText(kMenuListX + 4, y, text);
 }
 
 /** ゲーム未検出または SD 未挿入時のメニュー画面を描く。一覧が空のときに呼ぶ */
-void drawEmptyGamesScreen(ST7789_LCD* lcd, bool sd_mounted) {
+void drawEmptyGamesScreen(ST7789_LCD* lcd, bool sd_mounted, const MenuBgLayer& menu_bg) {
     if (!lcd) {
         return;
     }
-    drawMenuStaticChrome(lcd);
-    lcd->fillRect(kMenuListX, kMenuListFirstRowY, kMenuListW,
-                  kMenuContentY1 - kMenuListFirstRowY + 1, kMenuBg);
+    drawMenuStaticChrome(lcd, menu_bg);
+    fillRectTranslucent(lcd, kMenuListX, kMenuListFirstRowY, kMenuListW,
+                        kMenuContentY1 - kMenuListFirstRowY + 1, kMenuBg, kMenuContentOverlayAlpha,
+                        menu_bg);
     const int msg_y = kMenuListFirstRowY + 24;
     if (!sd_mounted) {
-        drawTextInListPanel(lcd, msg_y, "No SD card inserted", Color::YELLOW, kMenuBg);
-        drawTextInListPanel(lcd, msg_y + 12, "Insert card to", Color::WHITE, kMenuBg);
-        drawTextInListPanel(lcd, msg_y + 24, "load games", Color::WHITE, kMenuBg);
+        drawTextInListPanel(lcd, msg_y, "No SD card inserted", Color::YELLOW);
+        drawTextInListPanel(lcd, msg_y + 12, "Insert card to", Color::WHITE);
+        drawTextInListPanel(lcd, msg_y + 24, "load games", Color::WHITE);
     } else {
-        drawTextInListPanel(lcd, msg_y, "No game in /games", Color::YELLOW, kMenuBg);
-        drawTextInListPanel(lcd, msg_y + 12, "[NEAR] Refresh", Color::GRAY, kMenuBg);
+        drawTextInListPanel(lcd, msg_y, "No game in /games", Color::YELLOW);
+        drawTextInListPanel(lcd, msg_y + 12, "[NEAR] Refresh", Color::GRAY);
     }
-    lcd->fillRect(kPreviewImageX, kPreviewImageY, kRightPanelInnerW, kRightPanelInnerH,
-                  Color::rgb(20, 20, 40));
+    constexpr uint16_t kPreviewBg = Color::rgb(20, 20, 40);
+    fillRectTranslucent(lcd, kPreviewImageX, kPreviewImageY, kRightPanelInnerW, kRightPanelInnerH,
+                        kPreviewBg, kMenuPreviewOverlayAlpha, menu_bg);
     drawTextCenteredInRect(lcd, kPreviewImageX, kPreviewImageY, kRightPanelInnerW,
-                           kRightPanelInnerH, "---", Color::GRAY, Color::rgb(20, 20, 40));
+                           kRightPanelInnerH, "---", Color::GRAY, kPreviewBg);
     lcd->drawRect(static_cast<uint16_t>(kRightPanelX), static_cast<uint16_t>(kRightPanelY),
                   static_cast<uint16_t>(kRightPanelFrameW), static_cast<uint16_t>(kRightPanelFrameH),
                   Color::WHITE);
@@ -468,29 +594,33 @@ bool serviceSdHotplug(const GameSelectMenu::Config& config, uint32_t now_ms,
     return *sd_state_changed;
 }
 
-/** 左リスト領域を背景色でクリアする */
-void clearMenuListPanel(ST7789_LCD* lcd) {
+/** 左リスト領域をコンテンツ用半透明レイヤーで塗り直す */
+void clearMenuListPanel(ST7789_LCD* lcd, const MenuBgLayer& menu_bg) {
     if (!lcd) {
         return;
     }
-    lcd->fillRect(kMenuListX, kMenuListFirstRowY, kMenuListW,
-                  kMenuContentY1 - kMenuListFirstRowY + 1, kMenuBg);
+    fillRectTranslucent(lcd, kMenuListX, kMenuListFirstRowY, kMenuListW,
+                        kMenuContentY1 - kMenuListFirstRowY + 1, kMenuBg, kMenuContentOverlayAlpha,
+                        menu_bg);
 }
 
 /** 256 件上限の案内行（選択不可）を描く */
-void drawTruncationNoticeRow(ST7789_LCD* lcd, int visible_slot) {
+void drawTruncationNoticeRow(ST7789_LCD* lcd, int visible_slot, const MenuBgLayer& menu_bg) {
     if (!lcd || visible_slot < 0 || visible_slot >= kMaxVisibleRows) {
         return;
     }
     const int row_top = kMenuListFirstRowY + visible_slot * kMenuRowPitch;
     const int bg_y = row_top + (kMenuRowPitch - kMenuRowBgH) / 2;
-    lcd->fillRect(kMenuListX, bg_y, kMenuListW, kMenuRowBgH, kMenuRowBg);
-    lcd->drawTextBg(kMenuListX + 2, bg_y, " ", Color::GRAY, kMenuRowBg);
-    lcd->drawTextBg(kMenuListX + 12, bg_y, "Limit:256 max", Color::GRAY, kMenuRowBg);
+    fillRectTranslucent(lcd, kMenuListX, bg_y, kMenuListW, kMenuRowBgH, kMenuRowBg,
+                      kMenuContentOverlayAlpha, menu_bg);
+    lcd->setTextColor(Color::GRAY);
+    lcd->drawText(kMenuListX + 2, bg_y, " ");
+    lcd->drawText(kMenuListX + 12, bg_y, "Limit:256 max");
 }
 
 /** ゲーム一覧の 1 行を描画する（game_index = 実際のゲーム番号 0 始まり） */
-void drawMenuGameRow(ST7789_LCD* lcd, const MenuState& state, int visible_slot, int game_index) {
+void drawMenuGameRow(ST7789_LCD* lcd, const MenuState& state, int visible_slot, int game_index,
+                     const MenuBgLayer& menu_bg) {
     if (!lcd || !state.games || visible_slot < 0 || visible_slot >= kMaxVisibleRows ||
         game_index < 0 || game_index >= state.count) {
         return;
@@ -509,28 +639,34 @@ void drawMenuGameRow(ST7789_LCD* lcd, const MenuState& state, int visible_slot, 
     std::snprintf(line, sizeof(line), "%d.%s", number, title_part);
     const bool selected = (game_index == state.selected);
     const uint16_t fg = selected ? Color::rgb(255, 180, 70) : Color::WHITE;
-    const uint16_t bg = selected ? kMenuSelBg : kMenuRowBg;
-    lcd->fillRect(kMenuListX, bg_y, kMenuListW, kMenuRowBgH, bg);
-    lcd->drawTextBg(kMenuListX + 2, bg_y, selected ? ">" : " ", fg, bg);
-    lcd->drawTextBg(kMenuListX + 12, bg_y, line, fg, bg);
+    if (selected) {
+        fillRectTranslucent(lcd, kMenuListX, bg_y, kMenuListW, kMenuRowBgH, kMenuSelBg,
+                            kMenuRowSelOverlayAlpha, menu_bg);
+    } else {
+        fillRectTranslucent(lcd, kMenuListX, bg_y, kMenuListW, kMenuRowBgH, kMenuBg,
+                            kMenuContentOverlayAlpha, menu_bg);
+    }
+    lcd->setTextColor(fg);
+    lcd->drawText(kMenuListX + 2, bg_y, selected ? ">" : " ");
+    lcd->drawText(kMenuListX + 12, bg_y, line);
 }
 
 /** 左リスト全体を view_offset に従って再描画する */
-void drawMenuListPanel(ST7789_LCD* lcd, const MenuState& state) {
+void drawMenuListPanel(ST7789_LCD* lcd, const MenuState& state, const MenuBgLayer& menu_bg) {
     if (!lcd || !state.games || state.count <= 0) {
         return;
     }
-    clearMenuListPanel(lcd);
+    clearMenuListPanel(lcd, menu_bg);
     const int game_rows = visibleGameRowCount(state);
     const bool truncation = showTruncationRow(state);
     for (int slot = 0; slot < game_rows; slot++) {
         const int game_index = state.view_offset + slot;
         if (game_index < state.count) {
-            drawMenuGameRow(lcd, state, slot, game_index);
+            drawMenuGameRow(lcd, state, slot, game_index, menu_bg);
         }
     }
     if (truncation) {
-        drawTruncationNoticeRow(lcd, kMaxVisibleRows - 1);
+        drawTruncationNoticeRow(lcd, kMaxVisibleRows - 1, menu_bg);
     }
 }
 
@@ -542,34 +678,36 @@ void prepareLcdForMenuDraw(ST7789_LCD* lcd) {
     lcd->finishDrawRawImageDMA();
 }
 
-/** メニューの固定枠（ヘッダー・区切り・フッター）を描く。初期化や全面再描画時に呼ぶ */
-void drawMenuStaticChrome(ST7789_LCD* lcd) {
+/** メニューの固定枠（背景・半透明 UI・区切り・フッター）を描く */
+void drawMenuStaticChrome(ST7789_LCD* lcd, const MenuBgLayer& menu_bg) {
     if (!lcd) {
         return;
     }
-    prepareLcdForMenuDraw(lcd);
-    lcd->fillRect(0, 0, GameConfig::SCREEN_WIDTH, kMenuTopChromeH, kMenuChromeBg);
-    lcd->fillRect(0, kMenuContentY0, GameConfig::SCREEN_WIDTH, kMenuContentH, kMenuBg);
-    lcd->fillRect(0, kMenuBottomChromeY, GameConfig::SCREEN_WIDTH, kMenuBottomChromeH, kMenuChromeBg);
+    drawMenuFullBackground(lcd, menu_bg);
+    fillRectTranslucent(lcd, 0, 0, GameConfig::SCREEN_WIDTH, kMenuTopChromeH, kMenuChromeBg,
+                        kMenuChromeOverlayAlpha, menu_bg);
+    fillRectTranslucent(lcd, 0, kMenuContentY0, GameConfig::SCREEN_WIDTH, kMenuContentH, kMenuBg,
+                        kMenuContentOverlayAlpha, menu_bg);
+    fillRectTranslucent(lcd, 0, kMenuBottomChromeY, GameConfig::SCREEN_WIDTH, kMenuBottomChromeH,
+                        kMenuChromeBg, kMenuChromeOverlayAlpha, menu_bg);
 
     lcd->fillRect(0, kMenuDividerYTop, GameConfig::SCREEN_WIDTH, 1, kMenuDividerColor);
     lcd->fillRect(0, kMenuDividerYBottom, GameConfig::SCREEN_WIDTH, 1, kMenuDividerColor);
     lcd->fillRect(kMenuListDividerX, kMenuContentY0, 1, kMenuContentH, kMenuDividerColor);
 
-    drawTextCenteredBg(lcd, kMenuHeaderTitleY, "GAME SELECT MENU", Color::WHITE, kMenuChromeBg);
-    drawTextCenteredBg(lcd, kMenuFooterHintY, "[NEAR] Launch  [LEFT] Settings", Color::GREEN,
-                       kMenuChromeBg);
-    lcd->fillRect(kRightMetaX, kRightTitleY, kRightTitleChars * 8, 24, kMenuBg);
+    drawTextCentered(lcd, kMenuHeaderTitleY, "GAME SELECT MENU", Color::WHITE);
+    drawTextCentered(lcd, kMenuFooterHintY, "[NEAR] Launch  [LEFT] Settings", Color::GREEN);
 }
 
 /** 読み込み済みプレビュー RGB565 を右パネルへ描画する。プレビュー取得成功時に呼ぶ */
-void drawPreviewImage(ST7789_LCD* lcd, const uint16_t* pixels) {
+void drawPreviewImage(ST7789_LCD* lcd, const uint16_t* pixels, const MenuBgLayer& menu_bg) {
     if (!lcd || !pixels) {
         return;
     }
     prepareLcdForMenuDraw(lcd);
     constexpr uint16_t kPreviewBg = Color::rgb(20, 20, 40);
-    lcd->fillRect(kPreviewImageX, kPreviewImageY, kPreviewImageW, kPreviewImageH, kPreviewBg);
+    fillRectTranslucent(lcd, kPreviewImageX, kPreviewImageY, kPreviewImageW, kPreviewImageH,
+                        kPreviewBg, kMenuPreviewOverlayAlpha, menu_bg);
     lcd->drawRawImage(static_cast<uint16_t>(kPreviewImageX),
                       static_cast<uint16_t>(kPreviewImageY),
                       static_cast<uint16_t>(kPreviewImageW),
@@ -581,18 +719,21 @@ void drawPreviewImage(ST7789_LCD* lcd, const uint16_t* pixels) {
 
 /** 右パネルにプレビュー画像または NO IMAGE を描く。選択変更・スクロール更新時に呼ぶ */
 void drawRightPreviewPanel(const GameSelectMenu::Config& config, MenuState& state,
-                           PreviewPixelBuffer& preview_buf) {
+                           PreviewPixelBuffer& preview_buf, const MenuBgLayer& menu_bg,
+                           const char* games_dir) {
     if (!config.lcd) {
         return;
     }
     ST7789_LCD* lcd = config.lcd;
-    loadPreviewForSelected(state, preview_buf);
+    loadPreviewForSelected(state, preview_buf, games_dir);
     if (state.preview_loaded && preview_buf.pixels) {
-        drawPreviewImage(lcd, preview_buf.pixels);
+        drawPreviewImage(lcd, preview_buf.pixels, menu_bg);
     } else {
+        prepareLcdForMenuDraw(lcd);
         constexpr uint16_t kPreviewBg = Color::rgb(20, 20, 40);
-        lcd->fillRect(kPreviewImageX, kPreviewImageY, kRightPanelInnerW, kRightPanelInnerH,
-                      kPreviewBg);
+        lcd->fillRect(static_cast<uint16_t>(kPreviewImageX), static_cast<uint16_t>(kPreviewImageY),
+                      static_cast<uint16_t>(kRightPanelInnerW),
+                      static_cast<uint16_t>(kRightPanelInnerH), kPreviewBg);
         static const char kNoImage[] = "NO IMAGE";
         drawTextCenteredInRect(lcd, kPreviewImageX, kPreviewImageY, kRightPanelInnerW,
                                kRightPanelInnerH, kNoImage, Color::GRAY, kPreviewBg);
@@ -603,7 +744,7 @@ void drawRightPreviewPanel(const GameSelectMenu::Config& config, MenuState& stat
 }
 
 /** 選択中ゲームのスクリプトサイズ行を右パネルに描く。選択変更時に呼ぶ */
-void drawRightSizeLine(ST7789_LCD* lcd, const MenuState& state) {
+void drawRightSizeLine(ST7789_LCD* lcd, const MenuState& state, const MenuBgLayer& menu_bg) {
     if (!lcd || !state.games || state.selected < 0 || state.selected >= state.count) {
         return;
     }
@@ -611,8 +752,10 @@ void drawRightSizeLine(ST7789_LCD* lcd, const MenuState& state) {
     char line2[48];
     const uint32_t kb = (e.script_size + 1023) / 1024;
     std::snprintf(line2, sizeof(line2), "Size : %lu KB", static_cast<unsigned long>(kb));
-    lcd->fillRect(kRightMetaX, kRightSizeY, kRightTitleChars * 8, 10, kMenuBg);
-    lcd->drawTextBg(kRightMetaX, kRightSizeY, line2, Color::WHITE, kMenuBg);
+    fillRectTranslucent(lcd, kRightMetaX, kRightSizeY, kRightTitleChars * 8, 10, kMenuBg,
+                        kMenuContentOverlayAlpha, menu_bg);
+    lcd->setTextColor(Color::WHITE);
+    lcd->drawText(kRightMetaX, kRightSizeY, line2);
 }
 
 /** 右パネルのスクロールタイトルを描画する。変化があったとき true を返す。アニメ tick 時に呼ぶ */
@@ -626,8 +769,10 @@ bool drawRightTitleScroll(ST7789_LCD* lcd, MenuState& state, MenuUiCache& cache)
     if (cache.ready && std::strcmp(cache.prev_scroll_title, title_view) == 0) {
         return false;
     }
-    lcd->fillRect(kRightMetaX, kRightTitleY, kRightTitleChars * 8, 10, kMenuBg);
-    lcd->drawTextBg(kRightMetaX, kRightTitleY, title_view, Color::WHITE, kMenuBg);
+    fillRectTranslucent(lcd, kRightMetaX, kRightTitleY, kRightTitleChars * 8, 10, kMenuBg,
+                        kMenuContentOverlayAlpha, cache.bg);
+    lcd->setTextColor(Color::WHITE);
+    lcd->drawText(kRightMetaX, kRightTitleY, title_view);
     std::strncpy(cache.prev_scroll_title, title_view, sizeof(cache.prev_scroll_title) - 1);
     cache.prev_scroll_title[sizeof(cache.prev_scroll_title) - 1] = '\0';
     return true;
@@ -635,26 +780,26 @@ bool drawRightTitleScroll(ST7789_LCD* lcd, MenuState& state, MenuUiCache& cache)
 
 /** メニュー画面を初回または全面再描画する。一覧読込後・設定復帰後に呼ぶ */
 void initGameSelectMenu(const GameSelectMenu::Config& config, MenuState& state, MenuUiCache& cache,
-                        PreviewPixelBuffer& preview_buf) {
+                        PreviewPixelBuffer& preview_buf, const char* games_dir) {
     ST7789_LCD* lcd = config.lcd;
     if (!lcd) {
         printf("[MENU-DBG] initGameSelectMenu: no lcd\n");
         fflush(stdout);
         return;
     }
-    printf("[MENU-DBG] initGameSelectMenu: start count=%d selected=%d\n", state.count,
-           state.selected);
+    printf("[MENU-DBG] initGameSelectMenu: start count=%d selected=%d bg=%d\n", state.count,
+           state.selected, cache.bg_index);
     fflush(stdout);
     cache.ready = false;
     cache.prev_selected = -1;
     cache.prev_view_offset = -1;
     cache.prev_scroll_title[0] = '\0';
-    drawMenuStaticChrome(lcd);
+    drawMenuStaticChrome(lcd, cache.bg);
     syncViewOffset(state);
-    drawMenuListPanel(lcd, state);
+    drawMenuListPanel(lcd, state, cache.bg);
     drawRightTitleScroll(lcd, state, cache);
-    drawRightSizeLine(lcd, state);
-    drawRightPreviewPanel(config, state, preview_buf);
+    drawRightSizeLine(lcd, state, cache.bg);
+    drawRightPreviewPanel(config, state, preview_buf, cache.bg, games_dir);
     cache.ready = true;
     cache.prev_selected = state.selected;
     cache.prev_view_offset = state.view_offset;
@@ -665,14 +810,14 @@ void initGameSelectMenu(const GameSelectMenu::Config& config, MenuState& state, 
 /** カーソル移動時に変更行と右パネルのみ部分更新する。UP/DOWN 入力時に呼ぶ */
 void updateGameSelectSelection(const GameSelectMenu::Config& config, MenuState& state,
                                MenuUiCache& cache, int old_selected,
-                               PreviewPixelBuffer& preview_buf) {
+                               PreviewPixelBuffer& preview_buf, const char* games_dir) {
     ST7789_LCD* lcd = config.lcd;
     if (!lcd) {
         return;
     }
     syncViewOffset(state);
     if (state.view_offset != cache.prev_view_offset) {
-        drawMenuListPanel(lcd, state);
+        drawMenuListPanel(lcd, state, cache.bg);
     } else {
         const auto slot_of = [&](int game_index) -> int {
             if (game_index < state.view_offset) {
@@ -684,21 +829,21 @@ void updateGameSelectSelection(const GameSelectMenu::Config& config, MenuState& 
         const int old_slot = slot_of(old_selected);
         const int new_slot = slot_of(state.selected);
         if (old_slot >= 0) {
-            drawMenuGameRow(lcd, state, old_slot, old_selected);
+            drawMenuGameRow(lcd, state, old_slot, old_selected, cache.bg);
         }
         if (new_slot >= 0) {
-            drawMenuGameRow(lcd, state, new_slot, state.selected);
+            drawMenuGameRow(lcd, state, new_slot, state.selected, cache.bg);
         }
         if (showTruncationRow(state)) {
-            drawTruncationNoticeRow(lcd, kMaxVisibleRows - 1);
+            drawTruncationNoticeRow(lcd, kMaxVisibleRows - 1, cache.bg);
         }
     }
     state.loaded_preview_index = -1;
     state.preview_loaded = false;
     cache.prev_scroll_title[0] = '\0';
     drawRightTitleScroll(lcd, state, cache);
-    drawRightSizeLine(lcd, state);
-    drawRightPreviewPanel(config, state, preview_buf);
+    drawRightSizeLine(lcd, state, cache.bg);
+    drawRightPreviewPanel(config, state, preview_buf, cache.bg, games_dir);
     cache.prev_selected = state.selected;
     cache.prev_view_offset = state.view_offset;
 }
@@ -747,6 +892,7 @@ bool GameSelectMenu::run(const Config& config) {
 
         MenuState state = {};
         MenuUiCache ui_cache = {};
+        pickRandomMenuBackground(ui_cache);
         if (SdService::isMounted()) {
             loadGameMenuEntries(state, games_dir);
         }
@@ -758,9 +904,9 @@ bool GameSelectMenu::run(const Config& config) {
         syncViewOffset(state);
 
         if (state.count <= 0) {
-            drawEmptyGamesScreen(config.lcd, SdService::isMounted());
+            drawEmptyGamesScreen(config.lcd, SdService::isMounted(), ui_cache.bg);
         } else {
-            initGameSelectMenu(config, state, ui_cache, preview_buf);
+            initGameSelectMenu(config, state, ui_cache, preview_buf, games_dir);
         }
 
         uint32_t last_scroll_anim_ms = 0;
@@ -786,18 +932,18 @@ bool GameSelectMenu::run(const Config& config) {
                     releaseGameCatalog(state);
                 }
                 if (state.count <= 0) {
-                    drawEmptyGamesScreen(config.lcd, SdService::isMounted());
+                    drawEmptyGamesScreen(config.lcd, SdService::isMounted(), ui_cache.bg);
                     ui_cache.ready = false;
                     ui_cache.prev_selected = -1;
                 } else {
-                    initGameSelectMenu(config, state, ui_cache, preview_buf);
+                    initGameSelectMenu(config, state, ui_cache, preview_buf, games_dir);
                 }
             }
 
             if (state.count > 0 && ui_cache.ready &&
                 now - last_scroll_anim_ms >= kTitleScrollStepMs) {
                 if (drawRightTitleScroll(config.lcd, state, ui_cache)) {
-                    drawRightPreviewPanel(config, state, preview_buf);
+                    drawRightPreviewPanel(config, state, preview_buf, ui_cache.bg, games_dir);
                 }
                 last_scroll_anim_ms = now;
             }
@@ -820,7 +966,8 @@ bool GameSelectMenu::run(const Config& config) {
                 state.count > 0 && ui_cache.ready && state.selected != ui_cache.prev_selected;
             if (selection_changed) {
                 playMenuCursorSe(config.audio);
-                updateGameSelectSelection(config, state, ui_cache, old_selected, preview_buf);
+                updateGameSelectSelection(config, state, ui_cache, old_selected, preview_buf,
+                                          games_dir);
             }
             if (config.buttons->wasPressed(Button::NEAR) ||
                 config.buttons->wasPressed(Button::OP_RIGHT)) {
@@ -834,19 +981,24 @@ bool GameSelectMenu::run(const Config& config) {
                     need_full_redraw = true;
                 } else if (config.on_run_game && state.games && state.selected >= 0 &&
                            state.selected < state.count) {
-                    std::snprintf(pending_launch_path, sizeof(pending_launch_path), "%s",
-                                  state.games[state.selected].script_path);
-                    resume_selected = state.selected;
-                    pending_launch = true;
+                    if (GameCatalog::refreshEntryPaths(games_dir, state.games[state.selected])) {
+                        std::snprintf(pending_launch_path, sizeof(pending_launch_path), "%s",
+                                      state.games[state.selected].script_path);
+                        resume_selected = state.selected;
+                        pending_launch = true;
+                    } else {
+                        printf("GameSelectMenu: launch path resolve failed for %s\n",
+                               state.games[state.selected].install_name);
+                    }
                 }
             }
             if (need_full_redraw) {
                 if (state.count <= 0) {
-                    drawEmptyGamesScreen(config.lcd, SdService::isMounted());
+                    drawEmptyGamesScreen(config.lcd, SdService::isMounted(), ui_cache.bg);
                     ui_cache.ready = false;
                     ui_cache.prev_selected = -1;
                 } else {
-                    initGameSelectMenu(config, state, ui_cache, preview_buf);
+                    initGameSelectMenu(config, state, ui_cache, preview_buf, games_dir);
                 }
             }
             sleep_ms(config.frame_interval_ms);

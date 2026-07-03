@@ -24,6 +24,9 @@ python tool/lua_preview/preview.py Test_Lua/tile_test/tile_test.lua
 # ビジュアルノベル
 python tool/lua_preview/preview.py Test_Lua/visual_novel/visual_novel.lua
 
+# Bad Apple!!（1 ビット差分ストリーム）
+python tool/lua_preview/preview.py Test_Lua/bad_apple/bad_apple.lua
+
 # 画面 3 倍（960×720）
 python tool/lua_preview/preview.py Test_Lua/stg/stg.lua --scale 3
 ```
@@ -47,7 +50,7 @@ python tool/lua_preview/preview.py Test_Lua/stg/stg.lua --scale 3
 - バンド: `band_index`, `band_count`, `band_top`, `band_bottom`, `band_height`, `rect_in_band`
 - 画像: `load_image`, `draw_image`, `draw_image_keyed`, `free_image`, `image_size`, スプライト別名
 - タイル: `draw_tilemap`, `set_draw_mode`, レイヤー API 一式（`layers` モード）
-- ストリーム: `draw_bg_stream`, `draw_vn_stream`
+- ストリーム: `draw_bg_stream`, `draw_vn_stream`, `draw_bw_stream`, `draw_bw_pack`
 - フォント: `load_font`（MISF v1 `.bin`）, `font_height`, `font_advance`, `set_font_scale`
 - パス: `script_dir`, `resolve_path`, `file_exists`, `load_return`
 - セーブ: `save_data` / `load_data` → ゲームフォルダ内 `_preview_save/` に保存
@@ -74,5 +77,6 @@ python tool/lua_preview/preview.py Test_Lua/stg/stg.lua --scale 3
 | `machine_api.py` | `machine.*` モック |
 | `framebuffer.py` | RGB565 + バンド描画 |
 | `tile_layers.py` | layers モード合成 |
+| `bw_stream.py` | 1 ビット白黒ストリーム（`draw_bw_stream`） |
 | `font_misf.py` | MISF フォント |
 | `lua_compat.py` | Lua 5.4 → LuaJIT 前処理 |

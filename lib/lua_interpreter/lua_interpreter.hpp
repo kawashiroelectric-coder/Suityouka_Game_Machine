@@ -147,8 +147,16 @@ public:
     /** 背景 1 枚: SD から現在バンド行だけ読み drawImageSub（RAM に全枚載せない）。
      *  フレーム中 FIL を保持し、次バンドを prefetchBgStreamBand で先読み可能。 */
     bool drawBgStreamFromSd(const char* path, int dx, int dy, uint16_t w, uint16_t h);
-    /** フレーム末・ゲーム終了時に bg_stream_ の FIL を閉じる */
+    /** 1 ビット白黒フレーム: SD から現在バンド行だけ読み RGB565 に展開して描画 */
+    bool drawBwStreamFromSd(const char* path, int dx, int dy, uint16_t w, uint16_t h,
+                            uint16_t fg, uint16_t bg);
+    /** 1 ビット白黒フレーム列（BWPK）: 指定フレームを読み込みバンド描画 */
+    bool drawBwPackFromSd(const char* path, int frame_index, int dx, int dy, uint16_t w,
+                          uint16_t h, uint16_t fg, uint16_t bg);
+    /** フレーム末・ゲーム終了時に bg_stream_ の FIL を閉じる（BW パック状態は維持） */
     void closeBgStream();
+    /** bg_stream_ を完全リセット（ゲーム終了・アセット解放時） */
+    void resetBgStream();
 
     /** VN: 背景 + 立ち絵最大 2 枚を SD バンド合成（vn_stream_compose.cpp）。
      *  machine.draw_vn_stream から呼ばれる。 */
@@ -199,8 +207,15 @@ private:
         char path[FF_LFN_BUF + 4]{};
         char fail_path[FF_LFN_BUF + 4]{};
         bool open = false;
+        bool bw_mode = false;
         uint16_t width = 0;
         uint16_t height = 0;
+        uint16_t bw_fg = 0xFFFF;
+        uint16_t bw_bg = 0x0000;
+        int bw_pack_frame = 0;
+        uint32_t bw_pack_count = 0;
+        uint32_t bw_pack_data_base = 0;
+        int bw_buffer_frame = 0;
         int dx = 0;
         int dy = 0;
         struct {
@@ -211,12 +226,42 @@ private:
             int src_y0 = 0;
             uint8_t buf_slot = 0;
         } prefetch;
+        /** draw_bw_pack RGB 全画面: band0 以降は Lua game_draw を省略して C 側 blit */
+        bool bw_rgb_fast_bands = false;
     } bg_stream_;
 
     VnStreamComposeState vn_stream_;
 
+    /** bad_apple 実行時のみ true（他ゲーム API には影響なし） */
+    bool bad_apple_player_ = false;
+    bool bad_apple_fast_active_ = false;
+    char bad_apple_pack_path_[FF_LFN_BUF + 4]{};
+    bool bad_apple_ready_ = false;
+    bool bad_apple_missing_ = false;
+    int bad_apple_frame_idx_ = 1;
+    int bad_apple_frame_acc_ = 0;
+    int bad_apple_frame_ms_ = 33;
+    uint32_t bad_apple_frame_count_ = 6572;
+    int bad_apple_last_drawn_frame_ = 0;
+    bool bad_apple_skip_prefetch_ = false;
+
+    /** bad_apple 専用: Lua game_update を C 側で処理（true=継続, false=終了） */
+    bool runBadAppleUpdate(int dt_ms);
+
     /** 次バンド用に背景ストリームの行データを先読みする */
     void prefetchBgStreamBand(int display_band);
+    /** draw_bw_pack RGB 全画面時: 現在バンドへキャッシュ RGB を blit（Lua 省略用） */
+    bool drawBwPackBlitCurrentBand();
+
+    /** bad_apple 専用: BWPK を RGB565 キャッシュまで準備（帯 blit なし） */
+    bool ensureBwPackRgbFrameReady(const char* path, int frame_index, uint16_t w, uint16_t h,
+                                   uint16_t fg, uint16_t bg, const uint16_t** out_pixels);
+    /** bad_apple 専用: Lua game_draw を使わず 1 回 DMA で全画面描画 */
+    bool runBadAppleDrawFrame();
+    /** bad_apple 専用: game_init 後に FRAMES_PACK 等を取り込む */
+    void initBadApplePlayerFromLua();
+    /** スクリプトパスが bad_apple か判定 */
+    static bool isBadAppleScriptPath(const char* path);
 
     /** 実行中ゲームのスクリプトディレクトリをクリアする */
     void clearGameScriptDir();

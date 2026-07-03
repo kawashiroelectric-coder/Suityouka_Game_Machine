@@ -12,7 +12,8 @@ class ST7789_LCD;
 class ButtonInput;
 class LuaAudio;
 
-/** WiFi / 音量等のシステム設定画面 */
+/** 音量・明るさ等のシステム設定画面。
+ *  コードバージョン表示文字列は system_settings_menu.cpp の kSettingsVersionText を編集。 */
 class SystemSettingsMenu {
 public:
     using FrameCallback = void (*)(void* user_data);

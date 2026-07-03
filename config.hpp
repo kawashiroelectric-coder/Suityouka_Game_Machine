@@ -221,7 +221,8 @@ BUDGET_BYTES	評価
 320KB 以上      スタック・予算外・断片化で危険域
 384KB           物理上限を超えやすく、現実的には不可に近い*/
 namespace HeapConfig {
-    constexpr size_t BUDGET_BYTES = 256 * 1024;
+    /** draw_bw_pack の RGB565 ダブルバッファ（約 300KB）を含む目安 */
+    constexpr size_t BUDGET_BYTES = 320 * 1024;
     /** malloc 失敗前に残しておく安全マージン */
     constexpr size_t RESERVE_BYTES = 8 * 1024;
 }

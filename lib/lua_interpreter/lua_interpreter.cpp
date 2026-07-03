@@ -99,8 +99,10 @@ LuaInterpreter::~LuaInterpreter() {
 void LuaInterpreter::releaseGameAssets() {
     printf("[MENU-DBG] releaseGameAssets begin\n");
     fflush(stdout);
-    closeBgStream();
-    printf("[MENU-DBG] releaseGameAssets: after closeBgStream\n");
+    resetBgStream();
+    printf("[MENU-DBG] releaseGameAssets: after resetBgStream\n");
+    bwFrameBufRelease(g_session_teardown);
+    bwPackRgbBufRelease(g_session_teardown);
     fflush(stdout);
     closeVnStreamCompose(true);
     printf("[MENU-DBG] releaseGameAssets: after closeVnStreamCompose\n");
@@ -145,7 +147,7 @@ void LuaInterpreter::releaseGameLuaVm() {
 /** ゲームループ終了直後の軽量終了処理（音声停止・グローバル trim、lua_close は行わない） */
 void LuaInterpreter::finishGameSession() {
     audio_engine_.stop();
-    closeBgStream();
+    resetBgStream();
     if (game_lua_) {
         printf("[MENU-DBG] finishGameSession: trimming lua globals\n");
         fflush(stdout);
@@ -226,7 +228,17 @@ void LuaInterpreter::closePendingGameSession() {
 /** ゲーム状態をすべて終了する（音声停止＋遅延セッション解放） */
 void LuaInterpreter::closeGameState() {
     audio_engine_.stop();
-    closeBgStream();
+    bad_apple_player_ = false;
+    bad_apple_fast_active_ = false;
+    bad_apple_pack_path_[0] = '\0';
+    bad_apple_ready_ = false;
+    bad_apple_missing_ = false;
+    bad_apple_frame_idx_ = 1;
+    bad_apple_frame_acc_ = 0;
+    bad_apple_frame_ms_ = 33;
+    bad_apple_frame_count_ = 6572;
+    bad_apple_last_drawn_frame_ = 0;
+    resetBgStream();
     closeDeferredSession();
 }
 
@@ -368,25 +380,128 @@ int LuaInterpreter::loadImage(const char* path, uint16_t w, uint16_t h) {
     return slot_id;
 }
 
-/** 背景ストリーム用に開いている SD ファイルを閉じ、状態をリセットする */
+/** フレーム末: FIL を閉じる。BW パックの差分連鎖用 RAM 状態は維持する */
 void LuaInterpreter::closeBgStream() {
-    if (bg_stream_.open) {
+    const bool bw_pack_active = bg_stream_.bw_mode && bg_stream_.bw_pack_count > 0;
+    if (bg_stream_.open && !bw_pack_active) {
         f_close(&bg_stream_.file);
         bg_stream_.open = false;
+    }
+    bg_stream_.prefetch.valid = false;
+    bg_stream_.prefetch.display_band = -1;
+    if (bg_stream_.bw_mode) {
+        if (bw_pack_active && bg_stream_.open && bg_stream_.bw_pack_frame > 0 &&
+            bwPackRgbIsReady()) {
+            bwPackRgbPrefetchNextFrame(
+                &bg_stream_.file, bg_stream_.bw_pack_frame, bg_stream_.bw_pack_count,
+                bg_stream_.bw_pack_data_base, bg_stream_.width, bg_stream_.height, bg_stream_.bw_fg,
+                bg_stream_.bw_bg, &bg_stream_.bw_buffer_frame);
+        }
+        return;
     }
     bg_stream_.path[0] = '\0';
     bg_stream_.fail_path[0] = '\0';
     bg_stream_.width = 0;
     bg_stream_.height = 0;
+    bg_stream_.bw_fg = 0xFFFF;
+    bg_stream_.bw_bg = 0x0000;
+    bg_stream_.bw_pack_frame = 0;
+    bg_stream_.bw_pack_count = 0;
+    bg_stream_.bw_pack_data_base = 0;
+    bg_stream_.bw_buffer_frame = 0;
+    bg_stream_.dx = 0;
+    bg_stream_.dy = 0;
+}
+
+/** 背景ストリーム状態を完全リセット（ゲーム終了・アセット解放時） */
+void LuaInterpreter::resetBgStream() {
+    if (bg_stream_.open) {
+        f_close(&bg_stream_.file);
+        bg_stream_.open = false;
+    }
+    bwPackRgbBufRelease(g_session_teardown);
+    bg_stream_.path[0] = '\0';
+    bg_stream_.fail_path[0] = '\0';
+    bg_stream_.width = 0;
+    bg_stream_.height = 0;
+    bg_stream_.bw_mode = false;
+    bg_stream_.bw_fg = 0xFFFF;
+    bg_stream_.bw_bg = 0x0000;
+    bg_stream_.bw_pack_frame = 0;
+    bg_stream_.bw_pack_count = 0;
+    bg_stream_.bw_pack_data_base = 0;
+    bg_stream_.bw_buffer_frame = 0;
     bg_stream_.dx = 0;
     bg_stream_.dy = 0;
     bg_stream_.prefetch.valid = false;
     bg_stream_.prefetch.display_band = -1;
+    bg_stream_.bw_rgb_fast_bands = false;
+}
+
+/** draw_bw_pack RGB 全画面: 現在バンドへキャッシュ済み RGB565 を転写する */
+bool LuaInterpreter::drawBwPackBlitCurrentBand() {
+    if (!bg_stream_.bw_rgb_fast_bands || !bwPackRgbIsReady() || bg_stream_.bw_pack_frame <= 0) {
+        return false;
+    }
+    GameDisplay* disp = hooks_.display;
+    if (!disp) {
+        return false;
+    }
+
+    const int band_index = disp->bandIndex();
+    int draw_top = 0;
+    int rows = 0;
+    int src_y0 = 0;
+    if (!bgStreamBandRegion(band_index, bg_stream_.dx, bg_stream_.dy, bg_stream_.width,
+                            bg_stream_.height, &draw_top, &rows, &src_y0)) {
+        return true;
+    }
+
+    const uint16_t* rgb = bwPackRgbDisplayPixels(bg_stream_.width, bg_stream_.height);
+    if (!rgb) {
+        return false;
+    }
+    disp->drawImageSub(bg_stream_.dx, draw_top, static_cast<int>(bg_stream_.width),
+                       static_cast<int>(bg_stream_.height), rgb, 0, src_y0,
+                       static_cast<int>(bg_stream_.width), rows);
+    return true;
 }
 
 /** 次バンド用に背景ストリームの行データを先読みしてバッファに載せる */
 void LuaInterpreter::prefetchBgStreamBand(int display_band) {
     bg_stream_.prefetch.valid = false;
+    if (bg_stream_.bw_mode && bg_stream_.bw_pack_count > 0) {
+        if (bwPackRgbIsReady()) {
+            return;
+        }
+        if (display_band < 0 || !bwFrameIsValid()) {
+            return;
+        }
+
+        int draw_top = 0;
+        int rows = 0;
+        int src_y0 = 0;
+        if (!bgStreamBandRegion(display_band, bg_stream_.dx, bg_stream_.dy, bg_stream_.width,
+                                bg_stream_.height, &draw_top, &rows, &src_y0)) {
+            return;
+        }
+
+        uint8_t* frame = bwFrameBuf();
+        if (!frame) {
+            return;
+        }
+
+        const uint8_t slot = static_cast<uint8_t>(display_band & 1);
+        expandBwBufferChunk(frame, bg_stream_.width, src_y0, rows, g_bg_stream_buf[slot],
+                            bg_stream_.bw_fg, bg_stream_.bw_bg);
+        bg_stream_.prefetch.valid = true;
+        bg_stream_.prefetch.display_band = display_band;
+        bg_stream_.prefetch.draw_top = draw_top;
+        bg_stream_.prefetch.rows = rows;
+        bg_stream_.prefetch.src_y0 = src_y0;
+        bg_stream_.prefetch.buf_slot = slot;
+        return;
+    }
     if (!bg_stream_.open || display_band < 0) {
         return;
     }
@@ -400,9 +515,20 @@ void LuaInterpreter::prefetchBgStreamBand(int display_band) {
     }
 
     const uint8_t slot = static_cast<uint8_t>(display_band & 1);
-    if (!readBgStreamChunk(&bg_stream_.file, bg_stream_.width, src_y0, rows,
-                           g_bg_stream_buf[slot])) {
+    if (bg_stream_.bw_mode && bwFrameIsValid()) {
+        uint8_t* frame = bwFrameBuf();
+        if (frame) {
+            expandBwBufferChunk(frame, bg_stream_.width, src_y0, rows, g_bg_stream_buf[slot],
+                                bg_stream_.bw_fg, bg_stream_.bw_bg);
+        }
+    } else if (bg_stream_.bw_mode) {
         return;
+    } else {
+        const bool ok = readBgStreamChunk(&bg_stream_.file, bg_stream_.width, src_y0, rows,
+                                          g_bg_stream_buf[slot]);
+        if (!ok) {
+            return;
+        }
     }
 
     bg_stream_.prefetch.valid = true;
@@ -449,9 +575,9 @@ bool LuaInterpreter::drawBgStreamFromSd(const char* path, int dx, int dy, uint16
 
     const bool path_changed =
         !bg_stream_.open || std::strcmp(bg_stream_.path, norm) != 0 || bg_stream_.width != w ||
-        bg_stream_.height != h;
+        bg_stream_.height != h || bg_stream_.bw_mode;
     if (path_changed) {
-        closeBgStream();
+        resetBgStream();
         const size_t byte_size = static_cast<size_t>(w) * static_cast<size_t>(h) * 2u;
         const FRESULT fr = f_open(&bg_stream_.file, norm, FA_READ);
         if (fr != FR_OK) {
@@ -470,6 +596,7 @@ bool LuaInterpreter::drawBgStreamFromSd(const char* path, int dx, int dy, uint16
             return false;
         }
         bg_stream_.open = true;
+        bg_stream_.bw_mode = false;
         std::strncpy(bg_stream_.path, norm, sizeof(bg_stream_.path) - 1);
         bg_stream_.path[sizeof(bg_stream_.path) - 1] = '\0';
         bg_stream_.width = w;
@@ -488,6 +615,574 @@ bool LuaInterpreter::drawBgStreamFromSd(const char* path, int dx, int dy, uint16
     } else if (!readBgStreamChunk(&bg_stream_.file, w, src_y0, rows, g_bg_stream_buf[use_slot])) {
         printf("drawBgStream: read failed %s\n", norm);
         return false;
+    }
+
+    disp->drawImageSub(dx, draw_top, static_cast<int>(w), rows, g_bg_stream_buf[use_slot], 0, 0,
+                       static_cast<int>(w), rows);
+    bg_stream_.prefetch.valid = false;
+    return true;
+}
+
+/** SD から 1 ビット白黒フレームを読み込み、現在バンド分を画面に描画する */
+bool LuaInterpreter::drawBwStreamFromSd(const char* path, int dx, int dy, uint16_t w, uint16_t h,
+                                        uint16_t fg, uint16_t bg) {
+    if (!path || path[0] == '\0' || w == 0 || h == 0) {
+        return false;
+    }
+    if (!sd_mounted_) {
+        return false;
+    }
+    GameDisplay* disp = hooks_.display;
+    if (!disp) {
+        return false;
+    }
+
+    char norm[FF_LFN_BUF + 4];
+    resolveGamePath(path, norm, sizeof(norm));
+
+    if (bg_stream_.fail_path[0] != '\0' && std::strcmp(bg_stream_.fail_path, norm) == 0) {
+        return false;
+    }
+
+    const int band_index = disp->bandIndex();
+    int draw_top = 0;
+    int rows = 0;
+    int src_y0 = 0;
+    if (!bgStreamBandRegion(band_index, dx, dy, w, h, &draw_top, &rows, &src_y0)) {
+        return true;
+    }
+
+    const size_t chunk = static_cast<size_t>(w) * static_cast<size_t>(rows);
+    if (chunk > sizeof(g_bg_stream_buf[0]) / sizeof(g_bg_stream_buf[0][0])) {
+        printf("drawBwStream: band chunk too large (%u)\n", static_cast<unsigned>(chunk));
+        return false;
+    }
+
+    const bool frame_changed = std::strcmp(bg_stream_.path, norm) != 0 || bg_stream_.width != w ||
+                               bg_stream_.height != h || !bg_stream_.bw_mode ||
+                               bg_stream_.bw_fg != fg || bg_stream_.bw_bg != bg;
+    if (frame_changed) {
+        if (bg_stream_.open && bg_stream_.bw_pack_count > 0) {
+            f_close(&bg_stream_.file);
+            bg_stream_.open = false;
+        }
+        if (!bwFrameBufEnsure(w, h)) {
+            printf("drawBwStream: frame buffer alloc failed %ux%u\n", w, h);
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+        uint8_t* frame = bwFrameBuf();
+        if (!frame) {
+            return false;
+        }
+        FIL file{};
+        const FRESULT fr = f_open(&file, norm, FA_READ);
+        if (fr != FR_OK) {
+            printf("drawBwStream: open failed %s (%s)\n", norm, FRESULT_str(fr));
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+        const FSIZE_t file_size = f_size(&file);
+        const size_t frame_bytes = bwFrameByteSize(w, h);
+        if (file_size > frame_bytes) {
+            printf("drawBwStream: file too large %s (%lu > %u)\n", norm,
+                   static_cast<unsigned long>(file_size), static_cast<unsigned>(frame_bytes));
+            f_close(&file);
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+        if (!loadBwFrameFromSd(&file, file_size, frame, w, h)) {
+            printf("drawBwStream: load failed %s (%lu bytes)\n", norm,
+                   static_cast<unsigned long>(file_size));
+            f_close(&file);
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+        f_close(&file);
+        bg_stream_.open = false;
+        bg_stream_.bw_mode = true;
+        bg_stream_.bw_fg = fg;
+        bg_stream_.bw_bg = bg;
+        bg_stream_.bw_pack_frame = 0;
+        bg_stream_.bw_pack_count = 0;
+        bg_stream_.bw_pack_data_base = 0;
+        std::strncpy(bg_stream_.path, norm, sizeof(bg_stream_.path) - 1);
+        bg_stream_.path[sizeof(bg_stream_.path) - 1] = '\0';
+        bg_stream_.width = w;
+        bg_stream_.height = h;
+        bg_stream_.fail_path[0] = '\0';
+        if (file_size == 0) {
+            printf("drawBwStream: skip %s\n", norm);
+        } else if (file_size == frame_bytes) {
+            printf("drawBwStream: full %s (%u bytes)\n", norm, static_cast<unsigned>(file_size));
+        } else {
+            printf("drawBwStream: delta %s (%lu bytes)\n", norm,
+                   static_cast<unsigned long>(file_size));
+        }
+    }
+
+    if (!bwFrameIsValid()) {
+        return false;
+    }
+
+    bg_stream_.dx = dx;
+    bg_stream_.dy = dy;
+
+    uint8_t* frame = bwFrameBuf();
+    if (!frame) {
+        return false;
+    }
+
+    uint8_t use_slot = static_cast<uint8_t>(band_index & 1);
+    const auto& pf = bg_stream_.prefetch;
+    if (pf.valid && pf.display_band == band_index && pf.draw_top == draw_top && pf.rows == rows &&
+        pf.src_y0 == src_y0) {
+        use_slot = pf.buf_slot;
+    } else {
+        expandBwBufferChunk(frame, w, src_y0, rows, g_bg_stream_buf[use_slot], fg, bg);
+    }
+
+    disp->drawImageSub(dx, draw_top, static_cast<int>(w), rows, g_bg_stream_buf[use_slot], 0, 0,
+                       static_cast<int>(w), rows);
+    bg_stream_.prefetch.valid = false;
+    return true;
+}
+
+/** スクリプトパスが bad_apple 専用プレイヤー対象か判定する */
+bool LuaInterpreter::isBadAppleScriptPath(const char* path) {
+    if (!path || path[0] == '\0') {
+        return false;
+    }
+    if (!std::strstr(path, "bad_apple")) {
+        return false;
+    }
+    const char* name = std::strrchr(path, '/');
+    name = name ? name + 1 : path;
+    return std::strcmp(name, "bad_apple.lua") == 0;
+}
+
+/** bad_apple: game_init 後に FRAMES_PACK パスを解決して保持する */
+void LuaInterpreter::initBadApplePlayerFromLua() {
+    bad_apple_player_ = true;
+    bad_apple_fast_active_ = true;
+    bad_apple_pack_path_[0] = '\0';
+
+    if (!game_lua_) {
+        return;
+    }
+
+    const char* rel = "frames.pack";
+    lua_getglobal(game_lua_, "FRAMES_PACK");
+    if (lua_isstring(game_lua_, -1)) {
+        const char* pack = lua_tostring(game_lua_, -1);
+        if (pack && pack[0] != '\0') {
+            rel = pack;
+        }
+    }
+    lua_pop(game_lua_, 1);
+
+    resolveGamePath(rel, bad_apple_pack_path_, sizeof(bad_apple_pack_path_));
+
+    bad_apple_frame_idx_ = 1;
+    bad_apple_frame_acc_ = 0;
+    bad_apple_frame_ms_ = 33;
+    bad_apple_frame_count_ = 6572;
+    bad_apple_last_drawn_frame_ = 0;
+    bad_apple_ready_ = true;
+    bad_apple_missing_ = false;
+
+    lua_getglobal(game_lua_, "__bad_apple_ready");
+    if (lua_isboolean(game_lua_, -1)) {
+        bad_apple_ready_ = lua_toboolean(game_lua_, -1);
+    }
+    lua_pop(game_lua_, 1);
+
+    lua_getglobal(game_lua_, "__bad_apple_missing");
+    if (lua_isboolean(game_lua_, -1)) {
+        bad_apple_missing_ = lua_toboolean(game_lua_, -1);
+    }
+    lua_pop(game_lua_, 1);
+
+    lua_getglobal(game_lua_, "__bad_apple_frame_ms");
+    if (lua_isinteger(game_lua_, -1)) {
+        const lua_Integer ms = lua_tointeger(game_lua_, -1);
+        if (ms > 0 && ms <= 1000) {
+            bad_apple_frame_ms_ = static_cast<int>(ms);
+        }
+    }
+    lua_pop(game_lua_, 1);
+
+    lua_getglobal(game_lua_, "__bad_apple_frame_count");
+    if (lua_isinteger(game_lua_, -1)) {
+        const lua_Integer count = lua_tointeger(game_lua_, -1);
+        if (count > 0) {
+            bad_apple_frame_count_ = static_cast<uint32_t>(count);
+        }
+    }
+    lua_pop(game_lua_, 1);
+
+    printf("bad_apple: fast player enabled (%s, %dms, %u frames)\n", bad_apple_pack_path_,
+           bad_apple_frame_ms_, static_cast<unsigned>(bad_apple_frame_count_));
+}
+
+namespace {
+
+bool badAppleExitPressed(const LuaHostHooks& hooks) {
+    if (!hooks.is_button_pressed) {
+        return false;
+    }
+    static const int kJumpButtons[] = {1, 5, 0, 3, 7};
+    for (int btn : kJumpButtons) {
+        if (hooks.is_button_pressed(hooks.user_data, btn)) {
+            return true;
+        }
+    }
+    if (hooks.is_button_pressed(hooks.user_data, 4)) {
+        return true;
+    }
+    if (hooks.is_button_pressed(hooks.user_data, 2)) {
+        return true;
+    }
+    return false;
+}
+
+}  // namespace
+
+/** bad_apple 専用: Lua game_update を C 側で処理（true=継続, false=終了） */
+bool LuaInterpreter::runBadAppleUpdate(int dt_ms) {
+    if (badAppleExitPressed(hooks_)) {
+        return false;
+    }
+    if (!bad_apple_ready_) {
+        return true;
+    }
+
+    bad_apple_frame_acc_ += dt_ms;
+    if (bad_apple_frame_acc_ >= bad_apple_frame_ms_) {
+        bad_apple_frame_acc_ -= bad_apple_frame_ms_;
+        bad_apple_frame_idx_++;
+        if (static_cast<uint32_t>(bad_apple_frame_idx_) > bad_apple_frame_count_) {
+            bad_apple_frame_idx_ = 1;
+        }
+    }
+    return true;
+}
+
+/** bad_apple: BWPK を RGB565 キャッシュまで準備（帯 blit は行わない） */
+bool LuaInterpreter::ensureBwPackRgbFrameReady(const char* path, int frame_index, uint16_t w,
+                                             uint16_t h, uint16_t fg, uint16_t bg,
+                                             const uint16_t** out_pixels) {
+    if (out_pixels) {
+        *out_pixels = nullptr;
+    }
+    if (!path || path[0] == '\0' || frame_index <= 0 || w == 0 || h == 0 || !sd_mounted_) {
+        return false;
+    }
+
+    char norm[FF_LFN_BUF + 4];
+    resolveGamePath(path, norm, sizeof(norm));
+
+    if (bg_stream_.fail_path[0] != '\0' && std::strcmp(bg_stream_.fail_path, norm) == 0) {
+        return false;
+    }
+
+    const bool pack_changed = std::strcmp(bg_stream_.path, norm) != 0 || bg_stream_.width != w ||
+                              bg_stream_.height != h || !bg_stream_.bw_mode ||
+                              bg_stream_.bw_fg != fg || bg_stream_.bw_bg != bg ||
+                              bg_stream_.bw_pack_count == 0;
+
+    if (pack_changed) {
+        if (bg_stream_.open) {
+            f_close(&bg_stream_.file);
+            bg_stream_.open = false;
+        }
+
+        const FRESULT fr = f_open(&bg_stream_.file, norm, FA_READ);
+        if (fr != FR_OK) {
+            printf("drawBwPack: open failed %s (%s)\n", norm, FRESULT_str(fr));
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+        bg_stream_.open = true;
+
+        uint32_t frame_count = 0;
+        uint32_t data_base = 0;
+        if (!bwPackReadHeader(&bg_stream_.file, &frame_count, &data_base)) {
+            printf("drawBwPack: invalid header %s\n", norm);
+            f_close(&bg_stream_.file);
+            bg_stream_.open = false;
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+
+        bg_stream_.bw_mode = true;
+        bg_stream_.bw_fg = fg;
+        bg_stream_.bw_bg = bg;
+        bg_stream_.bw_pack_count = frame_count;
+        bg_stream_.bw_pack_data_base = data_base;
+        bg_stream_.bw_buffer_frame = 0;
+        bg_stream_.bw_pack_frame = 0;
+        std::strncpy(bg_stream_.path, norm, sizeof(bg_stream_.path) - 1);
+        bg_stream_.path[sizeof(bg_stream_.path) - 1] = '\0';
+        bg_stream_.width = w;
+        bg_stream_.height = h;
+        bg_stream_.fail_path[0] = '\0';
+        bg_stream_.bw_rgb_fast_bands = false;
+
+        if (game_lua_) {
+            trimLargeLuaGlobals(game_lua_);
+            lua_gc(game_lua_, LUA_GCCOLLECT, 0);
+        }
+        bwPackRgbBufResetPipeline();
+        if (!bwPackRgbBufEnsure(w, h)) {
+            printf("drawBwPack: RGB dbuf unavailable, band fallback\n");
+        }
+    } else if (!bg_stream_.open) {
+        const FRESULT fr = f_open(&bg_stream_.file, norm, FA_READ);
+        if (fr != FR_OK) {
+            printf("drawBwPack: reopen failed %s (%s)\n", norm, FRESULT_str(fr));
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+        bg_stream_.open = true;
+    }
+
+    if (static_cast<uint32_t>(frame_index) > bg_stream_.bw_pack_count) {
+        printf("drawBwPack: frame %d out of range (%u)\n", frame_index,
+               static_cast<unsigned>(bg_stream_.bw_pack_count));
+        std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+        bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+        return false;
+    }
+
+    if (!bwPackRgbIsReady()) {
+        return false;
+    }
+
+    if (!bwPackRgbHasDisplayFrame(frame_index)) {
+        if (!bwPackRgbTrySwapToFrame(frame_index)) {
+            if (!bwPackRgbLoadDisplayFrame(&bg_stream_.file, frame_index, bg_stream_.bw_pack_count,
+                                           bg_stream_.bw_pack_data_base, w, h, fg, bg,
+                                           &bg_stream_.bw_buffer_frame)) {
+                printf("drawBwPack: RGB load failed %s frame %d\n", norm, frame_index);
+                std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+                bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+                return false;
+            }
+        }
+    }
+
+    bg_stream_.bw_pack_frame = frame_index;
+    bg_stream_.fail_path[0] = '\0';
+    bg_stream_.dx = 0;
+    bg_stream_.dy = 0;
+
+    const uint16_t* rgb = bwPackRgbDisplayPixels(w, h);
+    if (!rgb) {
+        return false;
+    }
+    if (out_pixels) {
+        *out_pixels = rgb;
+    }
+    return true;
+}
+
+/** bad_apple: Lua game_draw を使わず RGB キャッシュから全画面 1 回 DMA */
+bool LuaInterpreter::runBadAppleDrawFrame() {
+    GameDisplay* disp = hooks_.display;
+    if (!disp || bad_apple_pack_path_[0] == '\0') {
+        bad_apple_skip_prefetch_ = false;
+        return false;
+    }
+
+    bad_apple_skip_prefetch_ = false;
+
+    if (bad_apple_missing_ || !bad_apple_ready_) {
+        disp->fillScreen(Color::BLACK);
+        if (bad_apple_missing_) {
+            disp->beginBand(0);
+            disp->drawTextBg(8, 100, "NO FRAMES", Color::rgb(255, 80, 80), Color::BLACK);
+            disp->drawTextBg(8, 116, "Run convert_video.py", Color::rgb(200, 200, 200),
+                             Color::BLACK);
+            disp->endBand();
+            disp->waitForTransferComplete();
+        }
+        bad_apple_last_drawn_frame_ = 0;
+        return true;
+    }
+
+    const int frame_idx = bad_apple_frame_idx_;
+    if (frame_idx == bad_apple_last_drawn_frame_ && bwPackRgbHasDisplayFrame(frame_idx)) {
+        bad_apple_skip_prefetch_ = true;
+        return true;
+    }
+
+    const uint16_t* rgb = nullptr;
+    if (!ensureBwPackRgbFrameReady(bad_apple_pack_path_, frame_idx, GameConfig::SCREEN_WIDTH,
+                                   GameConfig::SCREEN_HEIGHT, 0xFFFF, 0x0000, &rgb)) {
+        return false;
+    }
+    if (!disp->submitFullFrameRgb565(rgb, GameConfig::SCREEN_WIDTH, GameConfig::SCREEN_HEIGHT)) {
+        return false;
+    }
+    bad_apple_last_drawn_frame_ = frame_idx;
+    return true;
+}
+
+/** SD 上の BWPK から指定フレームを読み込み、現在バンド分を画面に描画する */
+bool LuaInterpreter::drawBwPackFromSd(const char* path, int frame_index, int dx, int dy,
+                                      uint16_t w, uint16_t h, uint16_t fg, uint16_t bg) {
+    if (!path || path[0] == '\0' || frame_index <= 0 || w == 0 || h == 0) {
+        return false;
+    }
+    if (!sd_mounted_) {
+        return false;
+    }
+    GameDisplay* disp = hooks_.display;
+    if (!disp) {
+        return false;
+    }
+
+    char norm[FF_LFN_BUF + 4];
+    resolveGamePath(path, norm, sizeof(norm));
+
+    if (bg_stream_.fail_path[0] != '\0' && std::strcmp(bg_stream_.fail_path, norm) == 0) {
+        return false;
+    }
+
+    const int band_index = disp->bandIndex();
+    int draw_top = 0;
+    int rows = 0;
+    int src_y0 = 0;
+    if (!bgStreamBandRegion(band_index, dx, dy, w, h, &draw_top, &rows, &src_y0)) {
+        return true;
+    }
+
+    const size_t chunk = static_cast<size_t>(w) * static_cast<size_t>(rows);
+    if (chunk > sizeof(g_bg_stream_buf[0]) / sizeof(g_bg_stream_buf[0][0])) {
+        printf("drawBwPack: band chunk too large (%u)\n", static_cast<unsigned>(chunk));
+        return false;
+    }
+
+    const uint16_t* rgb = nullptr;
+    if (ensureBwPackRgbFrameReady(path, frame_index, w, h, fg, bg, &rgb)) {
+        disp->drawImageSub(dx, draw_top, static_cast<int>(w), static_cast<int>(h), rgb, 0, src_y0,
+                           static_cast<int>(w), rows);
+        if (dx == 0 && dy == 0 && w == GameConfig::SCREEN_WIDTH && h == GameConfig::SCREEN_HEIGHT) {
+            bg_stream_.bw_rgb_fast_bands = true;
+        }
+        return true;
+    }
+
+    if (!bg_stream_.open || std::strcmp(bg_stream_.path, norm) != 0 || !bg_stream_.bw_mode ||
+        bg_stream_.width != w || bg_stream_.height != h || bg_stream_.bw_pack_count == 0) {
+        if (bg_stream_.open) {
+            f_close(&bg_stream_.file);
+            bg_stream_.open = false;
+        }
+
+        const FRESULT fr = f_open(&bg_stream_.file, norm, FA_READ);
+        if (fr != FR_OK) {
+            printf("drawBwPack: open failed %s (%s)\n", norm, FRESULT_str(fr));
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+        bg_stream_.open = true;
+
+        uint32_t frame_count = 0;
+        uint32_t data_base = 0;
+        if (!bwPackReadHeader(&bg_stream_.file, &frame_count, &data_base)) {
+            printf("drawBwPack: invalid header %s\n", norm);
+            f_close(&bg_stream_.file);
+            bg_stream_.open = false;
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+
+        bg_stream_.bw_mode = true;
+        bg_stream_.bw_fg = fg;
+        bg_stream_.bw_bg = bg;
+        bg_stream_.bw_pack_count = frame_count;
+        bg_stream_.bw_pack_data_base = data_base;
+        bg_stream_.bw_buffer_frame = 0;
+        bg_stream_.bw_pack_frame = 0;
+        std::strncpy(bg_stream_.path, norm, sizeof(bg_stream_.path) - 1);
+        bg_stream_.path[sizeof(bg_stream_.path) - 1] = '\0';
+        bg_stream_.width = w;
+        bg_stream_.height = h;
+        bg_stream_.fail_path[0] = '\0';
+        bg_stream_.bw_rgb_fast_bands = false;
+    } else if (!bg_stream_.open) {
+        const FRESULT fr = f_open(&bg_stream_.file, norm, FA_READ);
+        if (fr != FR_OK) {
+            printf("drawBwPack: reopen failed %s (%s)\n", norm, FRESULT_str(fr));
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+        bg_stream_.open = true;
+    }
+
+    if (static_cast<uint32_t>(frame_index) > bg_stream_.bw_pack_count) {
+        printf("drawBwPack: frame %d out of range (%u)\n", frame_index,
+               static_cast<unsigned>(bg_stream_.bw_pack_count));
+        std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+        bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+        return false;
+    }
+
+    const bool frame_changed = bg_stream_.bw_pack_frame != frame_index;
+    if (frame_changed) {
+        if (!bwFrameBufEnsure(w, h)) {
+            printf("drawBwPack: frame buffer alloc failed %ux%u\n", w, h);
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+        uint8_t* frame = bwFrameBuf();
+        if (!frame) {
+            return false;
+        }
+        if (!syncBwPackToFrame(&bg_stream_.file, static_cast<uint32_t>(frame_index),
+                               bg_stream_.bw_pack_count, bg_stream_.bw_pack_data_base, frame, w,
+                               h, &bg_stream_.bw_buffer_frame)) {
+            printf("drawBwPack: load failed %s frame %d\n", norm, frame_index);
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+        bg_stream_.bw_pack_frame = frame_index;
+        bg_stream_.fail_path[0] = '\0';
+    }
+
+    if (!bwFrameIsValid()) {
+        return false;
+    }
+
+    bg_stream_.dx = dx;
+    bg_stream_.dy = dy;
+
+    uint8_t* frame = bwFrameBuf();
+    if (!frame) {
+        return false;
+    }
+
+    uint8_t use_slot = static_cast<uint8_t>(band_index & 1);
+    const auto& pf = bg_stream_.prefetch;
+    if (pf.valid && pf.display_band == band_index && pf.draw_top == draw_top && pf.rows == rows &&
+        pf.src_y0 == src_y0) {
+        use_slot = pf.buf_slot;
+    } else {
+        expandBwBufferChunk(frame, w, src_y0, rows, g_bg_stream_buf[use_slot], fg, bg);
     }
 
     disp->drawImageSub(dx, draw_top, static_cast<int>(w), rows, g_bg_stream_buf[use_slot], 0, 0,
@@ -841,6 +1536,11 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
 
     hooks_.display->fillScreen(Color::BLACK);
 
+    const bool bad_apple_game = isBadAppleScriptPath(path);
+    if (bad_apple_game) {
+        initBadApplePlayerFromLua();
+    }
+
     uint32_t last_ms = to_ms_since_boot(get_absolute_time());
     bool running = true;
     bool failed = false;
@@ -862,61 +1562,91 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
 
         audio_engine_.pumpStream();
 
-        lua_getglobal(game_lua_, "game_update");
-        if (!lua_isfunction(game_lua_, -1)) {
+        bool exit_requested = false;
+        if (bad_apple_player_ && bad_apple_fast_active_) {
+            if (!runBadAppleUpdate(static_cast<int>(dt))) {
+                exit_requested = true;
+            }
+        } else {
+            lua_getglobal(game_lua_, "game_update");
+            if (!lua_isfunction(game_lua_, -1)) {
+                lua_pop(game_lua_, 1);
+                showStatus("game_update missing", nullptr, Color::RED, Color::BLACK);
+                failed = true;
+                break;
+            }
+            lua_pushinteger(game_lua_, dt);
+            if (lua_pcall(game_lua_, 1, 1, 0) != LUA_OK) {
+                const char* err = lua_tostring(game_lua_, -1);
+                printf("game_update error: %s\n", err ? err : "?");
+                showStatus("game_update err", err, Color::RED, Color::BLACK);
+                lua_pop(game_lua_, 1);
+                failed = true;
+                break;
+            }
+            if (lua_toboolean(game_lua_, -1)) {
+                exit_requested = true;
+            }
             lua_pop(game_lua_, 1);
-            showStatus("game_update missing", nullptr, Color::RED, Color::BLACK);
-            failed = true;
-            break;
         }
-        lua_pushinteger(game_lua_, dt);
-        if (lua_pcall(game_lua_, 1, 1, 0) != LUA_OK) {
-            const char* err = lua_tostring(game_lua_, -1);
-            printf("game_update error: %s\n", err ? err : "?");
-            showStatus("game_update err", err, Color::RED, Color::BLACK);
-            lua_pop(game_lua_, 1);
-            failed = true;
-            break;
-        }
-        if (lua_toboolean(game_lua_, -1)) {
-            lua_pop(game_lua_, 1);
+        if (exit_requested) {
             printf("[MENU-DBG] runGameLoop: game_update returned true (exit request)\n");
             fflush(stdout);
             break;
         }
-        lua_pop(game_lua_, 1);
 
-        const int bands = hooks_.display->bandCount();
-        for (int band = 0; band < bands; band++) {
-            hooks_.display->beginBand(band);
-
-            if (draw_mode_ == LuaDrawMode::Layers) {
-                tile_layers_.composeBand(hooks_.display, tileLayerLookupImage, this);
-            }
-
-            lua_getglobal(game_lua_, "game_draw");
-            if (lua_isfunction(game_lua_, -1)) {
-                if (lua_pcall(game_lua_, 0, 0, 0) != LUA_OK) {
-                    const char* err = lua_tostring(game_lua_, -1);
-                    printf("game_draw error: %s\n", err ? err : "?");
-                    showStatus("game_draw err", err, Color::RED, Color::BLACK);
-                    lua_pop(game_lua_, 1);
-                    failed = true;
-                    running = false;
-                    break;
-                }
+        bool drew_frame = false;
+        if (bad_apple_player_ && bad_apple_fast_active_) {
+            if (runBadAppleDrawFrame()) {
+                drew_frame = true;
             } else {
-                lua_pop(game_lua_, 1);
+                printf("bad_apple: fast path failed, falling back to band loop\n");
+                bad_apple_fast_active_ = false;
             }
+        }
 
-            hooks_.display->endBand();
-            prefetchBgStreamBand(band + 1);
+        if (!drew_frame) {
+            const int bands = hooks_.display->bandCount();
+            bg_stream_.bw_rgb_fast_bands = false;
+            for (int band = 0; band < bands; band++) {
+                hooks_.display->beginBand(band);
+
+                if (draw_mode_ == LuaDrawMode::Layers) {
+                    tile_layers_.composeBand(hooks_.display, tileLayerLookupImage, this);
+                }
+
+                const bool bw_rgb_blit_only =
+                    band > 0 && drawBwPackBlitCurrentBand();
+                if (!bw_rgb_blit_only) {
+                    lua_getglobal(game_lua_, "game_draw");
+                    if (lua_isfunction(game_lua_, -1)) {
+                        if (lua_pcall(game_lua_, 0, 0, 0) != LUA_OK) {
+                            const char* err = lua_tostring(game_lua_, -1);
+                            printf("game_draw error: %s\n", err ? err : "?");
+                            showStatus("game_draw err", err, Color::RED, Color::BLACK);
+                            lua_pop(game_lua_, 1);
+                            failed = true;
+                            running = false;
+                            break;
+                        }
+                    } else {
+                        lua_pop(game_lua_, 1);
+                    }
+                }
+
+                hooks_.display->endBand();
+                prefetchBgStreamBand(band + 1);
+            }
         }
         if (failed) {
             break;
         }
-        hooks_.display->waitForTransferComplete();
-        closeBgStream();
+        if (!drew_frame) {
+            hooks_.display->waitForTransferComplete();
+        }
+        if (!bad_apple_skip_prefetch_) {
+            closeBgStream();
+        }
         closeVnStreamCompose();
         debugOverlayDrawAfterFrame(hooks_.display->lcd(),
                                    static_cast<int>(hooks_.display->width()));
@@ -934,7 +1664,15 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
     fflush(stdout);
     printf("[MENU-DBG] runGameLoop: loop finished failed=%d\n", failed ? 1 : 0);
     fflush(stdout);
-    closeBgStream();
+    bad_apple_player_ = false;
+    bad_apple_fast_active_ = false;
+    bad_apple_pack_path_[0] = '\0';
+    bad_apple_ready_ = false;
+    bad_apple_missing_ = false;
+    bad_apple_frame_idx_ = 1;
+    bad_apple_frame_acc_ = 0;
+    bad_apple_last_drawn_frame_ = 0;
+    resetBgStream();
     closeVnStreamCompose(true);
     if (hooks_.display) {
         hooks_.display->releaseForDirectDraw();

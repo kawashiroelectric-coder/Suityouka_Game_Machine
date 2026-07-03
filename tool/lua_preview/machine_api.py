@@ -12,6 +12,7 @@ from typing import Any
 from font_misf import MisfFont
 from framebuffer import Framebuffer, rgb888_to_rgb565
 from tile_layers import LAYER_COUNT, TileLayerSystem
+from bw_stream import BwFrameBuffer
 
 
 class ImageSlot:
@@ -43,6 +44,7 @@ class MachineHost:
         self._save_root.mkdir(parents=True, exist_ok=True)
         self._vn_layers: dict[str, dict] = {}
         self._heap_used = 64 * 1024
+        self._bw_stream = BwFrameBuffer()
 
     # --- 基本 ---
 
@@ -344,6 +346,105 @@ class MachineHost:
                     ok = True
         return ok
 
+    def draw_bw_stream(
+        self,
+        path: str,
+        dx: int,
+        dy: int,
+        w: int,
+        h: int,
+        fg: int,
+        bg: int,
+    ) -> bool:
+        width = int(w)
+        height = int(h)
+        if width <= 0 or height <= 0:
+            return False
+
+        fg_color = int(fg) & 0xFFFF
+        bg_color = int(bg) & 0xFFFF
+        full = self._resolve(path)
+        norm = str(full)
+
+        band_top = self.fb.band_top()
+        band_bottom = self.fb.band_bottom()
+        img_bottom = int(dy) + height
+        top = int(dy) if int(dy) > band_top else band_top
+        bottom = img_bottom if img_bottom < band_bottom else band_bottom
+        if top >= bottom:
+            return True
+
+        bw = self._bw_stream
+        frame_changed = (
+            bw.path != norm
+            or bw.width != width
+            or bw.height != height
+            or bw.fg != fg_color
+            or bw.bg != bg_color
+        )
+        if frame_changed:
+            if not bw.load_from_file(full, width, height):
+                return False
+            bw.path = norm
+            bw.pack_path = None
+            bw.pack_frame = 0
+            bw.fg = fg_color
+            bw.bg = bg_color
+
+        return bw.blit_band(self.fb, int(dx), int(dy), width, height, fg_color, bg_color)
+
+    def draw_bw_pack(
+        self,
+        path: str,
+        frame_index: int,
+        dx: int,
+        dy: int,
+        w: int,
+        h: int,
+        fg: int,
+        bg: int,
+    ) -> bool:
+        width = int(w)
+        height = int(h)
+        frame_no = int(frame_index)
+        if width <= 0 or height <= 0 or frame_no <= 0:
+            return False
+
+        fg_color = int(fg) & 0xFFFF
+        bg_color = int(bg) & 0xFFFF
+        full = self._resolve(path)
+        norm = str(full)
+
+        band_top = self.fb.band_top()
+        band_bottom = self.fb.band_bottom()
+        img_bottom = int(dy) + height
+        top = int(dy) if int(dy) > band_top else band_top
+        bottom = img_bottom if img_bottom < band_bottom else band_bottom
+        if top >= bottom:
+            return True
+
+        bw = self._bw_stream
+        frame_changed = (
+            bw.pack_path != norm
+            or bw.pack_frame != frame_no
+            or bw.width != width
+            or bw.height != height
+            or bw.fg != fg_color
+            or bw.bg != bg_color
+        )
+        if frame_changed:
+            if bw.pack_path != norm or bw.width != width or bw.height != height:
+                bw.buffer_frame = 0
+            if not bw.sync_pack_frame(full, frame_no, width, height):
+                return False
+            bw.pack_path = norm
+            bw.pack_frame = frame_no
+            bw.path = None
+            bw.fg = fg_color
+            bw.bg = bg_color
+
+        return bw.blit_band(self.fb, int(dx), int(dy), width, height, fg_color, bg_color)
+
     # --- レイヤー ---
 
     def set_draw_mode(self, mode: str) -> None:
@@ -584,6 +685,8 @@ class MachineHost:
         bind("draw_tilemap", self.draw_tilemap)
         bind("draw_bg_stream", self.draw_bg_stream)
         bind("draw_vn_stream", self.draw_vn_stream)
+        bind("draw_bw_stream", self.draw_bw_stream)
+        bind("draw_bw_pack", self.draw_bw_pack)
         bind("set_draw_mode", self.set_draw_mode)
         bind("draw_mode", self.draw_mode_fn)
         bind("layer_count", self.layer_count)

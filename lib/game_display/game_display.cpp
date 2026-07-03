@@ -248,6 +248,23 @@ void GameDisplay::waitForTransferComplete() {
     inflight_buffer_index_ = -1;
 }
 
+/** 外部 RGB565 バッファから全画面へ 1 回 DMA（bad_apple 専用・memcpy なし） */
+bool GameDisplay::submitFullFrameRgb565(const uint16_t* pixels, uint16_t w, uint16_t h) {
+    if (!lcd_ || !pixels || w != width_ || h != height_) {
+        return false;
+    }
+    waitForTransferComplete();
+    lcd_->finishDrawRawImageDMA();
+    lcd_->drawRawImageDMA(0, 0, w, h, pixels, dma_channel_, dma_buffer_, dma_buffer_size_);
+
+    band_index_ = 0;
+    band_y0_ = 0;
+    band_rows_ = static_cast<int>(buffer_height_);
+    transfer_active_ = false;
+    inflight_buffer_index_ = -1;
+    return true;
+}
+
 /** DMA を解放し ST7789 直描画モードへ戻す。ゲーム終了後メニュー復帰前に呼ぶ */
 void GameDisplay::releaseForDirectDraw() {
     printf("[MENU-DBG] GameDisplay::releaseForDirectDraw enter (transfer_active=%d)\n",

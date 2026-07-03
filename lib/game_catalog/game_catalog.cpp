@@ -189,6 +189,20 @@ bool tryPickScriptPath(const char* path, char* out_script, size_t out_script_len
     return true;
 }
 
+/** .lua 候補の優先度（高いほど起動スクリプトとして望ましい） */
+int luaPickScore(bool has_game_init, bool is_auxiliary) {
+    if (has_game_init && !is_auxiliary) {
+        return 3;
+    }
+    if (has_game_init) {
+        return 2;
+    }
+    if (!is_auxiliary) {
+        return 1;
+    }
+    return 0;
+}
+
 /** ゲームフォルダ内から最適な起動 .lua を選ぶ。エントリ登録時に使う */
 bool pickScriptInDir(const char* dir_path, char* out_script, size_t out_script_len, uint32_t* out_size) {
     if (!dir_path || !out_script || out_script_len == 0) {
@@ -217,14 +231,8 @@ bool pickScriptInDir(const char* dir_path, char* out_script, size_t out_script_l
         }
     }
 
-    struct LuaPick {
-        char path[96];
-        uint32_t size = 0;
-        bool has_game_init = false;
-        bool is_auxiliary = false;
-    };
-    LuaPick candidates[16];
-    int candidate_count = 0;
+    char best_path[96] = {};
+    int best_score = -1;
 
     DIR dir;
     FILINFO fno;
@@ -238,40 +246,23 @@ bool pickScriptInDir(const char* dir_path, char* out_script, size_t out_script_l
         if (!endsWithLuaExt(fno.fname)) {
             continue;
         }
-        if (candidate_count >= static_cast<int>(sizeof(candidates) / sizeof(candidates[0]))) {
+        if (!pathJoin(dir_path, fno.fname, path, sizeof(path))) {
             continue;
         }
-
-        LuaPick& c = candidates[candidate_count++];
-        if (!pathJoin(dir_path, fno.fname, c.path, sizeof(c.path))) {
-            candidate_count--;
-            continue;
+        const bool is_auxiliary = isAuxiliaryLuaScript(fno.fname);
+        const bool has_game_init = luaSourceDeclaresGameInit(path);
+        const int score = luaPickScore(has_game_init, is_auxiliary);
+        if (score > best_score) {
+            best_score = score;
+            std::snprintf(best_path, sizeof(best_path), "%s", path);
         }
-        c.size = static_cast<uint32_t>(fno.fsize);
-        c.is_auxiliary = isAuxiliaryLuaScript(fno.fname);
-        c.has_game_init = luaSourceDeclaresGameInit(c.path);
     }
     f_closedir(&dir);
 
-    for (int i = 0; i < candidate_count; i++) {
-        if (candidates[i].has_game_init && !candidates[i].is_auxiliary) {
-            return tryPickScriptPath(candidates[i].path, out_script, out_script_len, out_size);
-        }
+    if (best_score < 0) {
+        return false;
     }
-    for (int i = 0; i < candidate_count; i++) {
-        if (candidates[i].has_game_init) {
-            return tryPickScriptPath(candidates[i].path, out_script, out_script_len, out_size);
-        }
-    }
-    for (int i = 0; i < candidate_count; i++) {
-        if (!candidates[i].is_auxiliary) {
-            return tryPickScriptPath(candidates[i].path, out_script, out_script_len, out_size);
-        }
-    }
-    if (candidate_count > 0) {
-        return tryPickScriptPath(candidates[0].path, out_script, out_script_len, out_size);
-    }
-    return false;
+    return tryPickScriptPath(best_path, out_script, out_script_len, out_size);
 }
 
 /** バイナリサイズから RGB565 プレビューの幅・高さを推定する。プレビュー読込前に使う */
@@ -369,6 +360,128 @@ bool isGameCatalogCandidate(const char* games_dir, const FILINFO& fno) {
     return pickScriptInDir(game_dir, script_path, sizeof(script_path), &script_size);
 }
 
+/** パスが FatFS 向け ASCII 絶対パスとして妥当か簡易判定する */
+bool pathLooksValid(const char* path) {
+    if (!path || path[0] != '/') {
+        return false;
+    }
+    for (const char* p = path; *p != '\0'; ++p) {
+        const unsigned char c = static_cast<unsigned char>(*p);
+        if (c < 0x20 || c >= 0x7F) {
+            return false;
+        }
+        if (c == '*' || c == '?' || c == ':' || c == '|' || c == '"') {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** スクリプト絶対パスから親ディレクトリを取り出す */
+void parentDirOfScript(const char* script_path, char* dir_out, size_t dir_len) {
+    if (!dir_out || dir_len == 0) {
+        return;
+    }
+    dir_out[0] = '\0';
+    if (!script_path || script_path[0] == '\0') {
+        return;
+    }
+    char norm[96];
+    std::snprintf(norm, sizeof(norm), "%s", script_path);
+    char* slash = std::strrchr(norm, '/');
+    if (!slash || slash == norm) {
+        dir_out[0] = '/';
+        dir_out[1] = '\0';
+        return;
+    }
+    *slash = '\0';
+    std::snprintf(dir_out, dir_len, "%s", norm);
+}
+
+/** 解決済み script / preview を出力バッファへコピーする */
+bool copyResolvedPaths(const char* script_path, const char* preview_path, uint32_t script_size,
+                       char* out_script, size_t out_script_len, char* out_preview,
+                       size_t out_preview_len, uint32_t* out_script_size) {
+    if (!script_path || !pathLooksValid(script_path)) {
+        return false;
+    }
+    if (out_script && out_script_len > 0) {
+        std::snprintf(out_script, out_script_len, "%s", script_path);
+    }
+    if (out_preview && out_preview_len > 0) {
+        if (preview_path && preview_path[0] != '\0') {
+            std::snprintf(out_preview, out_preview_len, "%s", preview_path);
+        } else {
+            out_preview[0] = '\0';
+        }
+    }
+    if (out_script_size) {
+        *out_script_size = script_size;
+    }
+    return true;
+}
+
+/** install_name が .lua 単体かフォルダ内ゲームかで SD から script / preview を解決する */
+bool resolveFromInstallName(const char* games_dir, const char* install_name, char* out_script,
+                            size_t out_script_len, char* out_preview, size_t out_preview_len,
+                            uint32_t* out_script_size) {
+    if (!games_dir || !install_name || install_name[0] == '\0') {
+        return false;
+    }
+
+    char script_path[96];
+    char preview_path[96];
+    preview_path[0] = '\0';
+    uint32_t script_size = 0;
+
+    if (endsWithLuaExt(install_name)) {
+        if (!pathJoin(games_dir, install_name, script_path, sizeof(script_path))) {
+            return false;
+        }
+        if (!tryPickScriptPath(script_path, script_path, sizeof(script_path), &script_size)) {
+            return false;
+        }
+        pickPreviewPath(games_dir, script_path, preview_path, sizeof(preview_path));
+        return copyResolvedPaths(script_path, preview_path, script_size, out_script, out_script_len,
+                                 out_preview, out_preview_len, out_script_size);
+    }
+
+    char game_dir[96];
+    if (!pathJoin(games_dir, install_name, game_dir, sizeof(game_dir))) {
+        return false;
+    }
+    if (!pickScriptInDir(game_dir, script_path, sizeof(script_path), &script_size)) {
+        return false;
+    }
+    pickPreviewPath(game_dir, script_path, preview_path, sizeof(preview_path));
+    return copyResolvedPaths(script_path, preview_path, script_size, out_script, out_script_len,
+                             out_preview, out_preview_len, out_script_size);
+}
+
+/** キャッシュ済み script_path が SD 上で有効ならそれを使い preview だけ再解決する */
+bool resolveFromCachedScript(const GameCatalogEntry& entry, char* out_script, size_t out_script_len,
+                             char* out_preview, size_t out_preview_len, uint32_t* out_script_size) {
+    if (!pathLooksValid(entry.script_path)) {
+        return false;
+    }
+    uint32_t script_size = 0;
+    if (!fileExists(entry.script_path, &script_size)) {
+        return false;
+    }
+
+    char preview_path[96];
+    preview_path[0] = '\0';
+    if (pathLooksValid(entry.preview_path) && fileExists(entry.preview_path)) {
+        std::snprintf(preview_path, sizeof(preview_path), "%s", entry.preview_path);
+    } else {
+        char game_dir[96];
+        parentDirOfScript(entry.script_path, game_dir, sizeof(game_dir));
+        pickPreviewPath(game_dir, entry.script_path, preview_path, sizeof(preview_path));
+    }
+    return copyResolvedPaths(entry.script_path, preview_path, script_size, out_script, out_script_len,
+                             out_preview, out_preview_len, out_script_size);
+}
+
 }  // namespace
 
 /** games_dir 直下のフォルダと .lua を走査しメニュー用エントリ配列を構築する。メニュー読込時に呼ぶ */
@@ -412,6 +525,7 @@ int GameCatalog::loadEntries(const char* games_dir, GameCatalogEntry* out_entrie
             if (!pickScriptInDir(game_dir, e.script_path, sizeof(e.script_path), &e.script_size)) {
                 continue;
             }
+            std::snprintf(e.install_name, sizeof(e.install_name), "%s", fno.fname);
             std::snprintf(e.title, sizeof(e.title), "%s", fno.fname);
             pickPreviewPath(game_dir, e.script_path, e.preview_path, sizeof(e.preview_path));
             count++;
@@ -425,6 +539,7 @@ int GameCatalog::loadEntries(const char* games_dir, GameCatalogEntry* out_entrie
             continue;
         }
         e.script_size = static_cast<uint32_t>(fno.fsize);
+        std::snprintf(e.install_name, sizeof(e.install_name), "%s", fno.fname);
         toTitleFromFilename(fno.fname, e.title, sizeof(e.title));
         pickPreviewPath(games_dir, e.script_path, e.preview_path, sizeof(e.preview_path));
         count++;
@@ -493,5 +608,40 @@ bool GameCatalog::loadPreviewRgb565(const char* preview_path, uint16_t* pixels, 
     f_close(&file);
     printf("GameCatalog: preview OK %s (%dx%d in %dx%d panel)\n", preview_path, img_w, img_h,
            kPreviewW, kPreviewH);
+    return true;
+}
+
+bool GameCatalog::resolveEntryPaths(const char* games_dir, const GameCatalogEntry& entry,
+                                    char* out_script, size_t out_script_len, char* out_preview,
+                                    size_t out_preview_len, uint32_t* out_script_size) {
+    if (resolveFromCachedScript(entry, out_script, out_script_len, out_preview, out_preview_len,
+                                out_script_size)) {
+        return true;
+    }
+    if (entry.install_name[0] != '\0') {
+        if (resolveFromInstallName(games_dir, entry.install_name, out_script, out_script_len,
+                                   out_preview, out_preview_len, out_script_size)) {
+            return true;
+        }
+    }
+    // install_name だけ壊れたフォルダ型エントリ向け（title はフォルダ名と同一）
+    if (entry.title[0] != '\0' && !endsWithLuaExt(entry.title)) {
+        return resolveFromInstallName(games_dir, entry.title, out_script, out_script_len, out_preview,
+                                      out_preview_len, out_script_size);
+    }
+    return false;
+}
+
+bool GameCatalog::refreshEntryPaths(const char* games_dir, GameCatalogEntry& entry) {
+    char script_path[96];
+    char preview_path[96];
+    uint32_t script_size = 0;
+    if (!resolveEntryPaths(games_dir, entry, script_path, sizeof(script_path), preview_path,
+                           sizeof(preview_path), &script_size)) {
+        return false;
+    }
+    std::snprintf(entry.script_path, sizeof(entry.script_path), "%s", script_path);
+    std::snprintf(entry.preview_path, sizeof(entry.preview_path), "%s", preview_path);
+    entry.script_size = script_size;
     return true;
 }

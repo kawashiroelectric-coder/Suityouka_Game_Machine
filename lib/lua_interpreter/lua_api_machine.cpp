@@ -383,6 +383,10 @@ void luaRegisterHostApi(lua_State* L) {
     lua_setfield(L, -2, "draw_image_keyed");
     lua_pushcfunction(L, luaHostDrawBgStream);
     lua_setfield(L, -2, "draw_bg_stream");
+    lua_pushcfunction(L, luaHostDrawBwStream);
+    lua_setfield(L, -2, "draw_bw_stream");
+    lua_pushcfunction(L, luaHostDrawBwPack);
+    lua_setfield(L, -2, "draw_bw_pack");
     lua_pushcfunction(L, luaHostDrawVnStream);
     lua_setfield(L, -2, "draw_vn_stream");
     lua_pushcfunction(L, luaHostFreeImage);

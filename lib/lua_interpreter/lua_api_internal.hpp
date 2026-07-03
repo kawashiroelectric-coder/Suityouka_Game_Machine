@@ -97,6 +97,10 @@ int luaHostDrawCircle(lua_State* L);
 int luaHostFillCircle(lua_State* L);
 /** Lua バインディング: machine.draw_bg_stream */
 int luaHostDrawBgStream(lua_State* L);
+/** Lua バインディング: machine.draw_bw_stream */
+int luaHostDrawBwStream(lua_State* L);
+/** Lua バインディング: machine.draw_bw_pack */
+int luaHostDrawBwPack(lua_State* L);
 /** Lua バインディング: machine.draw_vn_stream */
 int luaHostDrawVnStream(lua_State* L);
 /** Lua バインディング: machine.load_sprite */

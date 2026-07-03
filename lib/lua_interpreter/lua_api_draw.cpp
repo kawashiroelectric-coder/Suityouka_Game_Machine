@@ -342,6 +342,54 @@ int luaHostDrawBgStream(lua_State* L) {
     return 1;
 }
 
+/** Lua バインディング: machine.draw_bw_stream — SD から 1 ビット白黒画像をバンド単位で描画する */
+int luaHostDrawBwStream(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (!interp) {
+        return luaL_error(L, "no active interpreter");
+    }
+    const char* path = luaL_checkstring(L, 1);
+    const int dx = static_cast<int>(luaL_checkinteger(L, 2));
+    const int dy = static_cast<int>(luaL_checkinteger(L, 3));
+    const int w = static_cast<int>(luaL_checkinteger(L, 4));
+    const int h = static_cast<int>(luaL_checkinteger(L, 5));
+    if (w <= 0 || h <= 0) {
+        return luaL_error(L, "draw_bw_stream: width/height must be > 0");
+    }
+    const uint16_t fg = (lua_gettop(L) >= 6) ? luaApiParseColor(L, 6) : 0xFFFF;
+    const uint16_t bg = (lua_gettop(L) >= 7) ? luaApiParseColor(L, 7) : 0x0000;
+    const bool ok = interp->drawBwStreamFromSd(path, dx, dy, static_cast<uint16_t>(w),
+                                               static_cast<uint16_t>(h), fg, bg);
+    lua_pushboolean(L, ok);
+    return 1;
+}
+
+/** Lua バインディング: machine.draw_bw_pack — BWPK から 1 ビット白黒フレームを描画する */
+int luaHostDrawBwPack(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (!interp) {
+        return luaL_error(L, "no active interpreter");
+    }
+    const char* path = luaL_checkstring(L, 1);
+    const int frame_index = static_cast<int>(luaL_checkinteger(L, 2));
+    const int dx = static_cast<int>(luaL_checkinteger(L, 3));
+    const int dy = static_cast<int>(luaL_checkinteger(L, 4));
+    const int w = static_cast<int>(luaL_checkinteger(L, 5));
+    const int h = static_cast<int>(luaL_checkinteger(L, 6));
+    if (frame_index <= 0) {
+        return luaL_error(L, "draw_bw_pack: frame_index must be >= 1");
+    }
+    if (w <= 0 || h <= 0) {
+        return luaL_error(L, "draw_bw_pack: width/height must be > 0");
+    }
+    const uint16_t fg = (lua_gettop(L) >= 7) ? luaApiParseColor(L, 7) : 0xFFFF;
+    const uint16_t bg = (lua_gettop(L) >= 8) ? luaApiParseColor(L, 8) : 0x0000;
+    const bool ok = interp->drawBwPackFromSd(path, frame_index, dx, dy, static_cast<uint16_t>(w),
+                                             static_cast<uint16_t>(h), fg, bg);
+    lua_pushboolean(L, ok);
+    return 1;
+}
+
 /** Lua バインディング: machine.draw_vn_stream — VN 用に背景と立ち絵を合成描画する */
 int luaHostDrawVnStream(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();

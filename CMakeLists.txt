@@ -54,6 +54,7 @@ add_executable(Suityouka_Game_Machine
     lib/input_test_mode/input_test_mode.cpp
     lib/game_catalog/game_catalog.cpp
     lib/game_select_menu/game_select_menu.cpp
+    lib/menu_backgrounds/menu_backgrounds.cpp
     lib/system_settings_menu/system_settings_menu.cpp
     lib/boot_splash/boot_splash.cpp
     lib/encoder_volume/encoder_volume.cpp
@@ -120,6 +121,7 @@ target_include_directories(Suityouka_Game_Machine PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/lib/input_test_mode # SD 未検知時入力テスト
     ${CMAKE_CURRENT_LIST_DIR}/lib/game_catalog    # /games ゲーム検出
     ${CMAKE_CURRENT_LIST_DIR}/lib/game_select_menu # ゲーム選択メニュー
+    ${CMAKE_CURRENT_LIST_DIR}/lib/menu_backgrounds  # メニュー BG 画像テーブル
     ${CMAKE_CURRENT_LIST_DIR}/lib/boot_splash      # 起動スプラッシュ
     ${CMAKE_CURRENT_LIST_DIR}/lib/system_settings_menu # システム設定メニュー
     ${CMAKE_CURRENT_LIST_DIR}/lib/encoder_volume  # エンコーダ音量
@@ -198,6 +200,7 @@ target_link_libraries(Suityouka_Game_Machine
     # Pico SDK基本ライブラリ
     pico_stdlib 
     pico_multicore   # マルチコア処理（必要に応じて）
+    pico_rand        # メニュー BG 乱数（ROSC 等のエントロピー源）
     
     # ハードウェア抽象化レイヤー
     hardware_spi      # SPI通信（LCD、SDカード用）

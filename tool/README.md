@@ -18,6 +18,7 @@
 | `png_to_c_header.py` | PNG → C ヘッダー `.h`（ファームウェア埋め込み用） |
 | `wav_to_pcm_header.py` | WAV → PCM C ヘッダー `.h`（ファームウェア音声埋め込み用） |
 | `lua_preview/` | **対話型 Lua プレビュー**（320×240 / pygame）。詳細は `lua_preview/README.md` |
+| `game_select_preview/` | **ゲーム選択メニュー PC プレビュー**（BG 乱数 + リスト）。詳細は `game_select_preview/README.md` |
 
 ### フォーマット
 
@@ -109,10 +110,10 @@ python tool/wav_to_pcm_header.py raw.wav --keep-rate -d assets
 ### 生成ヘッダーの例
 
 ```c
-static const uint32_t click_sample_rate = 22050;
+static const uint32_t click_sample_rate = 44100;
 static const uint16_t click_channels = 1;
-static const uint32_t click_frame_count = 2205;
-static const int16_t click_pcm[2205] = { ... };
+static const uint32_t click_frame_count = 4410;
+static const int16_t click_pcm[4410] = { ... };
 ```
 
 ### C++ からの再生

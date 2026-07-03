@@ -6,9 +6,8 @@ WAV (16bit PCM) を C ヘッダー (.h) に変換する。
 playBgmFromEmbedded から再生できる。
 
 例:
-    python tool/wav_to_pcm_header.py sound.wav
     python tool/wav_to_pcm_header.py sound.wav -d assets -n boot_chime
-    python tool/wav_to_pcm_header.py sound.wav --rate 22050
+    python tool/wav_to_pcm_header.py sound.wav --keep-rate
     python tool/wav_to_pcm_header.py bgm.wav --bgm -d assets -n title_bgm
     python tool/wav_to_pcm_header.py your_jingle.wav -d assets -n boot_chime --bgm
 
@@ -16,6 +15,11 @@ SE 向けは PCM データ 32KB 以下（--max-kb 32 が既定）。
 長い BGM は --bgm を付ける（サイズ警告のみ緩和）。
 
 必要: Python 3 標準ライブラリのみ（wave）
+
+推奨ワークフロー（高域を保つ）:
+  1. 元音源を 44100 Hz / 16bit PCM WAV で書き出す
+  2. 既に 44100 Hz なら --keep-rate でリサンプル無し変換
+  3. 48 kHz 等からの変換は ffmpeg -ar 44100 -sample_fmt s16 を推奨
 """
 
 from __future__ import annotations
@@ -40,9 +44,31 @@ def sanitize_identifier(name: str) -> str:
     return sanitized
 
 
+def soften_for_downsample(samples: list[int], passes: int = 2) -> list[int]:
+    """ダウンサンプル前の軽い [1,2,1]/4 平滑化（抗エイリアス用の簡易 LPF）。"""
+    out = samples
+    for _ in range(passes):
+        if len(out) < 3:
+            break
+        smoothed = [out[0]]
+        for i in range(1, len(out) - 1):
+            smoothed.append((out[i - 1] + 2 * out[i] + out[i + 1] + 2) // 4)
+        smoothed.append(out[-1])
+        out = smoothed
+    return out
+
+
+def soften_stereo_for_downsample(samples: list[tuple[int, int]], passes: int = 2) -> list[tuple[int, int]]:
+    left = soften_for_downsample([pair[0] for pair in samples], passes)
+    right = soften_for_downsample([pair[1] for pair in samples], passes)
+    return list(zip(left, right, strict=True))
+
+
 def linear_resample_mono(samples: list[int], src_rate: int, dst_rate: int) -> list[int]:
     if src_rate == dst_rate or not samples:
         return samples
+    if src_rate > dst_rate:
+        samples = soften_for_downsample(samples)
     out_len = max(1, int(round(len(samples) * dst_rate / src_rate)))
     out: list[int] = []
     for i in range(out_len):
@@ -58,6 +84,8 @@ def linear_resample_mono(samples: list[int], src_rate: int, dst_rate: int) -> li
 def linear_resample_stereo(samples: list[tuple[int, int]], src_rate: int, dst_rate: int) -> list[tuple[int, int]]:
     if src_rate == dst_rate or not samples:
         return samples
+    if src_rate > dst_rate:
+        samples = soften_stereo_for_downsample(samples)
     out_len = max(1, int(round(len(samples) * dst_rate / src_rate)))
     out: list[tuple[int, int]] = []
     for i in range(out_len):
@@ -158,8 +186,25 @@ def convert_file(
     allow_large: bool,
 ) -> None:
     samples, sample_rate, channels = read_wav_pcm16(src)
+    print(f"{src.name}: 入力 {sample_rate} Hz, {channels} ch, {len(samples)} frames", file=sys.stderr)
+
+    if target_rate is None and sample_rate != DEFAULT_RATE:
+        print(
+            f"注意: --keep-rate のため {sample_rate} Hz のまま埋め込みます。"
+            f"ファームウェア I2S 出力は {DEFAULT_RATE} Hz 固定のため、"
+            f"再生時に C++ 側で線形リサンプルされます。",
+            file=sys.stderr,
+        )
+    elif target_rate and target_rate == sample_rate:
+        print(f"{src.name}: レート一致 ({sample_rate} Hz) — リサンプルなし", file=sys.stderr)
 
     if target_rate and target_rate != sample_rate:
+        if sample_rate > target_rate:
+            print(
+                f"注意: {src.name} を {sample_rate}Hz → {target_rate}Hz に縮小します。"
+                "最高品質は ffmpeg -ar 44100 -sample_fmt s16 で事前変換し --keep-rate を推奨。",
+                file=sys.stderr,
+            )
         if channels == 1:
             samples = linear_resample_mono(samples, sample_rate, target_rate)  # type: ignore[assignment]
         else:

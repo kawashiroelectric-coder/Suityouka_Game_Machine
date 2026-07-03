@@ -13,6 +13,7 @@
 #include "encoder_volume.hpp"
 #include "battery_monitor.hpp"
 #include "menu_cursor_se.hpp"
+#include "menu_backgrounds.hpp"
 #include "pico/stdlib.h"
 #include "st7789_lcd.hpp"
 
@@ -29,24 +30,45 @@ constexpr int kSettingsRowPitch = 18;
 constexpr int kSettingsRowBgH = 8;
 constexpr int kSettingsRowFirstY = kSettingsPanelY + kSettingsPanelPadTop;
 
-constexpr int kSettingsRowCount = 7;
+constexpr int kSettingsRowCount = 6;
 constexpr int kSettingsPanelH =
     kSettingsPanelPadTop + kSettingsRowCount * kSettingsRowPitch + kSettingsPanelPadBottom;
-constexpr int kVolumeRowIndex = 2;
-constexpr int kBrightnessRowIndex = 3;
-constexpr int kBatteryLedRowIndex = 4;
-constexpr int kInputTestRowIndex = 5;
-constexpr int kBackRowIndex = 6;
+
+// ---------------------------------------------------------------------------
+// システム設定メニュー — コードバージョン表示
+// 表示内容を変えるときは kSettingsVersionText の 1 行だけ編集してください。
+// 表示位置を変えるときは kSettingsVersionTextY を編集してください。
+// ---------------------------------------------------------------------------
+constexpr const char kSettingsVersionText[] = "Code Ver 1.0.0\nSpecial Thanks to no_OS-FatFS-SD-SDIO-SPI-RPi-Pico";
+constexpr int kSettingsVersionTextY = kSettingsPanelY + kSettingsPanelH - 14;
+
+// WiFi 未使用のため行を非表示（将来用にインデックスのみ残す）
+// constexpr int kWifiRowIndex = 0;
+// constexpr int kSsidRowIndex = 1;
+constexpr int kVolumeRowIndex = 0;
+constexpr int kBrightnessRowIndex = 1;
+constexpr int kBatteryLedRowIndex = 2;
+constexpr int kBgGalleryRowIndex = 3;
+constexpr int kInputTestRowIndex = 4;
+constexpr int kBackRowIndex = 5;
 constexpr int kBacklightStepPercent = 10;
 constexpr int kSettingsFooterTextY = 222;
 constexpr int kSettingsFooterClearY = 216;
 constexpr int kSettingsFooterClearH = GameConfig::SCREEN_HEIGHT - kSettingsFooterClearY;
+
+enum class SettingsFooterMode : uint8_t {
+    Normal,
+    BrightnessEdit,
+    BgGallery,
+};
 
 struct SettingsState {
     int volume_step = EncoderVolumeControl::kVolumeStepMax;
     int brightness_percent = 80;
     DeviceSettings::BatteryLedMode battery_led_mode = DeviceSettings::BatteryLedMode::AlwaysOn;
     bool editing_brightness = false;
+    bool viewing_bg = false;
+    int bg_index = 0;
     char row_labels[kSettingsRowCount][48] = {};
 };
 
@@ -160,14 +182,15 @@ void buildBatteryLedLine(char* out, size_t out_len, DeviceSettings::BatteryLedMo
 
 /** 全設定行の表示ラベルを最新状態で再構築する。音量・明るさ変更後に呼ぶ */
 void refreshSettingsRowLabels(SettingsState& state) {
-    std::snprintf(state.row_labels[0], sizeof(state.row_labels[0]), "WiFi: [CONNECTED]");
-    std::snprintf(state.row_labels[1], sizeof(state.row_labels[1]), "SSID: HOME_NET");
-    buildVolumeMeterLine(state.row_labels[2], sizeof(state.row_labels[2]), state.volume_step);
-    buildMeterLine(state.row_labels[3], sizeof(state.row_labels[3]), "Brightness:",
+    // std::snprintf(state.row_labels[0], sizeof(state.row_labels[0]), "WiFi: [CONNECTED]");
+    // std::snprintf(state.row_labels[1], sizeof(state.row_labels[1]), "SSID: HOME_NET");
+    buildVolumeMeterLine(state.row_labels[0], sizeof(state.row_labels[0]), state.volume_step);
+    buildMeterLine(state.row_labels[1], sizeof(state.row_labels[1]), "Brightness:",
                    state.brightness_percent);
-    buildBatteryLedLine(state.row_labels[4], sizeof(state.row_labels[4]), state.battery_led_mode);
-    std::snprintf(state.row_labels[5], sizeof(state.row_labels[5]), "Input Test Mode");
-    std::snprintf(state.row_labels[6], sizeof(state.row_labels[6]), "Back");
+    buildBatteryLedLine(state.row_labels[2], sizeof(state.row_labels[2]), state.battery_led_mode);
+    std::snprintf(state.row_labels[3], sizeof(state.row_labels[3]), "BG Gallery");
+    std::snprintf(state.row_labels[4], sizeof(state.row_labels[4]), "Input Test Mode");
+    std::snprintf(state.row_labels[5], sizeof(state.row_labels[5]), "Back");
 }
 
 /** 指定行の表示ラベル文字列を返す。行描画時に使う */
@@ -234,30 +257,57 @@ void adjustBrightness(ST7789_LCD* lcd, SettingsState& state, int delta) {
 }
 
 /** 画面下部の操作ヒントを描く。モード切替や初期表示時に呼ぶ */
-void drawSettingsFooterHint(ST7789_LCD* lcd, bool editing_brightness) {
+void drawSettingsFooterHint(ST7789_LCD* lcd, SettingsFooterMode mode) {
     if (!lcd) {
         return;
     }
     lcd->fillRect(0, kSettingsFooterClearY, GameConfig::SCREEN_WIDTH, kSettingsFooterClearH,
                   kSettingsBg);
-    if (editing_brightness) {
-        drawTextCenteredBg(lcd, kSettingsFooterTextY, "[L/R] Brightness  [FAR] Back", Color::GREEN,
-                           kSettingsBg);
-    } else {
-        drawTextCenteredBg(lcd, kSettingsFooterTextY, "[U/D] Select  [NEAR] Enter  [L] Back",
-                           Color::GREEN, kSettingsBg);
+    const char* hint = "[U/D] Select  [NEAR] Enter  [L] Back";
+    if (mode == SettingsFooterMode::BrightnessEdit) {
+        hint = "[L/R] Brightness  [FAR] Back";
+    } else if (mode == SettingsFooterMode::BgGallery) {
+        hint = "[L/R] BG Change  [FAR] Back";
     }
+    drawTextCenteredBg(lcd, kSettingsFooterTextY, hint, Color::GREEN, kSettingsBg);
+}
+
+/** BG 鑑賞画面を描く。BG Gallery モード入場時・L/R 切替時に呼ぶ */
+void drawBgGalleryScreen(ST7789_LCD* lcd, int bg_index) {
+    if (!lcd || kMenuBackgroundCount <= 0) {
+        return;
+    }
+    if (bg_index < 0) {
+        bg_index = 0;
+    } else if (bg_index >= kMenuBackgroundCount) {
+        bg_index = kMenuBackgroundCount - 1;
+    }
+    lcd->finishDrawRawImageDMA();
+    const MenuBgEntry& bg = kMenuBackgrounds[bg_index];
+    lcd->drawRawImage(0, 0, static_cast<uint16_t>(bg.width), static_cast<uint16_t>(bg.height),
+                      bg.pixels);
+    drawSettingsFooterHint(lcd, SettingsFooterMode::BgGallery);
 }
 
 /** 設定画面の固定枠（パネル・タイトル・フッター）を描く。初期化や全面再描画時に呼ぶ */
-void drawSettingsStaticChrome(ST7789_LCD* lcd, bool editing_brightness) {
+void drawSettingsStaticChrome(ST7789_LCD* lcd) {
     if (!lcd) {
         return;
     }
     lcd->fill(kSettingsBg);
     lcd->drawRect(kSettingsPanelX, kSettingsPanelY, kSettingsPanelW, kSettingsPanelH, Color::CYAN);
     drawTextCenteredBg(lcd, kSettingsPanelY - 18, "== SYSTEM MENU ==", Color::CYAN, kSettingsBg);
-    drawSettingsFooterHint(lcd, editing_brightness);
+    drawSettingsFooterHint(lcd, SettingsFooterMode::Normal);
+    drawSettingsVersionLine(lcd);
+}
+
+/** パネル下部にコードバージョンを描く（内容は kSettingsVersionText） */
+void drawSettingsVersionLine(ST7789_LCD* lcd) {
+    if (!lcd) {
+        return;
+    }
+    drawTextCenteredBg(lcd, kSettingsVersionTextY, kSettingsVersionText, Color::rgb(120, 140, 170),
+                       kSettingsBg);
 }
 
 /** 設定メニューの 1 行を描画または更新する。カーソル移動・値変更時に呼ぶ */
@@ -282,12 +332,13 @@ void drawSettingsRow(ST7789_LCD* lcd, const SettingsState& state, int row_index,
 /** 設定画面を初回描画し状態を同期する。run 入場時や入力テスト復帰後に呼ぶ */
 void initSettingsScreen(ST7789_LCD* lcd, SettingsUiCache& cache, SettingsState& state, int cursor) {
     state.editing_brightness = false;
+    state.viewing_bg = false;
     syncVolumeFromEncoder(state);
     syncBrightnessFromLcd(lcd, state);
     syncBatteryLedFromSettings(state);
     cache.ready = false;
     cache.prev_cursor = -1;
-    drawSettingsStaticChrome(lcd, state.editing_brightness);
+    drawSettingsStaticChrome(lcd);
     for (int i = 0; i < kSettingsRowCount; i++) {
         drawSettingsRow(lcd, state, i, cursor);
     }
@@ -330,6 +381,7 @@ void SystemSettingsMenu::run(const Config& config) {
         bool brightness_changed = false;
         bool volume_changed = false;
         bool battery_led_changed = false;
+        bool bg_changed = false;
         bool ui_changed = false;
 
         const int encoder_volume_step = EncoderVolumeControl::volumeStep();
@@ -339,7 +391,21 @@ void SystemSettingsMenu::run(const Config& config) {
             volume_changed = true;
         }
 
-        if (state.editing_brightness) {
+        if (state.viewing_bg) {
+            if (config.buttons->wasPressed(Button::LEFT)) {
+                state.bg_index = (state.bg_index + kMenuBackgroundCount - 1) % kMenuBackgroundCount;
+                bg_changed = true;
+            }
+            if (config.buttons->wasPressed(Button::RIGHT)) {
+                state.bg_index = (state.bg_index + 1) % kMenuBackgroundCount;
+                bg_changed = true;
+            }
+            if (config.buttons->wasPressed(Button::FAR)) {
+                state.viewing_bg = false;
+                initSettingsScreen(config.lcd, cache, state, cursor);
+                ui_changed = true;
+            }
+        } else if (state.editing_brightness) {
             if (config.buttons->wasPressed(Button::LEFT)) {
                 adjustBrightness(config.lcd, state, -kBacklightStepPercent);
                 brightness_changed = true;
@@ -350,7 +416,7 @@ void SystemSettingsMenu::run(const Config& config) {
             }
             if (config.buttons->wasPressed(Button::FAR)) {
                 state.editing_brightness = false;
-                drawSettingsFooterHint(config.lcd, false);
+                drawSettingsFooterHint(config.lcd, SettingsFooterMode::Normal);
                 ui_changed = true;
             }
         } else {
@@ -369,11 +435,16 @@ void SystemSettingsMenu::run(const Config& config) {
             if (config.buttons->wasPressed(Button::NEAR)) {
                 if (cursor == kBrightnessRowIndex) {
                     state.editing_brightness = true;
-                    drawSettingsFooterHint(config.lcd, true);
+                    drawSettingsFooterHint(config.lcd, SettingsFooterMode::BrightnessEdit);
                     ui_changed = true;
                 } else if (cursor == kBatteryLedRowIndex) {
                     toggleBatteryLedMode(state);
                     battery_led_changed = true;
+                } else if (cursor == kBgGalleryRowIndex) {
+                    state.viewing_bg = true;
+                    state.bg_index = 0;
+                    drawBgGalleryScreen(config.lcd, state.bg_index);
+                    ui_changed = true;
                 } else if (cursor == kInputTestRowIndex && config.on_run_input_test) {
                     config.on_run_input_test(config.user_data);
                     waitForButtonRelease(config.buttons);
@@ -384,13 +455,16 @@ void SystemSettingsMenu::run(const Config& config) {
             }
         }
 
-        if (brightness_changed || ui_changed) {
+        if (bg_changed) {
+            playMenuCursorSe(config.audio);
+            drawBgGalleryScreen(config.lcd, state.bg_index);
+        } else if (!state.viewing_bg && (brightness_changed || ui_changed)) {
             drawSettingsRow(config.lcd, state, kBrightnessRowIndex, cursor);
-        } else if (battery_led_changed) {
+        } else if (!state.viewing_bg && battery_led_changed) {
             drawSettingsRow(config.lcd, state, kBatteryLedRowIndex, cursor);
-        } else if (volume_changed) {
+        } else if (!state.viewing_bg && volume_changed) {
             drawSettingsRow(config.lcd, state, kVolumeRowIndex, cursor);
-        } else if (cursor_changed) {
+        } else if (!state.viewing_bg && cursor_changed) {
             playMenuCursorSe(config.audio);
             updateSettingsCursor(config.lcd, cache, state, old_cursor, cursor);
         }

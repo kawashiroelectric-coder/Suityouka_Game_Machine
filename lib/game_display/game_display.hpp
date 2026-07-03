@@ -72,6 +72,9 @@ public:
     /** 進行中 DMA の完了を待つ。1 フレーム末尾で呼ぶ */
     void waitForTransferComplete();
 
+    /** 外部 RGB565 バッファから全画面へ 1 回 DMA（bad_apple 専用・追加 RAM なし） */
+    bool submitFullFrameRgb565(const uint16_t* pixels, uint16_t w, uint16_t h);
+
     /** DMA を解放し ST7789 直描画へ戻す。ゲーム終了後メニュー復帰前に呼ぶ */
     void releaseForDirectDraw();
 

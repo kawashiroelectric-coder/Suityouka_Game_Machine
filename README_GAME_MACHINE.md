@@ -121,6 +121,14 @@ PCM5102A の設定ピン（Pico とは別）:
 
 BGM は `assets/boot_chime.h`（`説明ウインドウが開く.mp3` 等を `tool/wav_to_pcm_header.py --bgm` で生成）。
 
+**PCM 埋め込みの推奨手順**（高域欠けを避ける）:
+
+1. 元を **44100 Hz / 16bit PCM** WAV で書き出す（MP3 直変換はエンコード時 LPF で高域が落ちやすい）
+2. 既に 44100 Hz なら `python tool/wav_to_pcm_header.py in.wav --keep-rate --bgm -d assets -n boot_chime`
+3. 48 kHz 等は先に `ffmpeg -i in.wav -ar 44100 -ac 1 -sample_fmt s16 out.wav` してから `--keep-rate`
+
+I2S 出力は `AudioConfig::SAMPLE_RATE`（44100 Hz）固定。素材レートが異なると実行時リサンプル（線形補間・抗エイリアスなし）が走る。
+
 ### バッテリー ADC
 
 | 信号 | GPIO |
