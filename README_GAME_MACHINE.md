@@ -271,5 +271,5 @@ cd build
 
 ## ライセンス
 
-プロジェクト固有のライセンスに従います。  
-`lib/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico` および FetchContent で取得する Lua 本体は、それぞれ同梱のライセンスに従います。
+- **本プロジェクトのオリジナルコード:** [LICENSE](LICENSE)（MIT License, Copyright (c) 2026 Kawashiro Electric）
+- **サードパーティ:** [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照（Pico SDK / Lua / no-OS-FatFS / FatFs 等）

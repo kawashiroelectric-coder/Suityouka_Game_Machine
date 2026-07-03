@@ -38,8 +38,9 @@ constexpr int kSettingsPanelH =
 // システム設定メニュー — コードバージョン表示
 // 表示内容を変えるときは kSettingsVersionText の 1 行だけ編集してください。
 // 表示位置を変えるときは kSettingsVersionTextY を編集してください。
+// サードパーティの正式なライセンス表記は THIRD_PARTY_NOTICES.md を参照してください。
 // ---------------------------------------------------------------------------
-constexpr const char kSettingsVersionText[] = "Code Ver 1.0.0\nSpecial Thanks to no_OS-FatFS-SD-SDIO-SPI-RPi-Pico";
+constexpr const char kSettingsVersionText[] = "Code Ver 1.0.0\nSD: Apache2.0 carlk3";
 constexpr int kSettingsVersionTextY = kSettingsPanelY + kSettingsPanelH - 14;
 
 // WiFi 未使用のため行を非表示（将来用にインデックスのみ残す）
@@ -289,6 +290,15 @@ void drawBgGalleryScreen(ST7789_LCD* lcd, int bg_index) {
     drawSettingsFooterHint(lcd, SettingsFooterMode::BgGallery);
 }
 
+/** パネル下部にコードバージョンを描く（内容は kSettingsVersionText） */
+void drawSettingsVersionLine(ST7789_LCD* lcd) {
+    if (!lcd) {
+        return;
+    }
+    drawTextCenteredBg(lcd, kSettingsVersionTextY, kSettingsVersionText, Color::rgb(120, 140, 170),
+                       kSettingsBg);
+}
+
 /** 設定画面の固定枠（パネル・タイトル・フッター）を描く。初期化や全面再描画時に呼ぶ */
 void drawSettingsStaticChrome(ST7789_LCD* lcd) {
     if (!lcd) {
@@ -299,15 +309,6 @@ void drawSettingsStaticChrome(ST7789_LCD* lcd) {
     drawTextCenteredBg(lcd, kSettingsPanelY - 18, "== SYSTEM MENU ==", Color::CYAN, kSettingsBg);
     drawSettingsFooterHint(lcd, SettingsFooterMode::Normal);
     drawSettingsVersionLine(lcd);
-}
-
-/** パネル下部にコードバージョンを描く（内容は kSettingsVersionText） */
-void drawSettingsVersionLine(ST7789_LCD* lcd) {
-    if (!lcd) {
-        return;
-    }
-    drawTextCenteredBg(lcd, kSettingsVersionTextY, kSettingsVersionText, Color::rgb(120, 140, 170),
-                       kSettingsBg);
 }
 
 /** 設定メニューの 1 行を描画または更新する。カーソル移動・値変更時に呼ぶ */
