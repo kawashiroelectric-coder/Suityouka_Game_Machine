@@ -95,7 +95,7 @@ void BootSplash::run(const Config& config) {
 
     drawSplashImage(config);
 
-    startBootBgm(config.audio);
+    //startBootBgm(config.audio);
 
     const uint32_t start_ms = to_ms_since_boot(get_absolute_time());
     bool skip_requested = false;

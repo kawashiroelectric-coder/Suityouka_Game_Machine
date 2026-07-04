@@ -11,7 +11,7 @@
 #include "heap_budget.hpp"
 #include "st7789_lcd.hpp"
 
-#if defined(GAME_MACHINE_DEBUG)
+#if GAME_MACHINE_DEBUG
 
 namespace {
 

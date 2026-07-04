@@ -30,8 +30,10 @@ include(pico_sdk_import.cmake)
 
 project(Suityouka_Game_Machine C CXX ASM)
 
-# Lua ゲーム中の FPS / RAM オーバーレイ（cmake -DGAME_MACHINE_DEBUG=ON）
-option(GAME_MACHINE_DEBUG "Enable FPS/RAM debug overlay during Lua games" ON)
+# Lua ゲーム中の FPS / RAM オーバーレイ（ON / OFF）
+# この行を編集して cmake 再構成すれば反映される。
+# FORCE により、以前のビルドキャッシュ（option の残骸）も上書きする。
+set(GAME_MACHINE_DEBUG OFF CACHE BOOL "Enable FPS/RAM debug overlay during Lua games" FORCE)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
@@ -188,13 +190,18 @@ add_subdirectory(
 # ============================================
 # リンクライブラリ
 # ============================================
+# GAME_MACHINE_DEBUG は常に 0/1 を渡す（#if defined だとキャッシュ残骸で誤って有効になる）
+if(GAME_MACHINE_DEBUG)
+    set(_GAME_MACHINE_DEBUG_VALUE 1)
+else()
+    set(_GAME_MACHINE_DEBUG_VALUE 0)
+endif()
 target_compile_definitions(Suityouka_Game_Machine PRIVATE
     USE_PRINTF
     USE_DBG_PRINTF
+    GAME_MACHINE_DEBUG=${_GAME_MACHINE_DEBUG_VALUE}
 )
-if(GAME_MACHINE_DEBUG)
-    target_compile_definitions(Suityouka_Game_Machine PRIVATE GAME_MACHINE_DEBUG)
-endif()
+message(STATUS "GAME_MACHINE_DEBUG=${_GAME_MACHINE_DEBUG_VALUE} (FPS/RAM overlay)")
 
 target_link_libraries(Suityouka_Game_Machine 
     # Pico SDK基本ライブラリ
