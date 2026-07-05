@@ -98,7 +98,6 @@ games/(ここにゲームのフォルダ)/(ここにゲームのlua)
 | [visual_novel](Game/visual_novel/) | ビジュアルノベル |
 | [tile_test](Game/tile_test/) | タイル横スクロール |
 | [sokoban](Game/sokoban/) | 倉庫番（ランダム生成） |
-| [bad_apple](Game/bad_apple/) | 1bit 動画再生デモ |
 | [save_test](Game/save_test/) | セーブ API テスト |
 
 各ゲームの README に必要アセット・操作説明があります。
