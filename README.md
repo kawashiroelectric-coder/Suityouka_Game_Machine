@@ -4,6 +4,7 @@
 
 **Raspberry Pi Pico 2W** 向けの携帯ゲーム機ファームウェアです。  
 SD カード上の **Lua 5.4** ゲームを起動し、320×240 LCD・8 ボタン・I2S 音声で遊べます。
+電源は単三電池2本となります。
 
 MIT License · Copyright (c) 2026 [Kawashiro Electric](https://github.com/kawashiroelectric-coder)
 
