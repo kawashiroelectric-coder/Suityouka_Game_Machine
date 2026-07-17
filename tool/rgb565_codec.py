@@ -13,9 +13,13 @@ def rgb888_to_rgb565(r: int, g: int, b: int) -> int:
 
 
 def rgb565_to_rgb888(value: int) -> tuple[int, int, int]:
-    r = ((value >> 11) & 0x1F) << 3
-    g = ((value >> 5) & 0x3F) << 2
-    b = (value & 0x1F) << 3
+    try:
+        v = int(value) & 0xFFFF
+    except (TypeError, ValueError):
+        v = 0
+    r = ((v >> 11) & 0x1F) << 3
+    g = ((v >> 5) & 0x3F) << 2
+    b = (v & 0x1F) << 3
     return r, g, b
 
 

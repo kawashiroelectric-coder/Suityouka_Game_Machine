@@ -106,6 +106,12 @@ private:
         size_t dma_buffer_size = 0;
         uint32_t row = 0;
         uint32_t col_processed = 0;
+        /** バウンスを 2 分割し、片側 DMA 中にもう片側をバイトスワップ準備 */
+        uint8_t dma_half = 0;
+        uint8_t prep_half = 0;
+        uint32_t prep_pixels = 0;
+        bool prep_valid = false;
+        bool dma_started = false;
     };
     AsyncDmaState dma_async_;
 

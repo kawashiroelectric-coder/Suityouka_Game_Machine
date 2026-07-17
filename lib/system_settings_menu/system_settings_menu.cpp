@@ -40,7 +40,7 @@ constexpr int kSettingsPanelH =
 // サードパーティの正式なライセンス表記は THIRD_PARTY_NOTICES.md を参照してください。
 // ---------------------------------------------------------------------------
 constexpr const char* kAboutLines[] = {
-    "Code Ver 1.0.0",
+    "Code Ver 1.1.0",
     "SD: Apache2.0 carlk3",
 };
 constexpr int kAboutLineCount = static_cast<int>(sizeof(kAboutLines) / sizeof(kAboutLines[0]));

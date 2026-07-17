@@ -335,10 +335,50 @@ bool vnStreamComposeDraw(LuaInterpreter* interp, lua_State* L, int table_index) 
     return true;
 }
 
+bool vnStreamComposeSyncOnly(LuaInterpreter* interp, lua_State* L, int table_index) {
+    if (!interp || !L || !lua_istable(L, table_index)) {
+        return false;
+    }
+    VnStreamComposeState* st = &interp->vnStreamState();
+    const int abs_idx = lua_absindex(L, table_index);
+    syncLayersFromTable(interp, st, L, abs_idx);
+    return st->bg.active || st->char_count > 0;
+}
+
+bool vnStreamComposeReplayBand(LuaInterpreter* interp) {
+    if (!interp) {
+        return false;
+    }
+    GameDisplay* disp = interp->hostHooks().display;
+    if (!disp) {
+        return false;
+    }
+    VnStreamComposeState* st = &interp->vnStreamState();
+    const int band_index = disp->bandIndex();
+    const uint8_t buf_slot = static_cast<uint8_t>(band_index & 1);
+    if (!drawLayerBand(disp, &st->bg, band_index, buf_slot)) {
+        return false;
+    }
+    for (int i = 0; i < st->char_count; ++i) {
+        if (!drawLayerBand(disp, &st->chars[i], band_index, buf_slot)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /** machine.draw_vn_stream から呼ばれる VN 合成描画のエントリ */
 bool LuaInterpreter::drawVnStreamCompose(lua_State* L, int table_index) {
     if (!sd_mounted_) {
         return false;
+    }
+    // command list 録画中はレイヤー同期＋マーカーのみ（SD 帯読みは再生時）
+    if (draw_cmds_.isRecording()) {
+        if (!vnStreamComposeSyncOnly(this, L, table_index)) {
+            return false;
+        }
+        draw_cmds_.recVnStreamMarker(this);
+        return true;
     }
     return vnStreamComposeDraw(this, L, table_index);
 }

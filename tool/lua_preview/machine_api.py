@@ -18,8 +18,12 @@ from bw_stream import BwFrameBuffer
 class ImageSlot:
     __slots__ = ("pixels", "width", "height")
 
-    def __init__(self, pixels: array, width: int, height: int) -> None:
-        self.pixels = pixels
+    def __init__(self, pixels: array | list[int], width: int, height: int) -> None:
+        # 描画は list[int] のみ使う（array の C バッファ AV 回避）
+        if isinstance(pixels, array):
+            self.pixels: list[int] = [int(p) & 0xFFFF for p in pixels]
+        else:
+            self.pixels = [int(p) & 0xFFFF for p in pixels]
         self.width = width
         self.height = height
 
@@ -107,6 +111,9 @@ class MachineHost:
     def fill_rect(self, x: int, y: int, w: int, h: int, color: int) -> None:
         self.fb.fill_rect(int(x), int(y), int(w), int(h), int(color))
 
+    def fill_rect_alpha(self, x: int, y: int, w: int, h: int, color: int, alpha: int) -> None:
+        self.fb.fill_rect_alpha(int(x), int(y), int(w), int(h), int(color), int(alpha))
+
     def fill_rects(self, rects) -> None:
         n = len(rects)
         for i in range(1, n + 1):
@@ -171,7 +178,13 @@ class MachineHost:
         return str(self._resolve(path)).replace("\\", "/")
 
     def file_exists(self, path: str) -> bool:
-        return self._resolve(path).is_file()
+        p = Path(path)
+        if p.is_absolute():
+            return p.is_file()
+        # セーブは _preview_save/ に置くため、両方を見る（実機は同一相対パス）
+        if (self._save_root / p.name).is_file():
+            return True
+        return (self.game_dir / p).is_file()
 
     def load_image(self, path: str, w: int, h: int) -> tuple[int | None, str | None]:
         full = self._resolve(path)
@@ -198,13 +211,34 @@ class MachineHost:
         else:
             self.fb.blit_rgb565(slot.pixels, slot.width, slot.height, int(dx), int(dy))
 
-    def draw_image_keyed(self, image_id: int, dx: int, dy: int, key: int, *args: int) -> None:
+    def draw_image_keyed(self, image_id: int, dx: int, dy: int, *args: int) -> None:
+        """描画: (id,x,y[,key]) または (id,x,y,sx,sy,sw,sh[,key])。key 省略時 0xF81F。"""
         slot = self._get_slot(image_id)
         if not slot:
             return
-        key_i = int(key)
-        if len(args) == 4:
+        key_i = 0xF81F
+        sx = sy = 0
+        sw = sh = None
+        if len(args) == 0:
+            pass
+        elif len(args) == 1:
+            key_i = int(args[0])
+        elif len(args) == 4:
             sx, sy, sw, sh = map(int, args)
+        elif len(args) == 5:
+            sx, sy, sw, sh, key_i = map(int, args)
+        else:
+            # 旧呼び出し (id,x,y,key,sx,sy,sw,sh) にも寛容に対応
+            if len(args) >= 5:
+                key_i = int(args[0])
+                sx, sy, sw, sh = map(int, args[1:5])
+            else:
+                return
+        if sw is None:
+            self.fb.blit_rgb565(
+                slot.pixels, slot.width, slot.height, int(dx), int(dy), key_color=key_i
+            )
+        else:
             self.fb.blit_rgb565(
                 slot.pixels,
                 slot.width,
@@ -217,10 +251,159 @@ class MachineHost:
                 sh,
                 key_i,
             )
-        else:
-            self.fb.blit_rgb565(
-                slot.pixels, slot.width, slot.height, int(dx), int(dy), key_color=key_i
+
+    def draw_image_affine(
+        self,
+        image_id: int,
+        a: float,
+        b: float,
+        c: float,
+        d: float,
+        e: float,
+        f: float,
+        key=None,
+    ) -> None:
+        slot = self._get_slot(image_id)
+        if not slot:
+            return
+        key_color = None
+        if key is True:
+            key_color = 0xF81F
+        elif key is not None and key is not False:
+            try:
+                key_color = int(key)
+            except (TypeError, ValueError):
+                key_color = None
+        try:
+            self.fb.blit_rgb565_affine(
+                slot.pixels,
+                slot.width,
+                slot.height,
+                float(a),
+                float(b),
+                float(c),
+                float(d),
+                float(e),
+                float(f),
+                key_color=key_color,
             )
+        except Exception:
+            # プレビュー全体を落とさない（描画フレームをスキップ）
+            return
+
+    def draw_image_xform(self, image_id: int, opts) -> None:
+        import math
+
+        slot = self._get_slot(image_id)
+        if not slot:
+            return
+
+        def get_num(key: str, default: float | None = None) -> float | None:
+            try:
+                val = opts[key]
+            except (KeyError, TypeError, IndexError):
+                return default
+            if val is None:
+                return default
+            # Lua テーブル経由で関数などが入った場合は黙って default
+            if isinstance(val, (bool, str)) or callable(val):
+                return default
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return default
+
+        def get_bool(key: str, default: bool = False) -> bool:
+            try:
+                val = opts[key]
+            except (KeyError, TypeError, IndexError):
+                return default
+            if val is None:
+                return default
+            if callable(val):
+                return default
+            return bool(val)
+
+        x = get_num("x", 0.0)
+        if x is None:
+            x = 0.0
+        y = get_num("y", 0.0)
+        if y is None:
+            y = 0.0
+        ox = get_num("ox", None)
+        if ox is None:
+            ox = slot.width * 0.5
+        oy = get_num("oy", None)
+        if oy is None:
+            oy = slot.height * 0.5
+        scale_x = 1.0
+        scale_y = 1.0
+        scale = get_num("scale", None)
+        if scale is not None:
+            scale_x = scale_y = scale
+        sx_v = get_num("scale_x", None)
+        sy_v = get_num("scale_y", None)
+        if sx_v is not None:
+            scale_x = sx_v
+        if sy_v is not None:
+            scale_y = sy_v
+        angle_deg = get_num("angle", 0.0)
+        if angle_deg is None:
+            angle_deg = 0.0
+        if get_bool("flip_x"):
+            scale_x = -scale_x
+        if get_bool("flip_y"):
+            scale_y = -scale_y
+
+        src_x = get_num("sx", 0.0)
+        src_y = get_num("sy", 0.0)
+        src_w = get_num("sw", float(slot.width))
+        src_h = get_num("sh", float(slot.height))
+        src_x = int(0 if src_x is None else src_x)
+        src_y = int(0 if src_y is None else src_y)
+        src_w = int(slot.width if src_w is None else src_w)
+        src_h = int(slot.height if src_h is None else src_h)
+
+        keyed = get_bool("keyed", False)
+        key_color = None
+        try:
+            key_val = opts["key"]
+        except (KeyError, TypeError, IndexError):
+            key_val = None
+        if key_val is True:
+            keyed = True
+            key_color = 0xF81F
+        elif isinstance(key_val, (int, float)):
+            keyed = True
+            key_color = int(key_val)
+        elif keyed:
+            key_color = 0xF81F
+
+        rad = math.radians(angle_deg)
+        cos_a = math.cos(rad)
+        sin_a = math.sin(rad)
+        a = scale_x * cos_a
+        b = scale_x * (-sin_a)
+        d = scale_y * sin_a
+        e = scale_y * cos_a
+        c = x - a * ox - b * oy
+        f = y - d * ox - e * oy
+        self.fb.blit_rgb565_affine(
+            slot.pixels,
+            slot.width,
+            slot.height,
+            a,
+            b,
+            c,
+            d,
+            e,
+            f,
+            src_x,
+            src_y,
+            src_w,
+            src_h,
+            key_color if keyed else None,
+        )
 
     def free_image(self, image_id: int) -> None:
         slot = self.images.pop(int(image_id), None)
@@ -518,9 +701,11 @@ class MachineHost:
 
     # --- フォント ---
 
-    def load_font(self, path: str) -> bool:
-        return self.font.load(str(self._resolve(path)))
-
+    def load_font(self, path: str):
+        # 実機 API: 成功 true / 失敗 nil, errmsg
+        if self.font.load(str(self._resolve(path))):
+            return True
+        return None, "load_font failed"
     def font_loaded(self) -> bool:
         return self.font.loaded
 
@@ -658,6 +843,7 @@ class MachineHost:
         bind("rgb", self.rgb)
         bind("clear", self.clear)
         bind("fill_rect", self.fill_rect)
+        bind("fill_rect_alpha", self.fill_rect_alpha)
         bind("fill_rects", self.fill_rects)
         bind("draw_line", self.draw_line)
         bind("draw_circle", self.draw_circle)
@@ -676,11 +862,15 @@ class MachineHost:
         bind("load_image", self._lua_load_image)
         bind("draw_image", self.draw_image)
         bind("draw_image_keyed", self.draw_image_keyed)
+        bind("draw_image_affine", self.draw_image_affine)
+        bind("draw_image_xform", self.draw_image_xform)
         bind("free_image", self.free_image)
         bind("image_size", self._lua_image_size)
         bind("load_sprite", self._lua_load_image)
         bind("draw_sprite", self.draw_image)
         bind("draw_sprite_keyed", self.draw_image_keyed)
+        bind("draw_sprite_affine", self.draw_image_affine)
+        bind("draw_sprite_xform", self.draw_image_xform)
         bind("free_sprite", self.free_image)
         bind("draw_tilemap", self.draw_tilemap)
         bind("draw_bg_stream", self.draw_bg_stream)

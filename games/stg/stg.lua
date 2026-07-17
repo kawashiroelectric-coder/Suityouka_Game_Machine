@@ -30,7 +30,10 @@
 -- 操作
 --   移動 … 十字キー
 --   射撃 … OP_RIGHT / NEAR（連射可）
+--   ボム … FAR（敵弾全消＋周囲ダメージ。残数あり）
 --   決定 … タイトル・リトライ時にジャンプ系ボタン（machine.jump_pressed）
+--
+-- 回収: 敵撃破で結晶ドロップ。自機接触で追加スコア。
 --
 -- 画像（任意）: img/*.bin を置くと自動で使用。無ければ図形スプライト。
 --   詳細は README.md / generate_images.py 参照
@@ -50,6 +53,7 @@ local BTN_LEFT = 2
 local BTN_DOWN = 3
 local BTN_OP_LEFT = 4
 local BTN_OP_RIGHT = 5
+local BTN_FAR = 6
 local BTN_NEAR = 7
 
 -- RGB565 色。machine.rgb(r,g,b) で生成し、fill_rect / text 等に渡す。
@@ -70,6 +74,9 @@ local COL_FIGHT = machine.rgb(255, 100, 80)
 local COL_DIVER = machine.rgb(100, 220, 120)
 local COL_BOSS = machine.rgb(255, 60, 180)
 local COL_BOSS2 = machine.rgb(180, 40, 120)
+local COL_CRYSTAL = machine.rgb(100, 240, 255)
+local COL_CRYSTAL2 = machine.rgb(255, 210, 90)
+local COL_BOMB = machine.rgb(140, 220, 255)
 
 -- 当たり判定・図形フォールバック用の論理サイズ。
 -- 画像を差し替えても当たりを変えたい場合はここと IMG の w/h を揃える。
@@ -86,8 +93,15 @@ local EB_SPEED = 0.11
 local MAX_PBULLETS = 24
 local MAX_EBULLETS = 72
 local MAX_ENEMIES = 7
+local MAX_CRYSTALS = 28
 local MAX_LIVES = 3
+local MAX_BOMBS = 3
 local INV_TIME_MS = 1800
+local BOMB_FLASH_MS = 450
+local BOMB_INV_MS = 900
+local BOMB_DAMAGE = 4
+local CRYSTAL_W = 8
+local CRYSTAL_H = 8
 
 -- SD 上の RGB565 .bin（width*height*2 バイト）。id は load_image の戻り値。
 -- path は起動スクリプト（stg.lua）のディレクトリ基準の相対パス。
@@ -213,10 +227,13 @@ local different = 0 --改修中　難易度を追加予定
 local player_x = 0
 local player_y = 0
 local lives = MAX_LIVES
+local bombs = MAX_BOMBS
 local score = 0
 local hi_score = 0
 local shoot_cd = 0
 local inv_timer = 0
+local bomb_flash = 0
+local bomb_held = false
 local blink = 0
 local scroll_y = 0
 local font_ok = false
@@ -225,6 +242,7 @@ local font_ok = false
 local pbullets = {}
 local ebullets = {}
 local enemies = {}
+local crystals = {}
 local spawn_serial = 0
 
 -- SD セーブ（起動スクリプトのフォルダ内。stg / stg_fast は別ディレクトリなので同名で可）
@@ -247,6 +265,13 @@ end
 
 local function fire_pressed()
   return machine.pressed(BTN_OP_RIGHT) or machine.pressed(BTN_NEAR)
+end
+
+local function bomb_just_pressed()
+  local now = machine.pressed(BTN_FAR)
+  local edge = now and not bomb_held
+  bomb_held = now
+  return edge
 end
 
 local function confirm_pressed()
@@ -493,6 +518,46 @@ local function clear_bullets()
   ebullets = {}
 end
 
+local function clear_crystals()
+  crystals = {}
+end
+
+local function crystal_value_for(kind)
+  if kind == "fighter" then
+    return 150
+  elseif kind == "diver" then
+    return 120
+  elseif kind == "boss" then
+    return 300
+  end
+  return 80
+end
+
+local function spawn_crystal(x, y, value, big)
+  if #crystals >= MAX_CRYSTALS then
+    return
+  end
+  crystals[#crystals + 1] = {
+    x = x,
+    y = y,
+    vy = 0.045 + (value % 5) * 0.004,
+    value = value,
+    big = big or false,
+  }
+end
+
+local function spawn_kill_drops(e)
+  local cx = e.x + e.w * 0.5 - CRYSTAL_W * 0.5
+  local cy = e.y + e.h * 0.5 - CRYSTAL_H * 0.5
+  if e.kind == "boss" then
+    for i = 0, 4 do
+      spawn_crystal(cx + (i - 2) * 12, cy + (i % 2) * 10, 300, true)
+    end
+  else
+    spawn_crystal(cx, cy, crystal_value_for(e.kind), e.kind == "fighter")
+  end
+end
+
 local function reset_player_pos()
   player_x = (W - PLAYER_W) // 2
   player_y = H - PLAYER_H - 14
@@ -507,6 +572,8 @@ local function begin_stage(idx)
   boss_entering = false
   enemies = {}
   clear_bullets()
+  clear_crystals()
+  bomb_flash = 0
   reset_player_pos()
   local st = STAGES[stage_idx]
   if st and st.waves[1] then
@@ -518,11 +585,14 @@ end
 local function reset_run()
   stage_idx = 1
   lives = MAX_LIVES
+  bombs = MAX_BOMBS
   score = 0
   inv_timer = 0
   shoot_cd = 0
   scroll_y = 0
   spawn_serial = 0
+  bomb_held = false
+  bomb_flash = 0
   begin_stage(1)
   mode = "banner"
   banner_timer = 0
@@ -543,7 +613,18 @@ local function spawn_boss()
   end
 end
 
+local function scoop_crystals()
+  for i = #crystals, 1, -1 do
+    score = score + crystals[i].value
+    table.remove(crystals, i)
+  end
+end
+
 local function on_stage_cleared()
+  scoop_crystals()
+  if bombs < MAX_BOMBS then
+    bombs = bombs + 1
+  end
   if stage_idx >= #STAGES then
     mode = "victory"
     record_hi_score_and_save()
@@ -558,6 +639,7 @@ end
 local function on_player_dead()
   lives = lives - 1
   clear_bullets()
+  bomb_flash = 0
   if lives <= 0 then
     mode = "gameover"
     blink = 0
@@ -566,6 +648,41 @@ local function on_player_dead()
   end
   reset_player_pos()
   inv_timer = INV_TIME_MS
+end
+
+-- 撃破時のスコア加算と結晶ドロップ。ボス撃破でステージ進行もここに集約。
+local function resolve_enemy_kill(e)
+  if e.kind == "boss" then
+    score = score + (e.score or 5000)
+    spawn_kill_drops(e)
+    boss_active = false
+    on_stage_cleared()
+  else
+    score = score + (e.kind == "fighter" and 200 or (e.kind == "diver" and 150 or 100))
+    spawn_kill_drops(e)
+  end
+end
+
+local function activate_bomb()
+  if bombs <= 0 or bomb_flash > 0 then
+    return
+  end
+  bombs = bombs - 1
+  ebullets = {}
+  bomb_flash = BOMB_FLASH_MS
+  inv_timer = math.max(inv_timer, BOMB_INV_MS)
+  machine.play_tone(280, 90)
+
+  for j = #enemies, 1, -1 do
+    local e = enemies[j]
+    if not e.entering then
+      e.hp = e.hp - BOMB_DAMAGE
+      if e.hp <= 0 then
+        resolve_enemy_kill(e)
+        table.remove(enemies, j)
+      end
+    end
+  end
 end
 
 -- ---------------------------------------------------------------------------
@@ -587,6 +704,9 @@ local function update_player(dt)
   if fire_pressed() and shoot_cd <= 0 then
     fire_player_bullet()
     shoot_cd = 110
+  end
+  if bomb_just_pressed() then
+    activate_bomb()
   end
 end
 
@@ -695,14 +815,34 @@ local function check_shots_hit()
       end
     end
     if hit and e.hp <= 0 then
-      if e.kind == "boss" then
-        score = score + (e.score or 5000)
-        boss_active = false
-        on_stage_cleared()
-      else
-        score = score + (e.kind == "fighter" and 200 or (e.kind == "diver" and 150 or 100))
-      end
+      resolve_enemy_kill(e)
       table.remove(enemies, j)
+    end
+  end
+end
+
+local function update_crystals(dt)
+  local px, py = math.floor(player_x), math.floor(player_y)
+  local pcx = px + PLAYER_W * 0.5
+  local pcy = py + PLAYER_H * 0.5
+  for i = #crystals, 1, -1 do
+    local c = crystals[i]
+    c.y = c.y + c.vy * dt
+    local ccx = c.x + CRYSTAL_W * 0.5
+    local ccy = c.y + CRYSTAL_H * 0.5
+    local dx = pcx - ccx
+    local dy = pcy - ccy
+    if dx * dx + dy * dy < 2500 then
+      c.x = c.x + dx * 0.1
+      c.y = c.y + dy * 0.1
+    end
+    if rects_overlap(px, py, PLAYER_W, PLAYER_H,
+        math.floor(c.x), math.floor(c.y), CRYSTAL_W, CRYSTAL_H) then
+      score = score + c.value
+      machine.play_tone(c.big and 920 or 740, 28)
+      table.remove(crystals, i)
+    elseif c.y > H + 10 then
+      table.remove(crystals, i)
     end
   end
 end
@@ -758,6 +898,9 @@ end
 
 local function update_play(dt)
   inv_timer = math.max(0, inv_timer - dt)
+  if bomb_flash > 0 then
+    bomb_flash = math.max(0, bomb_flash - dt)
+  end
   local st = STAGES[stage_idx]
   if st then
     scroll_y = scroll_y + st.star_spd * dt
@@ -768,6 +911,7 @@ local function update_play(dt)
   update_enemies(dt, player_x + PLAYER_W * 0.5, player_y)
   update_ebullets(dt)
   check_shots_hit()
+  update_crystals(dt)
 
   local px, py = math.floor(player_x), math.floor(player_y)
   if check_player_hit(px, py) then
@@ -818,6 +962,7 @@ local function draw_hud()
   local life_str = ""
   for i = 1, lives do life_str = life_str .. "*" end
   machine.text(6, 16, life_str, COL_WARN, COL_BG0)
+  machine.text(70, 16, "BOMB:" .. bombs, COL_BOMB, COL_BG0)
   if st then
     machine.text(6, 28, st.subtitle, COL_HUD_DIM, COL_BG0)
   end
@@ -853,6 +998,14 @@ local function draw_entities(pulse)
       machine.fill_rect(x, y, w, h, c)
     end)
   end
+  for i = 1, #crystals do
+    local c = crystals[i]
+    local x, y = math.floor(c.x), math.floor(c.y)
+    local col = c.big and COL_CRYSTAL2 or COL_CRYSTAL
+    local s = c.big and 10 or CRYSTAL_W
+    machine.fill_rect(x + 2, y, s - 4, s, col)
+    machine.fill_rect(x, y + 2, s, s - 4, col)
+  end
   for i = 1, #enemies do
     local e = enemies[i]
     local x, y = math.floor(e.x), math.floor(e.y)
@@ -872,6 +1025,15 @@ local function draw_entities(pulse)
   if inv_timer <= 0 or (math.floor(inv_timer / 80) % 2 == 0) then
     draw_image_or_rect(IMG.player, player_x, player_y, PLAYER_W, PLAYER_H, COL_PLAYER, draw_player_shape)
   end
+
+  if bomb_flash > 0 then
+    local t = bomb_flash / BOMB_FLASH_MS
+    local cx = math.floor(player_x + PLAYER_W * 0.5)
+    local cy = math.floor(player_y + PLAYER_H * 0.5)
+    local r = math.floor((1.0 - t) * 140) + 8
+    machine.draw_circle(cx, cy, r, COL_BOMB)
+    machine.draw_circle(cx, cy, math.max(4, r - 12), machine.rgb(220, 250, 255))
+  end
 end
 
 -- 8px グリッド前提の簡易センタリング（#text * 8）。日本語は字幅が異なる点に注意。
@@ -888,13 +1050,14 @@ local function draw_title()
   draw_center_text(78, "CRYSTAL FRONTLINE", machine.rgb(255, 220, 120))
   draw_center_text(108, "4 STAGE SHOOTER", COL_HUD_DIM)
   if (math.floor(machine.time_ms() / 500) % 2) == 0 then
-    draw_center_text(150, "PRESS BUTTON", COL_HUD)
+    draw_center_text(140, "PRESS BUTTON", COL_HUD)
   end
-  draw_center_text(176, "MOVE: D-PAD", COL_HUD_DIM)
-  draw_center_text(192, "FIRE: NEAR", COL_HUD_DIM)
-  draw_center_text(208, "Kawashiro Electric　@ 2026", COL_HUD_DIM)
+  draw_center_text(168, "MOVE: D-PAD", COL_HUD_DIM)
+  draw_center_text(184, "FIRE: NEAR  BOMB: FAR", COL_HUD_DIM)
+  draw_center_text(200, "PICK UP CRYSTALS", COL_HUD_DIM)
+  draw_center_text(216, "Kawashiro Electric　@ 2026", COL_HUD_DIM)
   if hi_score > 0 then
-    draw_center_text(214, "HI " .. hi_score, COL_HUD_DIM)
+    draw_center_text(228, "HI " .. hi_score, COL_HUD_DIM)
   end
 end
 
@@ -974,6 +1137,7 @@ function game_init()
   blink = 0
   enemies = {}
   clear_bullets()
+  clear_crystals()
   reset_player_pos()
 end
 

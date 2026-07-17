@@ -116,6 +116,7 @@ void LuaInterpreter::releaseGameAssets() {
     draw_mode_ = LuaDrawMode::Direct;
     layer_backdrop_color_ = 0;
     tile_layers_.reset();
+    draw_cmds_.reset();
     printf("[MENU-DBG] releaseGameAssets done\n");
     fflush(stdout);
 }
@@ -380,37 +381,29 @@ int LuaInterpreter::loadImage(const char* path, uint16_t w, uint16_t h) {
     return slot_id;
 }
 
-/** フレーム末: FIL を閉じる。BW パックの差分連鎖用 RAM 状態は維持する */
+/** フレーム末: FIL は跨ぎ維持。prefetch だけ破棄。BW パックは次フレーム先読み */
 void LuaInterpreter::closeBgStream() {
     const bool bw_pack_active = bg_stream_.bw_mode && bg_stream_.bw_pack_count > 0;
-    if (bg_stream_.open && !bw_pack_active) {
-        f_close(&bg_stream_.file);
-        bg_stream_.open = false;
-    }
     bg_stream_.prefetch.valid = false;
     bg_stream_.prefetch.display_band = -1;
     if (bg_stream_.bw_mode) {
-        if (bw_pack_active && bg_stream_.open && bg_stream_.bw_pack_frame > 0 &&
-            bwPackRgbIsReady()) {
-            bwPackRgbPrefetchNextFrame(
-                &bg_stream_.file, bg_stream_.bw_pack_frame, bg_stream_.bw_pack_count,
-                bg_stream_.bw_pack_data_base, bg_stream_.width, bg_stream_.height, bg_stream_.bw_fg,
-                bg_stream_.bw_bg, &bg_stream_.bw_buffer_frame);
+        if (bw_pack_active && bg_stream_.open && bg_stream_.bw_pack_frame > 0) {
+            if (bwPackBitHasDisplayFrame(bg_stream_.bw_pack_frame) ||
+                bwPackBitDisplayPixels() != nullptr) {
+                bwPackBitPrefetchNextFrame(
+                    &bg_stream_.file, bg_stream_.bw_pack_frame, bg_stream_.bw_pack_count,
+                    bg_stream_.bw_pack_data_base, bg_stream_.width, bg_stream_.height,
+                    &bg_stream_.bw_buffer_frame);
+            } else if (bwPackRgbIsReady()) {
+                bwPackRgbPrefetchNextFrame(
+                    &bg_stream_.file, bg_stream_.bw_pack_frame, bg_stream_.bw_pack_count,
+                    bg_stream_.bw_pack_data_base, bg_stream_.width, bg_stream_.height,
+                    bg_stream_.bw_fg, bg_stream_.bw_bg, &bg_stream_.bw_buffer_frame);
+            }
         }
         return;
     }
-    bg_stream_.path[0] = '\0';
-    bg_stream_.fail_path[0] = '\0';
-    bg_stream_.width = 0;
-    bg_stream_.height = 0;
-    bg_stream_.bw_fg = 0xFFFF;
-    bg_stream_.bw_bg = 0x0000;
-    bg_stream_.bw_pack_frame = 0;
-    bg_stream_.bw_pack_count = 0;
-    bg_stream_.bw_pack_data_base = 0;
-    bg_stream_.bw_buffer_frame = 0;
-    bg_stream_.dx = 0;
-    bg_stream_.dy = 0;
+    // 通常 RGB ストリーム: FIL / path は次フレームのために維持する
 }
 
 /** 背景ストリーム状態を完全リセット（ゲーム終了・アセット解放時） */
@@ -420,6 +413,7 @@ void LuaInterpreter::resetBgStream() {
         bg_stream_.open = false;
     }
     bwPackRgbBufRelease(g_session_teardown);
+    bwPackBitRelease(g_session_teardown);
     bg_stream_.path[0] = '\0';
     bg_stream_.fail_path[0] = '\0';
     bg_stream_.width = 0;
@@ -547,6 +541,10 @@ bool LuaInterpreter::drawBgStreamFromSd(const char* path, int dx, int dy, uint16
     if (!sd_mounted_) {
         return false;
     }
+    if (draw_cmds_.isRecording()) {
+        draw_cmds_.recBgStream(path, dx, dy, w, h);
+        return true;
+    }
     GameDisplay* disp = hooks_.display;
     if (!disp) {
         return false;
@@ -631,6 +629,10 @@ bool LuaInterpreter::drawBwStreamFromSd(const char* path, int dx, int dy, uint16
     }
     if (!sd_mounted_) {
         return false;
+    }
+    if (draw_cmds_.isRecording()) {
+        draw_cmds_.recBwStream(path, dx, dy, w, h, fg, bg);
+        return true;
     }
     GameDisplay* disp = hooks_.display;
     if (!disp) {
@@ -994,7 +996,114 @@ bool LuaInterpreter::ensureBwPackRgbFrameReady(const char* path, int frame_index
     return true;
 }
 
-/** bad_apple: Lua game_draw を使わず RGB キャッシュから全画面 1 回 DMA */
+/** bad_apple: pack ファイルを開き、表示用 1bit フレームを同期する */
+bool LuaInterpreter::ensureBadAppleBitFrameReady(int frame_index) {
+    if (frame_index <= 0 || bad_apple_pack_path_[0] == '\0' || !sd_mounted_) {
+        return false;
+    }
+
+    const uint16_t w = GameConfig::SCREEN_WIDTH;
+    const uint16_t h = GameConfig::SCREEN_HEIGHT;
+    const uint16_t fg = 0xFFFF;
+    const uint16_t bg = 0x0000;
+    const char* norm = bad_apple_pack_path_;
+
+    if (bg_stream_.fail_path[0] != '\0' && std::strcmp(bg_stream_.fail_path, norm) == 0) {
+        return false;
+    }
+
+    const bool pack_changed = std::strcmp(bg_stream_.path, norm) != 0 || bg_stream_.width != w ||
+                              bg_stream_.height != h || !bg_stream_.bw_mode ||
+                              bg_stream_.bw_pack_count == 0;
+
+    if (pack_changed) {
+        if (bg_stream_.open) {
+            f_close(&bg_stream_.file);
+            bg_stream_.open = false;
+        }
+        const FRESULT fr = f_open(&bg_stream_.file, norm, FA_READ);
+        if (fr != FR_OK) {
+            printf("bad_apple: open failed %s (%s)\n", norm, FRESULT_str(fr));
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+        bg_stream_.open = true;
+
+        uint32_t frame_count = 0;
+        uint32_t data_base = 0;
+        if (!bwPackReadHeader(&bg_stream_.file, &frame_count, &data_base)) {
+            printf("bad_apple: invalid header %s\n", norm);
+            f_close(&bg_stream_.file);
+            bg_stream_.open = false;
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+
+        bg_stream_.bw_mode = true;
+        bg_stream_.bw_fg = fg;
+        bg_stream_.bw_bg = bg;
+        bg_stream_.bw_pack_count = frame_count;
+        bg_stream_.bw_pack_data_base = data_base;
+        bg_stream_.bw_buffer_frame = 0;
+        bg_stream_.bw_pack_frame = 0;
+        std::strncpy(bg_stream_.path, norm, sizeof(bg_stream_.path) - 1);
+        bg_stream_.path[sizeof(bg_stream_.path) - 1] = '\0';
+        bg_stream_.width = w;
+        bg_stream_.height = h;
+        bg_stream_.fail_path[0] = '\0';
+        bg_stream_.bw_rgb_fast_bands = false;
+
+        if (game_lua_) {
+            trimLargeLuaGlobals(game_lua_);
+            lua_gc(game_lua_, LUA_GCCOLLECT, 0);
+        }
+        // 全画面 RGB は使わず、1bit 二重バッファ + 帯展開で DMA と重ねる
+        bwPackRgbBufRelease(false);
+        if (!bwPackBitEnsure(w, h)) {
+            printf("bad_apple: bit dual buffer unavailable\n");
+            return false;
+        }
+    } else if (!bg_stream_.open) {
+        const FRESULT fr = f_open(&bg_stream_.file, norm, FA_READ);
+        if (fr != FR_OK) {
+            printf("bad_apple: reopen failed %s (%s)\n", norm, FRESULT_str(fr));
+            std::strncpy(bg_stream_.fail_path, norm, sizeof(bg_stream_.fail_path) - 1);
+            bg_stream_.fail_path[sizeof(bg_stream_.fail_path) - 1] = '\0';
+            return false;
+        }
+        bg_stream_.open = true;
+    }
+
+    if (static_cast<uint32_t>(frame_index) > bg_stream_.bw_pack_count) {
+        return false;
+    }
+
+    if (!bwPackBitSyncDisplayFrame(&bg_stream_.file, frame_index, bg_stream_.bw_pack_count,
+                                   bg_stream_.bw_pack_data_base, w, h,
+                                   &bg_stream_.bw_buffer_frame)) {
+        printf("bad_apple: bit sync failed frame %d\n", frame_index);
+        return false;
+    }
+
+    bg_stream_.bw_pack_frame = frame_index;
+    bg_stream_.fail_path[0] = '\0';
+    return true;
+}
+
+namespace {
+
+void badApplePumpDisplay(void* user) {
+    auto* disp = static_cast<GameDisplay*>(user);
+    if (disp) {
+        disp->pumpDma();
+    }
+}
+
+}  // namespace
+
+/** bad_apple: 1bit→帯展開→DMA を重ね、裏バッファへ次フレームを SD 先読み */
 bool LuaInterpreter::runBadAppleDrawFrame() {
     GameDisplay* disp = hooks_.display;
     if (!disp || bad_apple_pack_path_[0] == '\0') {
@@ -1019,19 +1128,43 @@ bool LuaInterpreter::runBadAppleDrawFrame() {
     }
 
     const int frame_idx = bad_apple_frame_idx_;
-    if (frame_idx == bad_apple_last_drawn_frame_ && bwPackRgbHasDisplayFrame(frame_idx)) {
+    if (frame_idx == bad_apple_last_drawn_frame_ && bwPackBitHasDisplayFrame(frame_idx)) {
         bad_apple_skip_prefetch_ = true;
         return true;
     }
 
-    const uint16_t* rgb = nullptr;
-    if (!ensureBwPackRgbFrameReady(bad_apple_pack_path_, frame_idx, GameConfig::SCREEN_WIDTH,
-                                   GameConfig::SCREEN_HEIGHT, 0xFFFF, 0x0000, &rgb)) {
+    if (!ensureBadAppleBitFrameReady(frame_idx)) {
         return false;
     }
-    if (!disp->submitFullFrameRgb565(rgb, GameConfig::SCREEN_WIDTH, GameConfig::SCREEN_HEIGHT)) {
+
+    const uint8_t* bit = bwPackBitDisplayPixels();
+    if (!bit) {
         return false;
     }
+
+    const uint16_t w = GameConfig::SCREEN_WIDTH;
+    const uint16_t fg = 0xFFFF;
+    const uint16_t bg = 0x0000;
+    const int bands = disp->bandCount();
+
+    // 帯展開と前バンド DMA を重ねる（SPI0）。SD 先読みは全バンドキック後に SPI1 で重ねる
+    for (int band = 0; band < bands; ++band) {
+        disp->beginBand(band);
+        const int y0 = disp->bandTopY();
+        const int rows = disp->bandBottomY() - y0;
+        expandBwBufferChunk(bit, w, y0, rows, disp->framebuffer(), fg, bg);
+        disp->pumpDma();
+        disp->endBand();
+        disp->pumpDma();
+    }
+
+    // 最終バンド転送中に次 1bit フレームを SD から裏バッファへ
+    bwPackBitPrefetchNextFramePumped(
+        &bg_stream_.file, frame_idx, bg_stream_.bw_pack_count, bg_stream_.bw_pack_data_base, w,
+        GameConfig::SCREEN_HEIGHT, &bg_stream_.bw_buffer_frame, badApplePumpDisplay, disp);
+
+    disp->waitForTransferComplete();
+
     bad_apple_last_drawn_frame_ = frame_idx;
     return true;
 }
@@ -1044,6 +1177,10 @@ bool LuaInterpreter::drawBwPackFromSd(const char* path, int frame_index, int dx,
     }
     if (!sd_mounted_) {
         return false;
+    }
+    if (draw_cmds_.isRecording()) {
+        draw_cmds_.recBwPack(path, frame_index, dx, dy, w, h, fg, bg);
+        return true;
     }
     GameDisplay* disp = hooks_.display;
     if (!disp) {
@@ -1608,34 +1745,81 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
         if (!drew_frame) {
             const int bands = hooks_.display->bandCount();
             bg_stream_.bw_rgb_fast_bands = false;
-            for (int band = 0; band < bands; band++) {
-                hooks_.display->beginBand(band);
 
-                if (draw_mode_ == LuaDrawMode::Layers) {
-                    tile_layers_.composeBand(hooks_.display, tileLayerLookupImage, this);
-                }
-
-                const bool bw_rgb_blit_only =
-                    band > 0 && drawBwPackBlitCurrentBand();
-                if (!bw_rgb_blit_only) {
-                    lua_getglobal(game_lua_, "game_draw");
-                    if (lua_isfunction(game_lua_, -1)) {
-                        if (lua_pcall(game_lua_, 0, 0, 0) != LUA_OK) {
-                            const char* err = lua_tostring(game_lua_, -1);
-                            printf("game_draw error: %s\n", err ? err : "?");
-                            showStatus("game_draw err", err, Color::RED, Color::BLACK);
-                            lua_pop(game_lua_, 1);
-                            failed = true;
-                            running = false;
-                            break;
-                        }
-                    } else {
+            // --- 高速パス: game_draw を 1 回だけ録画し、C 側でバンド再生 + dirty 帯スキップ ---
+            // layers モードはタイルスクロールが command list 外なので従来パスを使う
+            bool used_cmd_list = false;
+            if (draw_mode_ != LuaDrawMode::Layers) {
+                draw_cmds_.beginRecord(hooks_.display->width(), hooks_.display->height(),
+                                       hooks_.display->bufferHeight());
+                lua_getglobal(game_lua_, "game_draw");
+                if (lua_isfunction(game_lua_, -1)) {
+                    if (lua_pcall(game_lua_, 0, 0, 0) != LUA_OK) {
+                        const char* err = lua_tostring(game_lua_, -1);
+                        printf("game_draw error: %s\n", err ? err : "?");
+                        showStatus("game_draw err", err, Color::RED, Color::BLACK);
                         lua_pop(game_lua_, 1);
+                        draw_cmds_.markFailed();
+                        failed = true;
+                        running = false;
                     }
+                } else {
+                    lua_pop(game_lua_, 1);
+                    draw_cmds_.markFailed();
                 }
 
-                hooks_.display->endBand();
-                prefetchBgStreamBand(band + 1);
+                const bool record_ok = draw_cmds_.endRecord();
+                if (!failed && record_ok) {
+                    used_cmd_list = true;
+                    uint16_t dirty_mask = 0xFFFF;
+                    const bool all_clean = draw_cmds_.computeDirtyBands(&dirty_mask);
+                    if (!all_clean) {
+                        for (int band = 0; band < bands; band++) {
+                            if ((dirty_mask & static_cast<uint16_t>(1u << band)) == 0) {
+                                continue;
+                            }
+                            hooks_.display->beginBand(band);
+                            draw_cmds_.replayBand(this, hooks_.display, band);
+                            hooks_.display->endBand();
+                            prefetchBgStreamBand(band + 1);
+                        }
+                    }
+                    draw_cmds_.commitBandHashes();
+                }
+            }
+
+            // --- フォールバック: 従来どおりバンドごとに Lua game_draw ---
+            if (!failed && !used_cmd_list) {
+                draw_cmds_.reset();
+                for (int band = 0; band < bands; band++) {
+                    hooks_.display->beginBand(band);
+
+                    if (draw_mode_ == LuaDrawMode::Layers) {
+                        tile_layers_.composeBand(hooks_.display, tileLayerLookupImage, this);
+                    }
+
+                    const bool bw_rgb_blit_only =
+                        band > 0 && drawBwPackBlitCurrentBand();
+                    if (!bw_rgb_blit_only) {
+                        lua_getglobal(game_lua_, "game_draw");
+                        if (lua_isfunction(game_lua_, -1)) {
+                            if (lua_pcall(game_lua_, 0, 0, 0) != LUA_OK) {
+                                const char* err = lua_tostring(game_lua_, -1);
+                                printf("game_draw error: %s\n", err ? err : "?");
+                                showStatus("game_draw err", err, Color::RED, Color::BLACK);
+                                lua_pop(game_lua_, 1);
+                                failed = true;
+                                running = false;
+                                break;
+                            }
+                        } else {
+                            lua_pop(game_lua_, 1);
+                        }
+                    }
+
+                    hooks_.display->endBand();
+                    prefetchBgStreamBand(band + 1);
+                }
             }
         }
         if (failed) {
@@ -1644,10 +1828,11 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
         if (!drew_frame) {
             hooks_.display->waitForTransferComplete();
         }
+        // FIL は跨ぎ維持（prefetch 破棄・BW 先読みのみ）。完全 close はゲーム終了時。
         if (!bad_apple_skip_prefetch_) {
             closeBgStream();
         }
-        closeVnStreamCompose();
+        // closeVnStreamCompose() は呼ばない（フレーム末 close を廃止）
         debugOverlayDrawAfterFrame(hooks_.display->lcd(),
                                    static_cast<int>(hooks_.display->width()));
 

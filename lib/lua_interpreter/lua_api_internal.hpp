@@ -39,6 +39,8 @@ int luaHostJumpPressed(lua_State* L);
 int luaHostClear(lua_State* L);
 /** Lua バインディング: machine.fill_rect */
 int luaHostFillRect(lua_State* L);
+/** Lua バインディング: machine.fill_rect_alpha */
+int luaHostFillRectAlpha(lua_State* L);
 /** Lua バインディング: machine.fill_rects */
 int luaHostFillRects(lua_State* L);
 /** Lua バインディング: machine.set_present_mode */
@@ -59,6 +61,10 @@ int luaHostLoadImage(lua_State* L);
 int luaHostDrawImage(lua_State* L);
 /** Lua バインディング: machine.draw_image_keyed */
 int luaHostDrawImageKeyed(lua_State* L);
+/** Lua バインディング: machine.draw_image_affine */
+int luaHostDrawImageAffine(lua_State* L);
+/** Lua バインディング: machine.draw_image_xform */
+int luaHostDrawImageXform(lua_State* L);
 /** Lua バインディング: machine.free_image */
 int luaHostFreeImage(lua_State* L);
 /** Lua バインディング: machine.image_size */

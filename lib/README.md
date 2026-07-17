@@ -46,7 +46,10 @@ flowchart TD
     I --> J[debugOverlay / EncoderVolume]
 ```
 
-- **`game_draw` は 1 フレームあたり `bandCount()` 回**呼ばれます（バンド高さ = `GameConfig::BUFFER_HEIGHT`、通常 20 行）。
+- **`game_draw` は（可能なら）1 フレーム 1 回**録画され、dirty バンドだけ C 側再生。失敗時や `layers` モードは従来どおり `bandCount()` 回。
+- バンド高さ = `GameConfig::BUFFER_HEIGHT`（通常 20 行）。
+- `draw_vn_stream` / `draw_bg_stream` の FIL はフレーム跨ぎで維持（ゲーム終了時に close）。
+- LCD DMA はバウンス 2 分割でバイトスワップと SPI を重ねる。
 - Lua からの描画はすべて **`GameDisplay`** 経由（`machine.*` → `lua_api_draw.cpp`）。
 - 大きな背景・VN 立ち絵は **`draw_bg_stream` / `draw_vn_stream`** で SD から帯ごと読み込み（`bg_stream_util`）。
 
@@ -171,4 +174,4 @@ flowchart TD
 
 - [README_GAME_MACHINE.md](../README_GAME_MACHINE.md) … ハード構成・SD 配置・ビルド
 - [LUA_API.md](../LUA_API.md) … Lua `machine.*` リファレンス
-- [Test_Lua/README.md](../Test_Lua/README.md) … サンプルゲーム
+- [games/README.md](../games/README.md) … サンプルゲーム

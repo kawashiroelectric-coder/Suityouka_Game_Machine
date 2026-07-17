@@ -50,7 +50,7 @@ def main() -> int:
     games = [
         ROOT / "Test_Lua" / "stg" / "stg.lua",
         ROOT / "Test_Lua" / "tile_test" / "tile_test.lua",
-        ROOT / "Test_Lua" / "dino" / "dino.lua",
+        ROOT / "games" / "Run!Yamame" / "Run!Yamame.lua",
         ROOT / "Test_Lua" / "visual_novel" / "visual_novel.lua",
         ROOT / "Test_Lua" / "bad_apple" / "bad_apple.lua",
         ROOT / "Test_Lua" / "sokoban" / "sokoban.lua",

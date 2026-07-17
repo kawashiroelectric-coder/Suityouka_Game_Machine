@@ -133,9 +133,9 @@ class MisfFont:
                 src_x = (ox * self.glyph_w) // out_w
                 on = self._glyph_pixel(glyph, src_y, src_x)
                 if on:
-                    fb._band_buf[(py - fb.band_y0) * fb.width + px] = fg & 0xFFFF
+                    fb._band_buf[(py - fb.band_y0) * fb.width + px] = int(fg) & 0xFFFF
                 elif use_bg:
-                    fb._band_buf[(py - fb.band_y0) * fb.width + px] = bg & 0xFFFF
+                    fb._band_buf[(py - fb.band_y0) * fb.width + px] = int(bg) & 0xFFFF
 
     def draw_text_bg(
         self,
@@ -149,30 +149,38 @@ class MisfFont:
     ) -> None:
         if not self.loaded or not text:
             return
+        # lupa は Lua 文字列を Python unicode として渡す。実機の C API は UTF-8
+        # バイト列なので、同じデコード経路に乗せるため一旦 UTF-8 へ戻す。
+        data = text.encode("utf-8") if isinstance(text, str) else bytes(text)
         cx = x
         i = 0
-        n = len(text)
+        n = len(data)
         while i < n:
-            b = ord(text[i])
+            b = data[i]
+            if b == 0x0A:  # '\n' — 実機 FontRenderer と同じ改行
+                cx = x
+                y += self.scaled_glyph_height()
+                i += 1
+                continue
             if b < 0x80:
                 cp = b
                 i += 1
             elif (b & 0xE0) == 0xC0 and i + 1 < n:
-                cp = ((b & 0x1F) << 6) | (ord(text[i + 1]) & 0x3F)
+                cp = ((b & 0x1F) << 6) | (data[i + 1] & 0x3F)
                 i += 2
             elif (b & 0xF0) == 0xE0 and i + 2 < n:
                 cp = (
                     ((b & 0x0F) << 12)
-                    | ((ord(text[i + 1]) & 0x3F) << 6)
-                    | (ord(text[i + 2]) & 0x3F)
+                    | ((data[i + 1] & 0x3F) << 6)
+                    | (data[i + 2] & 0x3F)
                 )
                 i += 3
             elif (b & 0xF8) == 0xF0 and i + 3 < n:
                 cp = (
                     ((b & 0x07) << 18)
-                    | ((ord(text[i + 1]) & 0x3F) << 12)
-                    | ((ord(text[i + 2]) & 0x3F) << 6)
-                    | (ord(text[i + 3]) & 0x3F)
+                    | ((data[i + 1] & 0x3F) << 12)
+                    | ((data[i + 2] & 0x3F) << 6)
+                    | (data[i + 3] & 0x3F)
                 )
                 i += 4
             else:

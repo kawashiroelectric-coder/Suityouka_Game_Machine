@@ -710,48 +710,108 @@ void ST7789_LCD::dmaAsyncFinish() {
     gpio_put(LCDConfig::PIN_CS, 1);
     dma_async_.active = false;
     dma_async_.data = nullptr;
+    dma_async_.prep_valid = false;
+    dma_async_.dma_started = false;
+    dma_async_.prep_pixels = 0;
 }
+
+namespace {
+
+void swapRgb565ToBe(const uint16_t* src, uint8_t* out, uint32_t pixels) {
+    uint32_t i = 0;
+    // 2 画素ずつ（わずかに高速化）
+    for (; i + 1 < pixels; i += 2) {
+        const uint16_t c0 = src[i];
+        const uint16_t c1 = src[i + 1];
+        out[i * 2] = static_cast<uint8_t>(c0 >> 8);
+        out[i * 2 + 1] = static_cast<uint8_t>(c0 & 0xFF);
+        out[i * 2 + 2] = static_cast<uint8_t>(c1 >> 8);
+        out[i * 2 + 3] = static_cast<uint8_t>(c1 & 0xFF);
+    }
+    if (i < pixels) {
+        const uint16_t c = src[i];
+        out[i * 2] = static_cast<uint8_t>(c >> 8);
+        out[i * 2 + 1] = static_cast<uint8_t>(c & 0xFF);
+    }
+}
+
+}  // namespace
 
 // 非同期 DMA 転送の次チャンクを準備して DMA を開始する
 void ST7789_LCD::dmaAsyncStartChunk() {
     if (!dma_async_.active || !dma_async_.data || !dma_async_.dma_buffer ||
-        dma_async_.dma_buffer_size < 2 || dma_async_.dma_channel < 0) {
+        dma_async_.dma_buffer_size < 4 || dma_async_.dma_channel < 0) {
         dmaAsyncFinish();
         return;
     }
 
-    const uint32_t buffer_pixels = static_cast<uint32_t>(dma_async_.dma_buffer_size / 2);
+    const uint32_t half_bytes = static_cast<uint32_t>(dma_async_.dma_buffer_size / 2) & ~1u;
+    const uint32_t half_pixels = half_bytes / 2;
+    if (half_pixels == 0) {
+        dmaAsyncFinish();
+        return;
+    }
+
     const uint32_t stride = dma_async_.src_stride ? dma_async_.src_stride : dma_async_.w;
 
-    while (dma_async_.row < dma_async_.h) {
+    auto prepare_into = [&](uint8_t half) -> uint32_t {
+        if (dma_async_.row >= dma_async_.h) {
+            return 0;
+        }
         const uint16_t* row_src =
             dma_async_.data + dma_async_.row * stride + dma_async_.col_processed;
         uint32_t transfer_pixels = dma_async_.w - dma_async_.col_processed;
-        if (transfer_pixels > buffer_pixels) {
-            transfer_pixels = buffer_pixels;
+        if (transfer_pixels > half_pixels) {
+            transfer_pixels = half_pixels;
         }
-
-        uint8_t* out = dma_async_.dma_buffer;
-        for (uint32_t i = 0; i < transfer_pixels; i++) {
-            const uint16_t color = row_src[i];
-            out[i * 2] = static_cast<uint8_t>(color >> 8);
-            out[i * 2 + 1] = static_cast<uint8_t>(color & 0xFF);
-        }
-
-        dma_channel_config c = dma_channel_get_default_config(dma_async_.dma_channel);
-        channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
-        channel_config_set_dreq(&c, spi_get_dreq(spi_port, true));
-        channel_config_set_read_increment(&c, true);
-        channel_config_set_write_increment(&c, false);
-
-        dma_channel_configure(dma_async_.dma_channel, &c, &spi_get_hw(spi_port)->dr, out,
-                              transfer_pixels * 2, true);
+        uint8_t* out = dma_async_.dma_buffer + static_cast<size_t>(half) * half_bytes;
+        swapRgb565ToBe(row_src, out, transfer_pixels);
 
         dma_async_.col_processed += transfer_pixels;
         if (dma_async_.col_processed >= dma_async_.w) {
             dma_async_.col_processed = 0;
             dma_async_.row++;
         }
+        return transfer_pixels;
+    };
+
+    auto kick_dma = [&](uint8_t half, uint32_t pixels) {
+        uint8_t* out = dma_async_.dma_buffer + static_cast<size_t>(half) * half_bytes;
+        dma_channel_config c = dma_channel_get_default_config(dma_async_.dma_channel);
+        channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
+        channel_config_set_dreq(&c, spi_get_dreq(spi_port, true));
+        channel_config_set_read_increment(&c, true);
+        channel_config_set_write_increment(&c, false);
+        dma_channel_configure(dma_async_.dma_channel, &c, &spi_get_hw(spi_port)->dr, out,
+                              pixels * 2, true);
+        dma_async_.dma_half = half;
+        dma_async_.dma_started = true;
+    };
+
+    // 初回: 片側準備→DMAキック→もう片側を先行準備（DMA と CPU を重ねる）
+    if (!dma_async_.dma_started) {
+        const uint32_t n0 = prepare_into(0);
+        if (n0 == 0) {
+            spiWaitIdle(spi_port);
+            dmaAsyncFinish();
+            return;
+        }
+        kick_dma(0, n0);
+        const uint32_t n1 = prepare_into(1);
+        dma_async_.prep_half = 1;
+        dma_async_.prep_pixels = n1;
+        dma_async_.prep_valid = (n1 > 0);
+        return;
+    }
+
+    // DMA 完了後: 準備済みがあればキックし、空きハーフへ次を準備
+    if (dma_async_.prep_valid && dma_async_.prep_pixels > 0) {
+        kick_dma(dma_async_.prep_half, dma_async_.prep_pixels);
+        const uint8_t next_half = static_cast<uint8_t>(1 - dma_async_.prep_half);
+        const uint32_t n = prepare_into(next_half);
+        dma_async_.prep_half = next_half;
+        dma_async_.prep_pixels = n;
+        dma_async_.prep_valid = (n > 0);
         return;
     }
 
@@ -784,6 +844,11 @@ bool ST7789_LCD::beginDrawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16
     dma_async_.dma_buffer_size = buffer_size;
     dma_async_.row = 0;
     dma_async_.col_processed = 0;
+    dma_async_.dma_half = 0;
+    dma_async_.prep_half = 0;
+    dma_async_.prep_pixels = 0;
+    dma_async_.prep_valid = false;
+    dma_async_.dma_started = false;
 
     setWindow(x, y, x + w - 1, y + h - 1);
     gpio_put(LCDConfig::PIN_DC, 1);

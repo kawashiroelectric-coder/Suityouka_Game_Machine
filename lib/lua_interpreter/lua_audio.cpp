@@ -612,7 +612,9 @@ void LuaAudio::activateSeChannelLocked(int slot, const int16_t* pcm, bool pcm_on
                                        size_t byte_size, size_t frame_count, uint16_t channels,
                                        uint32_t sample_rate) {
     SeChannel& ch = se_channels_[slot];
+    // 先に無効化してから差し替え。Core1 が古い position を書き戻さないよう serial を先に進める
     ch.active = false;
+    ch.load_serial = ++se_load_counter_;
     __dmb();
     if (ch.pcm_on_heap && ch.pcm) {
         HeapBudget::release(const_cast<int16_t*>(ch.pcm), ch.byte_size);
@@ -624,7 +626,6 @@ void LuaAudio::activateSeChannelLocked(int slot, const int16_t* pcm, bool pcm_on
     ch.channels = channels;
     ch.source_rate = sample_rate;
     ch.position = 0.0;
-    ch.load_serial = ++se_load_counter_;
     __dmb();
     ch.active = true;
 }
@@ -750,6 +751,43 @@ int LuaAudio::allocateSeSlotLocked() {
     return oldest;
 }
 
+/** 再生中のうち最も古い SE スロットを返す */
+int LuaAudio::findOldestActiveSeSlotLocked() const {
+    int oldest = -1;
+    uint32_t min_serial = 0;
+    for (size_t i = 0; i < kSeChannels; i++) {
+        if (!se_channels_[i].active) {
+            continue;
+        }
+        if (oldest < 0 || se_channels_[i].load_serial < min_serial) {
+            min_serial = se_channels_[i].load_serial;
+            oldest = static_cast<int>(i);
+        }
+    }
+    return oldest;
+}
+
+/** 新規 SE の RAM 確保前に、必要なら最古の SE を捨ててヒープを空ける */
+void LuaAudio::evictOldestSeForHeap(size_t need_bytes) {
+    if (need_bytes == 0) {
+        return;
+    }
+    // 最悪でもチャンネル数回だけ解放（無限ループ防止）
+    for (size_t n = 0; n < kSeChannels; n++) {
+        if (HeapBudget::available() >= need_bytes) {
+            return;
+        }
+        uint32_t irq = save_and_disable_interrupts();
+        const int oldest = findOldestActiveSeSlotLocked();
+        if (oldest < 0) {
+            restore_interrupts(irq);
+            return;
+        }
+        freeSeChannelLocked(oldest);
+        restore_interrupts(irq);
+    }
+}
+
 /** SD 上の WAV を RAM に読み込み、SE チャンネルで加算再生する */
 bool LuaAudio::playSe(const char* path, char* errbuf, size_t errbuf_len) {
     if (errbuf && errbuf_len > 0) {
@@ -787,11 +825,18 @@ bool LuaAudio::playSe(const char* path, char* errbuf, size_t errbuf_len) {
             return false;
         }
 
+        // 8ch 満杯でヒープが足りないときは最古 SE を止めてから確保する
+        evictOldestSeForHeap(data_size);
+
         void* alloc_ptr = nullptr;
         if (!HeapBudget::tryAlloc(data_size, &alloc_ptr)) {
-            f_close(&file);
-            setError(errbuf, errbuf_len, "heap budget exceeded");
-            return false;
+            // 念のためもう一段: 最古を1つ捨てて再試行
+            evictOldestSeForHeap(data_size);
+            if (!HeapBudget::tryAlloc(data_size, &alloc_ptr)) {
+                f_close(&file);
+                setError(errbuf, errbuf_len, "heap budget exceeded");
+                return false;
+            }
         }
         new_pcm = static_cast<int16_t*>(alloc_ptr);
         new_pcm_bytes = data_size;
@@ -836,6 +881,21 @@ bool LuaAudio::playSeFromEmbedded(const int16_t* pcm, size_t frame_count, uint16
 
     const size_t byte_size = frame_count * static_cast<size_t>(channels) * sizeof(int16_t);
     uint32_t irq = save_and_disable_interrupts();
+
+    // 同一埋め込み PCM が再生中ならスロットを再利用して頭から再トリガーする
+    // （長いカーソル SE を高速連打すると 8ch が埋まり、上書き時の dual-core 競合で無音化するため）
+    for (size_t i = 0; i < kSeChannels; i++) {
+        SeChannel& ch = se_channels_[i];
+        if (ch.active && ch.pcm == pcm) {
+            ch.load_serial = ++se_load_counter_;
+            __dmb();
+            ch.position = 0.0;
+            restore_interrupts(irq);
+            ensureOutputPlaying();
+            return true;
+        }
+    }
+
     const int slot = allocateSeSlotLocked();
     activateSeChannelLocked(slot, pcm, false, byte_size, frame_count, channels, sample_rate);
     restore_interrupts(irq);
@@ -918,13 +978,20 @@ bool LuaAudio::consumeStreamSlot(int16_t* left, int16_t* right, size_t frames) {
 void LuaAudio::mixSeChannels(int16_t* left, int16_t* right, size_t samples) {
     for (size_t c = 0; c < kSeChannels; c++) {
         SeChannel& ch = se_channels_[c];
+        // Core0 の再トリガー／差し替えと並行し得るので世代番号で書き戻しを保護する
+        const uint32_t serial = ch.load_serial;
+        __dmb();
         if (!ch.active || !ch.pcm) {
             continue;
         }
 
+        const int16_t* pcm = ch.pcm;
+        const size_t frame_count = ch.frame_count;
+        const uint16_t channels = ch.channels;
+        const uint32_t source_rate = ch.source_rate;
         const double rate_step =
-            (ch.source_rate > 0 && sample_rate_ > 0)
-                ? static_cast<double>(ch.source_rate) / static_cast<double>(sample_rate_)
+            (source_rate > 0 && sample_rate_ > 0)
+                ? static_cast<double>(source_rate) / static_cast<double>(sample_rate_)
                 : 1.0;
 
         double pos = ch.position;
@@ -932,21 +999,21 @@ void LuaAudio::mixSeChannels(int16_t* left, int16_t* right, size_t samples) {
 
         for (size_t i = 0; i < samples; i++) {
             const size_t idx = static_cast<size_t>(pos);
-            if (idx >= ch.frame_count) {
+            if (idx >= frame_count) {
                 still_active = false;
                 break;
             }
 
             const double frac = pos - static_cast<double>(idx);
-            const size_t idx1 = (idx + 1 < ch.frame_count) ? idx + 1 : idx;
+            const size_t idx1 = (idx + 1 < frame_count) ? idx + 1 : idx;
 
             int32_t sl;
             int32_t sr;
-            if (ch.channels == 1) {
-                sl = sr = lerpSample16(ch.pcm[idx], ch.pcm[idx1], frac);
+            if (channels == 1) {
+                sl = sr = lerpSample16(pcm[idx], pcm[idx1], frac);
             } else {
-                sl = lerpSample16(ch.pcm[idx * 2], ch.pcm[idx1 * 2], frac);
-                sr = lerpSample16(ch.pcm[idx * 2 + 1], ch.pcm[idx1 * 2 + 1], frac);
+                sl = lerpSample16(pcm[idx * 2], pcm[idx1 * 2], frac);
+                sr = lerpSample16(pcm[idx * 2 + 1], pcm[idx1 * 2 + 1], frac);
             }
 
             left[i] = static_cast<int16_t>(clampSample(static_cast<int32_t>(left[i]) + sl));
@@ -954,8 +1021,13 @@ void LuaAudio::mixSeChannels(int16_t* left, int16_t* right, size_t samples) {
             pos += rate_step;
         }
 
+        __dmb();
+        // Core0 が途中で load_serial を進めていたら、このバッファの結果は捨てる
+        if (ch.load_serial != serial) {
+            continue;
+        }
         ch.position = pos;
-        if (!still_active || static_cast<size_t>(pos) >= ch.frame_count) {
+        if (!still_active || static_cast<size_t>(pos) >= frame_count) {
             ch.active = false;
         }
     }

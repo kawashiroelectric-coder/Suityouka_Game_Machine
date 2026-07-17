@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "draw_command_list.hpp"
 #include "lua_audio.hpp"
 #include "tile_layers.hpp"
 #include "font_renderer.hpp"
@@ -63,7 +64,7 @@ struct ImageSlot {
 /** SD 上の Lua スクリプト読み込みと machine.* API 提供 */
 class LuaInterpreter {
 public:
-    static constexpr size_t kDefaultMaxScriptBytes = 48 * 1024;
+    static constexpr size_t kDefaultMaxScriptBytes = 96 * 1024;
     static constexpr int kMaxImageSlots = 16;
     static constexpr size_t kMaxImageBytes = 200 * 1024;
 
@@ -153,7 +154,7 @@ public:
     /** 1 ビット白黒フレーム列（BWPK）: 指定フレームを読み込みバンド描画 */
     bool drawBwPackFromSd(const char* path, int frame_index, int dx, int dy, uint16_t w,
                           uint16_t h, uint16_t fg, uint16_t bg);
-    /** フレーム末・ゲーム終了時に bg_stream_ の FIL を閉じる（BW パック状態は維持） */
+    /** フレーム末: prefetch 破棄。通常 RGB ストリームの FIL は跨ぎ維持する */
     void closeBgStream();
     /** bg_stream_ を完全リセット（ゲーム終了・アセット解放時） */
     void resetBgStream();
@@ -161,8 +162,15 @@ public:
     /** VN: 背景 + 立ち絵最大 2 枚を SD バンド合成（vn_stream_compose.cpp）。
      *  machine.draw_vn_stream から呼ばれる。 */
     bool drawVnStreamCompose(lua_State* L, int table_index);
-    /** vn_stream_ の全 FIL を閉じる（フレーム末に runGameLoopFromSd が呼ぶ） */
+    /** vn_stream_ の全 FIL を閉じる（ゲーム終了時。フレーム末では呼ばない） */
     void closeVnStreamCompose(bool abandon_open_files = false);
+
+    /** command list 録画／dirty 帯スキップ用 */
+    DrawCommandList& drawCommands() { return draw_cmds_; }
+    const DrawCommandList& drawCommands() const { return draw_cmds_; }
+    /** VN 合成状態（command list が指紋を読む） */
+    VnStreamComposeState& vnStreamState() { return vn_stream_; }
+    const VnStreamComposeState& vnStreamState() const { return vn_stream_; }
 
     /** MISF サブセットフォント（美咲）を SD から読み込む */
     bool loadFont(const char* path);
@@ -231,6 +239,7 @@ private:
     } bg_stream_;
 
     VnStreamComposeState vn_stream_;
+    DrawCommandList draw_cmds_;
 
     /** bad_apple 実行時のみ true（他ゲーム API には影響なし） */
     bool bad_apple_player_ = false;
@@ -247,6 +256,9 @@ private:
 
     /** bad_apple 専用: Lua game_update を C 側で処理（true=継続, false=終了） */
     bool runBadAppleUpdate(int dt_ms);
+
+    /** bad_apple: pack を開き表示用 1bit を同期 */
+    bool ensureBadAppleBitFrameReady(int frame_index);
 
     /** 次バンド用に背景ストリームの行データを先読みする */
     void prefetchBgStreamBand(int display_band);

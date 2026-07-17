@@ -38,17 +38,18 @@ python tool/lua_preview/preview.py Test_Lua/stg/stg.lua --scale 3
 | ← → ↑ ↓ | 2 / 0 / 1 / 3 | LEFT / RIGHT / UP / DOWN |
 | Z | 4 | OP_LEFT |
 | X | 5 | OP_RIGHT |
-| Space / C / Enter | 7 | NEAR |
+| S | 6 | FAR |
+| A | 7 | NEAR |
 | Esc | — | エミュ終了 |
 
 `machine.jump_pressed()` は UP / OP_RIGHT / RIGHT / DOWN / NEAR と同じ条件です。
 
 ## 実装済み API（概要）
 
-- 描画: `clear`, `fill_rect`, `fill_rects`, `draw_line`, `draw_circle`, `fill_circle`, `text`
+- 描画: `clear`, `fill_rect`, `fill_rect_alpha`, `fill_rects`, `draw_line`, `draw_circle`, `fill_circle`, `text`
   - **`machine.text(x, y, str [, fg [, bg]])`**: `bg` 省略時は**透明背景**（実機と同じ）。矩形背景が必要なときだけ第5引数を指定
 - バンド: `band_index`, `band_count`, `band_top`, `band_bottom`, `band_height`, `rect_in_band`
-- 画像: `load_image`, `draw_image`, `draw_image_keyed`, `free_image`, `image_size`, スプライト別名
+- 画像: `load_image`, `draw_image`, `draw_image_keyed`, `draw_image_affine`, `draw_image_xform`, `free_image`, `image_size`, スプライト別名
 - タイル: `draw_tilemap`, `set_draw_mode`, レイヤー API 一式（`layers` モード）
 - ストリーム: `draw_bg_stream`, `draw_vn_stream`, `draw_bw_stream`, `draw_bw_pack`
 - フォント: `load_font`（MISF v1 `.bin`）, `font_height`, `font_advance`, `set_font_scale`
@@ -68,6 +69,10 @@ python tool/lua_preview/preview.py Test_Lua/stg/stg.lua --scale 3
 - Lua 実行は **lupa (Lua 5.5)**。Lua 5.4 の `//` 除算は古い環境向けに起動時変換も実施します。
 - 実機との描画差異や音声未再現はあります。最終確認は実機推奨です。
 - `machine.present` / `set_present_mode` はノーオペです。
+- 将棋 AI など **1 フレームが重い処理**でも、プレビューは Lua instruction hook で
+  ウィンドウイベントを処理し、「応答なし」で落ちにくくしています。
+  重い最中でも **Esc / ウィンドウ閉じる**で中断できます。
+  強制打ち切りしたい場合: `--watchdog-ms 3000` など。
 
 ## ファイル構成
 

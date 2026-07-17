@@ -7,8 +7,6 @@ import struct
 from array import array
 from typing import Iterable
 
-from tool.rgb565_codec import rgb565_to_rgb888
-
 SCREEN_WIDTH = 320
 SCREEN_HEIGHT = 240
 BAND_HEIGHT = 20
@@ -118,17 +116,20 @@ def rgb888_to_rgb565(r: int, g: int, b: int) -> int:
 
 
 class Framebuffer:
-    """論文240 RGB565。バンド単位のクリップ描画をサポート。"""
+    """320x240 RGB565。バンド単位のクリップ描画をサポート。"""
 
     def __init__(self) -> None:
         self.width = SCREEN_WIDTH
         self.height = SCREEN_HEIGHT
         self.buffer_height = BAND_HEIGHT
-        self.pixels = array("H", [0] * (self.width * self.height))
+        n = self.width * self.height
+        # 互換用（プレビュー表示は _rgb888 のみ使う）
+        self.pixels: list[int] = [0] * n
+        self._rgb888 = bytearray(n * 3)
         self.band_index = 0
         self.band_y0 = 0
         self.band_rows = self.buffer_height
-        self._band_buf = array("H", [0] * (self.width * self.buffer_height))
+        self._band_buf: list[int] = [0] * (self.width * self.buffer_height)
 
     def band_count(self) -> int:
         return (self.height + self.buffer_height - 1) // self.buffer_height
@@ -140,14 +141,25 @@ class Framebuffer:
         self.band_rows = min(self.buffer_height, max(0, remaining))
 
     def end_band(self) -> None:
+        """バンドを表示用 RGB888 へ転送。array / C バッファは使わない。"""
         if self.band_rows <= 0:
             return
-        dst = self.band_y0 * self.width
-        src = 0
+        w = self.width
+        band = self._band_buf
+        rgb = self._rgb888
+        pix = self.pixels
         for row in range(self.band_rows):
-            self.pixels[dst : dst + self.width] = self._band_buf[src : src + self.width]
-            dst += self.width
-            src += self.width
+            y = self.band_y0 + row
+            band_off = row * w
+            pix_off = y * w
+            rgb_off = pix_off * 3
+            for x in range(w):
+                v = band[band_off + x] & 0xFFFF
+                pix[pix_off + x] = v
+                oi = rgb_off + x * 3
+                rgb[oi] = ((v >> 11) & 0x1F) << 3
+                rgb[oi + 1] = ((v >> 5) & 0x3F) << 2
+                rgb[oi + 2] = (v & 0x1F) << 3
 
     def band_top(self) -> int:
         return self.band_y0
@@ -162,7 +174,11 @@ class Framebuffer:
         if self.band_rows <= 0:
             return
         n = self.width * self.band_rows
-        self._band_buf[:n] = array("H", [color & 0xFFFF] * n)
+        c = int(color) & 0xFFFF
+        # 毎回新規 array を作らず、既存バッファへ書き込む（断片化・破損リスク低減）
+        buf = self._band_buf
+        for i in range(n):
+            buf[i] = c
 
     def _clip_rect(self, x: int, y: int, w: int, h: int) -> tuple[int, int, int, int] | None:
         if w <= 0 or h <= 0:
@@ -180,10 +196,48 @@ class Framebuffer:
         if not clipped:
             return
         x0, y0, x1, y1 = clipped
-        color &= 0xFFFF
+        color = int(color) & 0xFFFF
         for row in range(y0, y1):
             off = (row - self.band_y0) * self.width
-            self._band_buf[off + x0 : off + x1] = array("H", [color] * (x1 - x0))
+            for x in range(x0, x1):
+                self._band_buf[off + x] = color
+
+    @staticmethod
+    def _blend_rgb565(dst: int, src: int, alpha: int) -> int:
+        if alpha <= 0:
+            return dst & 0xFFFF
+        if alpha >= 255:
+            return src & 0xFFFF
+        inv = 255 - alpha
+        dr = (dst >> 11) & 0x1F
+        dg = (dst >> 5) & 0x3F
+        db = dst & 0x1F
+        sr = (src >> 11) & 0x1F
+        sg = (src >> 5) & 0x3F
+        sb = src & 0x1F
+        r = (dr * inv + sr * alpha) // 255
+        g = (dg * inv + sg * alpha) // 255
+        b = (db * inv + sb * alpha) // 255
+        return (r << 11) | (g << 5) | b
+
+    def fill_rect_alpha(self, x: int, y: int, w: int, h: int, color: int, alpha: int) -> None:
+        """バンドバッファ上の既存色に RGB565 を alpha 合成する。alpha: 0..255。"""
+        a = int(alpha)
+        if a <= 0:
+            return
+        if a >= 255:
+            self.fill_rect(x, y, w, h, color)
+            return
+        clipped = self._clip_rect(x, y, w, h)
+        if not clipped:
+            return
+        x0, y0, x1, y1 = clipped
+        src = int(color) & 0xFFFF
+        for row in range(y0, y1):
+            off = (row - self.band_y0) * self.width
+            for col in range(x0, x1):
+                idx = off + col
+                self._band_buf[idx] = self._blend_rgb565(self._band_buf[idx], src, a)
 
     def draw_line(self, x0: int, y0: int, x1: int, y1: int, color: int) -> None:
         color &= 0xFFFF
@@ -255,6 +309,9 @@ class Framebuffer:
             sw = src_w - sx
         if sh is None:
             sh = src_h - sy
+        src_len = len(src)
+        band_limit = self.band_rows * self.width
+        key = None if key_color is None else (int(key_color) & 0xFFFF)
         for row in range(sh):
             screen_y = dy + row
             if screen_y < self.band_top() or screen_y >= self.band_bottom():
@@ -263,6 +320,7 @@ class Framebuffer:
             if src_y < 0 or src_y >= src_h:
                 continue
             dst_off = (screen_y - self.band_y0) * self.width
+            base = src_y * src_w
             for col in range(sw):
                 screen_x = dx + col
                 if screen_x < 0 or screen_x >= self.width:
@@ -270,10 +328,153 @@ class Framebuffer:
                 src_x = sx + col
                 if src_x < 0 or src_x >= src_w:
                     continue
-                pix = src[src_y * src_w + src_x] & 0xFFFF
-                if key_color is not None and pix == (key_color & 0xFFFF):
+                src_idx = base + src_x
+                if src_idx < 0 or src_idx >= src_len:
                     continue
-                self._band_buf[dst_off + screen_x] = pix
+                try:
+                    pix = int(src[src_idx]) & 0xFFFF
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if key is not None and pix == key:
+                    continue
+                idx = dst_off + screen_x
+                if 0 <= idx < band_limit:
+                    self._band_buf[idx] = pix
+
+    def blit_rgb565_affine(
+        self,
+        src: array | list[int] | tuple[int, ...],
+        src_w: int,
+        src_h: int,
+        a: float,
+        b: float,
+        c: float,
+        d: float,
+        e: float,
+        f: float,
+        sx: int = 0,
+        sy: int = 0,
+        sw: int | None = None,
+        sh: int | None = None,
+        key_color: int | None = None,
+    ) -> None:
+        """プレビュー用アフィン。array の C バッファは触らず list[int] だけ読む。
+
+        対応:
+          - 正の整数倍スケール（b=d=0, a=e>=1）… 背景 2x など
+          - 180° 回転（a=e=-1, b=d=0）… 後手駒など
+        それ以外は (c,f) を左上とした等倍 blit にフォールバック。
+        """
+        if sw is None:
+            sw = src_w - sx
+        if sh is None:
+            sh = src_h - sy
+        if sx < 0:
+            sw += sx
+            sx = 0
+        if sy < 0:
+            sh += sy
+            sy = 0
+        if sx + sw > src_w:
+            sw = src_w - sx
+        if sy + sh > src_h:
+            sh = src_h - sy
+        if sw <= 0 or sh <= 0:
+            return
+
+        need = src_w * src_h
+        try:
+            if isinstance(src, (list, tuple)):
+                if len(src) < need:
+                    return
+                pixels = src
+            elif isinstance(src, array) and src.typecode == "H":
+                # tobytes→手動展開で array.__getitem__ を避ける
+                raw = src.tobytes()
+                if len(raw) < need * 2:
+                    return
+                le = struct.pack("@H", 1) == struct.pack("<H", 1)
+                pixels = []
+                for i in range(0, need * 2, 2):
+                    if le:
+                        pixels.append(raw[i] | (raw[i + 1] << 8))
+                    else:
+                        pixels.append(raw[i + 1] | (raw[i] << 8))
+            else:
+                pixels = [int(x) & 0xFFFF for x in src]
+                if len(pixels) < need:
+                    return
+        except Exception:
+            return
+
+        key = None if key_color is None else (int(key_color) & 0xFFFF)
+        band_limit = self.band_rows * self.width
+        dst = self._band_buf
+
+        def put(screen_x: int, screen_y: int, pix: int) -> None:
+            if screen_x < 0 or screen_x >= self.width:
+                return
+            if screen_y < self.band_top() or screen_y >= self.band_bottom():
+                return
+            idx = (screen_y - self.band_y0) * self.width + screen_x
+            if 0 <= idx < band_limit:
+                dst[idx] = pix
+
+        # --- 正の整数倍スケール ---
+        if (
+            abs(b) < 1e-8
+            and abs(d) < 1e-8
+            and abs(a - e) < 1e-8
+            and abs(a - round(a)) < 1e-8
+            and round(a) >= 1
+        ):
+            scale = int(round(a))
+            ox = int(round(c))
+            oy = int(round(f))
+            for row in range(sh):
+                src_y = sy + row
+                base = src_y * src_w
+                for col in range(sw):
+                    pix = pixels[base + sx + col] & 0xFFFF
+                    if key is not None and pix == key:
+                        continue
+                    bx = ox + col * scale
+                    by = oy + row * scale
+                    for yy in range(scale):
+                        for xx in range(scale):
+                            put(bx + xx, by + yy, pix)
+            return
+
+        # --- 180° 回転（後手駒）: x' = c - u, y' = f - v ---
+        if (
+            abs(b) < 1e-8
+            and abs(d) < 1e-8
+            and abs(a + 1) < 1e-8
+            and abs(e + 1) < 1e-8
+        ):
+            ox = int(round(c))
+            oy = int(round(f))
+            for row in range(sh):
+                src_y = sy + row
+                base = src_y * src_w
+                for col in range(sw):
+                    pix = pixels[base + sx + col] & 0xFFFF
+                    if key is not None and pix == key:
+                        continue
+                    put(ox - (sx + col), oy - (sy + row), pix)
+            return
+
+        # --- フォールバック: 等倍・左上 (c,f) ---
+        ox = int(round(c))
+        oy = int(round(f))
+        for row in range(sh):
+            src_y = sy + row
+            base = src_y * src_w
+            for col in range(sw):
+                pix = pixels[base + sx + col] & 0xFFFF
+                if key is not None and pix == key:
+                    continue
+                put(ox + col, oy + row, pix)
 
     def draw_tile(
         self,
@@ -323,15 +524,14 @@ class Framebuffer:
                     self._band_buf[dst_off + px] = bg
 
     def to_rgb888_bytes(self) -> bytes:
-        out = bytearray(self.width * self.height * 3)
-        idx = 0
-        for pix in self.pixels:
-            r, g, b = rgb565_to_rgb888(pix)
-            out[idx] = r
-            out[idx + 1] = g
-            out[idx + 2] = b
-            idx += 3
-        return bytes(out)
+        """表示用 RGB888 を返す。pixels は読まない（end_band で同期済み）。"""
+        expected = self.width * self.height * 3
+        rgb = self._rgb888
+        if not isinstance(rgb, (bytearray, bytes)) or len(rgb) != expected:
+            self._rgb888 = bytearray(expected)
+            return bytes(expected)
+        # bytearray のコピーを返す（呼び出し側が frombytes しても元バッファと独立）
+        return bytes(rgb)
 
     @staticmethod
     def load_bin_pixels(path: str, width: int, height: int) -> array:

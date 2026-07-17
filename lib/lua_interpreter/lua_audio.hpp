@@ -88,7 +88,8 @@ private:
         uint32_t source_rate;
         volatile double position;
         volatile bool active;
-        uint32_t load_serial;
+        /** Core0 再割当／再トリガー時に進め、Core1 の古い position 書き戻しを無効化する */
+        volatile uint32_t load_serial;
     };
 
     /** I2S 1 バッファ分: BGM + SE + トーンをミックスして出力する */
@@ -111,6 +112,10 @@ private:
     bool openBgmForStream(const char* path, char* errbuf, size_t errbuf_len);
     /** 空きまたは最古の SE スロット index を返す */
     int allocateSeSlotLocked();
+    /** 再生中のうち load_serial が最小のスロットを返す。無ければ -1 */
+    int findOldestActiveSeSlotLocked() const;
+    /** 新規 SE 用に need_bytes 分のヒープが空くまで最古 SE を停止・解放する */
+    void evictOldestSeForHeap(size_t need_bytes);
     /** SE チャンネルに PCM を割り当てて再生開始する */
     void activateSeChannelLocked(int slot, const int16_t* pcm, bool pcm_on_heap, size_t byte_size,
                                  size_t frame_count, uint16_t channels, uint32_t sample_rate);

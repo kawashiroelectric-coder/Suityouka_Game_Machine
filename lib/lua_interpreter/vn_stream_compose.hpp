@@ -2,9 +2,9 @@
 // ファイル: vn_stream_compose.hpp
 // VN 用 SD ストリーム合成（背景 + 立ち絵最大 2 枚）
 //
-// LuaInterpreter::vn_stream_ に FIL を保持し、各 game_draw（バンド）で
+// LuaInterpreter::vn_stream_ に FIL を保持し、各バンドで
 // 背景 → 立ち絵 0 → 立ち絵 1 の順に GameDisplay へ転送する。
-// フレーム末に vnStreamComposeClose で FIL をすべて閉じる。
+// FIL はフレーム跨ぎで開きっぱなし（ゲーム終了時に close）。
 // ============================================
 
 #ifndef VN_STREAM_COMPOSE_HPP
@@ -47,6 +47,13 @@ struct VnStreamComposeState {
 /** 現在バンド分を合成描画。Lua テーブルを毎バンド parse し FIL は再利用 */
 bool vnStreamComposeDraw(LuaInterpreter* interp, lua_State* L, int table_index);
 
+/** 既に sync 済みの vn_stream_ を現在バンドへ描画（command list 再生用） */
+bool vnStreamComposeReplayBand(LuaInterpreter* interp);
+
+/** レイヤーだけ同期し SD 読み描画はしない（command list 録画用） */
+bool vnStreamComposeSyncOnly(LuaInterpreter* interp, lua_State* L, int table_index);
+
+// フレーム末に bg_stream_ の FIL を閉じる。
 /** オープン中の合成用 SD ファイルをすべて閉じ、状態をリセット */
 void vnStreamComposeClose(LuaInterpreter* interp, bool abandon_open_files = false);
 

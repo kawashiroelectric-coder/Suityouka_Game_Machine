@@ -63,6 +63,11 @@ int luaHostLcdText(lua_State* L) {
     const bool use_bg = (lua_gettop(L) >= 5);
     const uint16_t bg = use_bg ? luaApiParseColor(L, 5) : 0;
 
+    if (interp->drawCommands().isRecording()) {
+        interp->drawCommands().recText(static_cast<int>(x), static_cast<int>(y), text, fg, bg,
+                                       use_bg);
+        return 0;
+    }
     if (hooks.display) {
         hooks.display->drawTextBg(static_cast<int>(x), static_cast<int>(y), text, fg, bg, use_bg);
         return 0;
@@ -343,6 +348,8 @@ void luaRegisterHostApi(lua_State* L) {
     lua_setfield(L, -2, "clear");
     lua_pushcfunction(L, luaHostFillRect);
     lua_setfield(L, -2, "fill_rect");
+    lua_pushcfunction(L, luaHostFillRectAlpha);
+    lua_setfield(L, -2, "fill_rect_alpha");
     lua_pushcfunction(L, luaHostFillRects);
     lua_setfield(L, -2, "fill_rects");
     lua_pushcfunction(L, luaHostDrawLine);
@@ -381,6 +388,10 @@ void luaRegisterHostApi(lua_State* L) {
     lua_setfield(L, -2, "draw_image");
     lua_pushcfunction(L, luaHostDrawImageKeyed);
     lua_setfield(L, -2, "draw_image_keyed");
+    lua_pushcfunction(L, luaHostDrawImageAffine);
+    lua_setfield(L, -2, "draw_image_affine");
+    lua_pushcfunction(L, luaHostDrawImageXform);
+    lua_setfield(L, -2, "draw_image_xform");
     lua_pushcfunction(L, luaHostDrawBgStream);
     lua_setfield(L, -2, "draw_bg_stream");
     lua_pushcfunction(L, luaHostDrawBwStream);
@@ -399,6 +410,10 @@ void luaRegisterHostApi(lua_State* L) {
     lua_setfield(L, -2, "draw_sprite");
     lua_pushcfunction(L, luaHostDrawSpriteKeyed);
     lua_setfield(L, -2, "draw_sprite_keyed");
+    lua_pushcfunction(L, luaHostDrawImageAffine);
+    lua_setfield(L, -2, "draw_sprite_affine");
+    lua_pushcfunction(L, luaHostDrawImageXform);
+    lua_setfield(L, -2, "draw_sprite_xform");
     lua_pushcfunction(L, luaHostFreeSprite);
     lua_setfield(L, -2, "free_sprite");
     lua_pushcfunction(L, luaHostDrawTilemap);

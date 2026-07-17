@@ -248,6 +248,23 @@ void GameDisplay::waitForTransferComplete() {
     inflight_buffer_index_ = -1;
 }
 
+/** SD 先読みなどと LCD DMA を重ねるためのポンプ */
+void GameDisplay::pumpDma() {
+    if (!lcd_ || !transfer_active_) {
+        return;
+    }
+    if (!lcd_->isDrawRawImageDMABusy()) {
+        transfer_active_ = false;
+        inflight_buffer_index_ = -1;
+        return;
+    }
+    lcd_->pumpDrawRawImageDMA();
+    if (!lcd_->isDrawRawImageDMABusy()) {
+        transfer_active_ = false;
+        inflight_buffer_index_ = -1;
+    }
+}
+
 /** 外部 RGB565 バッファから全画面へ 1 回 DMA（bad_apple 専用・memcpy なし） */
 bool GameDisplay::submitFullFrameRgb565(const uint16_t* pixels, uint16_t w, uint16_t h) {
     if (!lcd_ || !pixels || w != width_ || h != height_) {
@@ -333,6 +350,74 @@ void GameDisplay::fillRect(int x, int y, int w, int h, uint16_t color) {
     }
 }
 
+namespace {
+
+/** RGB565 2 色を alpha 合成する（alpha=前景の重み 0〜255） */
+uint16_t blendRgb565(uint16_t dst, uint16_t src, uint8_t alpha) {
+    if (alpha == 0) {
+        return dst;
+    }
+    if (alpha >= 255) {
+        return src;
+    }
+    const uint32_t inv = 255u - static_cast<uint32_t>(alpha);
+    const uint32_t a = static_cast<uint32_t>(alpha);
+    const uint32_t dr = (dst >> 11) & 0x1Fu;
+    const uint32_t dg = (dst >> 5) & 0x3Fu;
+    const uint32_t db = dst & 0x1Fu;
+    const uint32_t sr = (src >> 11) & 0x1Fu;
+    const uint32_t sg = (src >> 5) & 0x3Fu;
+    const uint32_t sb = src & 0x1Fu;
+    const uint32_t r = (dr * inv + sr * a) / 255u;
+    const uint32_t g = (dg * inv + sg * a) / 255u;
+    const uint32_t b = (db * inv + sb * a) / 255u;
+    return static_cast<uint16_t>((r << 11) | (g << 5) | b);
+}
+
+}  // namespace
+
+/** クリップ付き半透明矩形。バンドバッファ上の既存色に合成する */
+void GameDisplay::fillRectAlpha(int x, int y, int w, int h, uint16_t color, uint8_t alpha) {
+    if (!work_buffer_ || w <= 0 || h <= 0) {
+        return;
+    }
+    if (alpha == 0) {
+        return;
+    }
+    if (alpha >= 255) {
+        fillRect(x, y, w, h, color);
+        return;
+    }
+
+    int x0 = x;
+    int x1 = x + w;
+    int y0 = y;
+    int y1 = y + h;
+
+    if (x0 < 0) {
+        x0 = 0;
+    }
+    if (x1 > (int)width_) {
+        x1 = (int)width_;
+    }
+    if (y0 < bandTop()) {
+        y0 = bandTop();
+    }
+    if (y1 > bandBottom()) {
+        y1 = bandBottom();
+    }
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+
+    for (int row = y0; row < y1; row++) {
+        uint16_t* line = work_buffer_ + (uint32_t)(row - band_y0_) * width_;
+        for (int col = x0; col < x1; col++) {
+            line[col] = blendRgb565(line[col], color, alpha);
+        }
+    }
+}
+
 /** RGB565 画像全体をクリップ付きで転写する。スプライト描画時に呼ぶ */
 void GameDisplay::drawImage(int dx, int dy, int img_w, int img_h, const uint16_t* pixels) {
     if (!work_buffer_ || !pixels || img_w <= 0 || img_h <= 0) return;
@@ -409,6 +494,156 @@ void GameDisplay::drawImageSubKeyed(int dx, int dy, int img_w, int img_h, const 
             if (c != key_color) {
                 dst[col] = c;
             }
+        }
+    }
+}
+
+/** 整数倍ニアレスト拡大で画像を描画する（回転なし）。2 倍背景など向け */
+void GameDisplay::drawImageScaled(int dx, int dy, int img_w, int img_h, const uint16_t* pixels,
+                                  int scale) {
+    if (!work_buffer_ || !pixels || img_w <= 0 || img_h <= 0 || scale < 1) {
+        return;
+    }
+    if (scale == 1) {
+        drawImage(dx, dy, img_w, img_h, pixels);
+        return;
+    }
+
+    const int dest_w = img_w * scale;
+    const int dest_h = img_h * scale;
+    int x0 = dx;
+    int y0 = dy;
+    int x1 = dx + dest_w;
+    int y1 = dy + dest_h;
+    if (x0 < 0) {
+        x0 = 0;
+    }
+    if (y0 < bandTop()) {
+        y0 = bandTop();
+    }
+    if (x1 > static_cast<int>(width_)) {
+        x1 = static_cast<int>(width_);
+    }
+    if (y1 > bandBottom()) {
+        y1 = bandBottom();
+    }
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+
+    for (int sy_scr = y0; sy_scr < y1; sy_scr++) {
+        const int src_y = (sy_scr - dy) / scale;
+        if (src_y < 0 || src_y >= img_h) {
+            continue;
+        }
+        const uint16_t* src_row = pixels + static_cast<uint32_t>(src_y) * static_cast<uint32_t>(img_w);
+        uint16_t* dst = work_buffer_ + static_cast<uint32_t>(sy_scr - band_y0_) * width_;
+        for (int sx_scr = x0; sx_scr < x1; sx_scr++) {
+            const int src_x = (sx_scr - dx) / scale;
+            if (src_x >= 0 && src_x < img_w) {
+                dst[sx_scr] = src_row[src_x];
+            }
+        }
+    }
+}
+
+/** アフィン変換付きで画像を描画する（ニアレスト）。スプライトの拡大・回転・反転時に使う */
+void GameDisplay::drawImageAffine(int img_w, int img_h, const uint16_t* pixels, int sx, int sy,
+                                  int sw, int sh, float a, float b, float c, float d, float e,
+                                  float f, uint16_t key_color, bool key_enabled) {
+    if (!work_buffer_ || !pixels || img_w <= 0 || img_h <= 0) {
+        return;
+    }
+    if (sx < 0) {
+        sw += sx;
+        sx = 0;
+    }
+    if (sy < 0) {
+        sh += sy;
+        sy = 0;
+    }
+    if (sx + sw > img_w) {
+        sw = img_w - sx;
+    }
+    if (sy + sh > img_h) {
+        sh = img_h - sy;
+    }
+    if (sw <= 0 || sh <= 0) {
+        return;
+    }
+
+    const float det = a * e - b * d;
+    if (det > -1e-8f && det < 1e-8f) {
+        return;
+    }
+    const float inv_det = 1.0f / det;
+    const float ia = e * inv_det;
+    const float ib = -b * inv_det;
+    const float id = -d * inv_det;
+    const float ie = a * inv_det;
+
+    // ソース矩形 4 隅の画面座標から AABB を求める
+    const float u0 = static_cast<float>(sx);
+    const float v0 = static_cast<float>(sy);
+    const float u1 = static_cast<float>(sx + sw);
+    const float v1 = static_cast<float>(sy + sh);
+    const float us[4] = {u0, u1, u0, u1};
+    const float vs[4] = {v0, v0, v1, v1};
+    float min_x = 1e30f, min_y = 1e30f, max_x = -1e30f, max_y = -1e30f;
+    for (int i = 0; i < 4; i++) {
+        const float x = a * us[i] + b * vs[i] + c;
+        const float y = d * us[i] + e * vs[i] + f;
+        if (x < min_x) min_x = x;
+        if (y < min_y) min_y = y;
+        if (x > max_x) max_x = x;
+        if (y > max_y) max_y = y;
+    }
+
+    int x0 = static_cast<int>(floorf(min_x));
+    int y0 = static_cast<int>(floorf(min_y));
+    int x1 = static_cast<int>(ceilf(max_x));
+    int y1 = static_cast<int>(ceilf(max_y));
+    if (x0 < 0) x0 = 0;
+    if (y0 < bandTop()) y0 = bandTop();
+    if (x1 > static_cast<int>(width_)) x1 = static_cast<int>(width_);
+    if (y1 > bandBottom()) y1 = bandBottom();
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+
+    // 暴走防止（過大スケールでフレーム固まりを避ける）
+    const int max_span = static_cast<int>(width_) * 2;
+    if ((x1 - x0) > max_span || (y1 - y0) > max_span) {
+        return;
+    }
+
+    const float u_min = u0;
+    const float v_min = v0;
+    const float u_max = u1 - 1e-4f;
+    const float v_max = v1 - 1e-4f;
+
+    for (int sy_scr = y0; sy_scr < y1; sy_scr++) {
+        uint16_t* dst_line = work_buffer_ + static_cast<uint32_t>(sy_scr - band_y0_) * width_;
+        const float yf = static_cast<float>(sy_scr) + 0.5f;
+        for (int sx_scr = x0; sx_scr < x1; sx_scr++) {
+            const float xf = static_cast<float>(sx_scr) + 0.5f;
+            const float dx = xf - c;
+            const float dy = yf - f;
+            float u = ia * dx + ib * dy;
+            float v = id * dx + ie * dy;
+            if (u < u_min || v < v_min || u > u_max || v > v_max) {
+                continue;
+            }
+            const int iu = static_cast<int>(u);
+            const int iv = static_cast<int>(v);
+            if (iu < sx || iv < sy || iu >= sx + sw || iv >= sy + sh) {
+                continue;
+            }
+            const uint16_t color = pixels[iv * img_w + iu];
+            if (key_enabled && color == key_color) {
+                continue;
+            }
+            dst_line[sx_scr] = color;
         }
     }
 }

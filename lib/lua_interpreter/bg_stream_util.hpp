@@ -34,6 +34,25 @@ void expandBwBufferChunk(const uint8_t* frame, uint16_t w, int src_y0, int rows,
 void expandBwBufferFull(const uint8_t* frame, uint16_t w, uint16_t h, uint16_t* dst, uint16_t fg,
                         uint16_t bg);
 
+/** BWPK: 表示用 1bit フレームを用意（bad_apple 帯展開パス）。二重バッファで先読み可 */
+bool bwPackBitEnsure(uint16_t w, uint16_t h);
+void bwPackBitRelease(bool use_free);
+bool bwPackBitHasDisplayFrame(int frame_index_1based);
+const uint8_t* bwPackBitDisplayPixels();
+bool bwPackBitSyncDisplayFrame(FIL* file, int frame_index_1based, uint32_t frame_count,
+                               uint32_t data_base, uint16_t w, uint16_t h,
+                               int* inout_bit_buffer_frame);
+/** 次フレームを裏バッファへ先読み（表示中 DMA と重ねて呼ぶ） */
+bool bwPackBitPrefetchNextFrame(FIL* file, int current_frame_1based, uint32_t frame_count,
+                                uint32_t data_base, uint16_t w, uint16_t h,
+                                int* inout_bit_buffer_frame);
+/** LCD ポンプ用コールバック（SD 読み込みの合間に呼ぶ） */
+typedef void (*BwPackPumpFn)(void* user);
+bool bwPackBitPrefetchNextFramePumped(FIL* file, int current_frame_1based, uint32_t frame_count,
+                                      uint32_t data_base, uint16_t w, uint16_t h,
+                                      int* inout_bit_buffer_frame, BwPackPumpFn pump,
+                                      void* pump_user);
+
 /** BWPK 用 RGB565 フルフレームバッファ（draw_bw_pack 専用・HeapBudget 優先の単一バッファ） */
 bool bwPackRgbBufEnsure(uint16_t w, uint16_t h);
 void bwPackRgbBufRelease(bool use_free);

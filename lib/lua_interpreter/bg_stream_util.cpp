@@ -28,7 +28,7 @@ size_t bwFrameByteSize(uint16_t w, uint16_t h) {
 
 uint8_t* bwFrameBuf() { return s_bw_frame_buf; }
 
-bool bwFrameIsValid() { return s_bw_frame_valid && s_bw_frame_buf != nullptr; }
+bool bwFrameIsValid() { return s_bw_frame_valid; }
 
 bool bwFrameBufEnsure(uint16_t w, uint16_t h) {
     const size_t need = bwFrameByteSize(w, h);
@@ -67,32 +67,36 @@ void bwFrameBufRelease(bool use_free) {
 }
 
 /** 1 packed バイト（MSB=左）を最大 8 ピクセルへ展開 */
+static uint16_t s_expand_lut[256][8];
+static uint16_t s_expand_lut_fg = 0xFFFF;
+static uint16_t s_expand_lut_bg = 0x0000;
+static bool s_expand_lut_ready = false;
+
+static void ensureExpandLut(uint16_t fg, uint16_t bg) {
+    if (s_expand_lut_ready && s_expand_lut_fg == fg && s_expand_lut_bg == bg) {
+        return;
+    }
+    for (int byte = 0; byte < 256; ++byte) {
+        for (int bit = 0; bit < 8; ++bit) {
+            s_expand_lut[byte][bit] = (byte & (0x80 >> bit)) ? fg : bg;
+        }
+    }
+    s_expand_lut_fg = fg;
+    s_expand_lut_bg = bg;
+    s_expand_lut_ready = true;
+}
+
 static void expandBwByteToPixels(uint8_t byte, uint16_t* out, int max_pixels, uint16_t fg,
                                  uint16_t bg) {
     if (max_pixels <= 0) {
         return;
     }
-    if (max_pixels >= 8 && byte == 0x00) {
-        const uint32_t pair = (static_cast<uint32_t>(bg) << 16) | static_cast<uint32_t>(bg);
-        uint32_t* out32 = reinterpret_cast<uint32_t*>(out);
-        out32[0] = pair;
-        out32[1] = pair;
-        out32[2] = pair;
-        out32[3] = pair;
+    ensureExpandLut(fg, bg);
+    if (max_pixels >= 8) {
+        std::memcpy(out, s_expand_lut[byte], 16);
         return;
     }
-    if (max_pixels >= 8 && byte == 0xFF) {
-        const uint32_t pair = (static_cast<uint32_t>(fg) << 16) | static_cast<uint32_t>(fg);
-        uint32_t* out32 = reinterpret_cast<uint32_t*>(out);
-        out32[0] = pair;
-        out32[1] = pair;
-        out32[2] = pair;
-        out32[3] = pair;
-        return;
-    }
-    for (int bit = 7; bit >= 0 && max_pixels > 0; --bit, --max_pixels) {
-        *out++ = (byte & (1 << bit)) ? fg : bg;
-    }
+    std::memcpy(out, s_expand_lut[byte], static_cast<size_t>(max_pixels) * sizeof(uint16_t));
 }
 
 static void fillRgb565Row(uint16_t* out, int w, uint16_t color) {
@@ -125,19 +129,27 @@ void expandBwBufferChunk(const uint8_t* frame, uint16_t w, int src_y0, int rows,
     if (!frame || !dst || w == 0 || rows <= 0) {
         return;
     }
+    ensureExpandLut(fg, bg);
     const int row_bytes = (static_cast<int>(w) + 7) / 8;
     for (int row = 0; row < rows; ++row) {
         const uint8_t* line =
             frame + static_cast<size_t>(src_y0 + row) * static_cast<size_t>(row_bytes);
         uint16_t* out = dst + static_cast<size_t>(row) * static_cast<size_t>(w);
+        if (bwLineAllByte(line, row_bytes, 0x00)) {
+            fillRgb565Row(out, static_cast<int>(w), bg);
+            continue;
+        }
+        if (bwLineAllByte(line, row_bytes, 0xFF)) {
+            fillRgb565Row(out, static_cast<int>(w), fg);
+            continue;
+        }
         int x = 0;
-        while (x < static_cast<int>(w)) {
-            const int byte_idx = x / 8;
-            const int rem = static_cast<int>(w) - x;
-            const int in_byte = rem >= 8 ? 8 : rem;
-            expandBwByteToPixels(line[byte_idx], out, in_byte, fg, bg);
-            x += in_byte;
-            out += in_byte;
+        while (x + 8 <= static_cast<int>(w)) {
+            std::memcpy(out + x, s_expand_lut[line[x / 8]], 16);
+            x += 8;
+        }
+        if (x < static_cast<int>(w)) {
+            expandBwByteToPixels(line[x / 8], out + x, static_cast<int>(w) - x, fg, bg);
         }
     }
 }
@@ -148,6 +160,7 @@ void expandBwBufferFull(const uint8_t* frame, uint16_t w, uint16_t h, uint16_t* 
     if (!frame || !dst || w == 0 || h == 0) {
         return;
     }
+    ensureExpandLut(fg, bg);
     const int row_bytes = (static_cast<int>(w) + 7) / 8;
     for (uint16_t y = 0; y < h; ++y) {
         const uint8_t* line = frame + static_cast<size_t>(y) * static_cast<size_t>(row_bytes);
@@ -161,14 +174,233 @@ void expandBwBufferFull(const uint8_t* frame, uint16_t w, uint16_t h, uint16_t* 
             continue;
         }
         int x = 0;
-        while (x < static_cast<int>(w)) {
-            const int byte_idx = x / 8;
-            const int rem = static_cast<int>(w) - x;
-            const int in_byte = rem >= 8 ? 8 : rem;
-            expandBwByteToPixels(line[byte_idx], out + x, in_byte, fg, bg);
-            x += in_byte;
+        while (x + 8 <= static_cast<int>(w)) {
+            std::memcpy(out + x, s_expand_lut[line[x / 8]], 16);
+            x += 8;
+        }
+        if (x < static_cast<int>(w)) {
+            expandBwByteToPixels(line[x / 8], out + x, static_cast<int>(w) - x, fg, bg);
         }
     }
+}
+
+// --- bad_apple 用: 1bit 二重バッファ（表示 + 先読み）。各面 ≈ 9.6KB ---
+static uint8_t* s_bw_bit_planes[2] = {nullptr, nullptr};
+static size_t s_bw_bit_plane_bytes = 0;
+static bool s_bw_bit_from_heap = false;
+static int s_bw_bit_display_slot = 0;
+static int s_bw_bit_display_frame = 0;
+static int s_bw_bit_prefetch_frame = 0;
+static bool s_bw_bit_prefetch_valid = false;
+static bool s_bw_bit_display_valid = false;
+
+static void bwPackBitFreePlanes() {
+    for (int i = 0; i < 2; ++i) {
+        if (s_bw_bit_planes[i]) {
+            if (s_bw_bit_from_heap) {
+                HeapBudget::release(s_bw_bit_planes[i], s_bw_bit_plane_bytes);
+            } else {
+                std::free(s_bw_bit_planes[i]);
+            }
+            s_bw_bit_planes[i] = nullptr;
+        }
+    }
+    s_bw_bit_plane_bytes = 0;
+    s_bw_bit_from_heap = false;
+    s_bw_bit_display_slot = 0;
+    s_bw_bit_display_frame = 0;
+    s_bw_bit_prefetch_frame = 0;
+    s_bw_bit_prefetch_valid = false;
+    s_bw_bit_display_valid = false;
+}
+
+bool bwPackBitEnsure(uint16_t w, uint16_t h) {
+    const size_t need = bwFrameByteSize(w, h);
+    if (need == 0) {
+        return false;
+    }
+    if (s_bw_bit_planes[0] && s_bw_bit_planes[1] && s_bw_bit_plane_bytes == need) {
+        return true;
+    }
+    bwPackBitFreePlanes();
+    void* a = nullptr;
+    void* b = nullptr;
+    bool from_heap = false;
+    if (HeapBudget::tryAlloc(need, &a) && HeapBudget::tryAlloc(need, &b)) {
+        from_heap = true;
+    } else {
+        if (a) {
+            HeapBudget::release(a, need);
+            a = nullptr;
+        }
+        a = std::malloc(need);
+        b = std::malloc(need);
+        from_heap = false;
+    }
+    if (!a || !b) {
+        if (a) {
+            if (from_heap) {
+                HeapBudget::release(a, need);
+            } else {
+                std::free(a);
+            }
+        }
+        if (b) {
+            if (from_heap) {
+                HeapBudget::release(b, need);
+            } else {
+                std::free(b);
+            }
+        }
+        printf("bwPackBit: dual plane alloc failed (%u bytes x2)\n", static_cast<unsigned>(need));
+        return false;
+    }
+    s_bw_bit_planes[0] = static_cast<uint8_t*>(a);
+    s_bw_bit_planes[1] = static_cast<uint8_t*>(b);
+    s_bw_bit_plane_bytes = need;
+    s_bw_bit_from_heap = from_heap;
+    std::memset(s_bw_bit_planes[0], 0, need);
+    std::memset(s_bw_bit_planes[1], 0, need);
+    s_bw_bit_display_slot = 0;
+    s_bw_bit_display_frame = 0;
+    s_bw_bit_prefetch_frame = 0;
+    s_bw_bit_prefetch_valid = false;
+    s_bw_bit_display_valid = false;
+    printf("bwPackBit: dual planes ready (%u KB x2)\n", static_cast<unsigned>(need / 1024));
+    return true;
+}
+
+void bwPackBitRelease(bool use_free) {
+    (void)use_free;
+    bwPackBitFreePlanes();
+}
+
+bool bwPackBitHasDisplayFrame(int frame_index_1based) {
+    return frame_index_1based > 0 && s_bw_bit_display_valid &&
+           s_bw_bit_display_frame == frame_index_1based && s_bw_bit_planes[s_bw_bit_display_slot];
+}
+
+const uint8_t* bwPackBitDisplayPixels() {
+    if (!s_bw_bit_display_valid || !s_bw_bit_planes[s_bw_bit_display_slot]) {
+        return nullptr;
+    }
+    return s_bw_bit_planes[s_bw_bit_display_slot];
+}
+
+static uint8_t* bwPackBitBackPlane() {
+    return s_bw_bit_planes[1 - s_bw_bit_display_slot];
+}
+
+static void bwPackBitSwapToPrefetch() {
+    s_bw_bit_display_slot = 1 - s_bw_bit_display_slot;
+    s_bw_bit_display_frame = s_bw_bit_prefetch_frame;
+    s_bw_bit_display_valid = true;
+    s_bw_bit_prefetch_valid = false;
+    s_bw_bit_prefetch_frame = 0;
+}
+
+bool bwPackBitSyncDisplayFrame(FIL* file, int frame_index_1based, uint32_t frame_count,
+                               uint32_t data_base, uint16_t w, uint16_t h,
+                               int* inout_bit_buffer_frame) {
+    if (!file || frame_index_1based <= 0 || !inout_bit_buffer_frame) {
+        return false;
+    }
+    if (!bwPackBitEnsure(w, h)) {
+        return false;
+    }
+    if (bwPackBitHasDisplayFrame(frame_index_1based)) {
+        return true;
+    }
+    if (s_bw_bit_prefetch_valid && s_bw_bit_prefetch_frame == frame_index_1based) {
+        bwPackBitSwapToPrefetch();
+        *inout_bit_buffer_frame = frame_index_1based;
+        return true;
+    }
+
+    uint8_t* disp = s_bw_bit_planes[s_bw_bit_display_slot];
+    // syncBwPackToFrame は単一バッファ前提の連鎖状態を使う
+    int chain = *inout_bit_buffer_frame;
+    if (s_bw_bit_display_valid && s_bw_bit_display_frame > 0) {
+        chain = s_bw_bit_display_frame;
+    }
+    // 旧単一バッファ API と分離: 表示面へ直接同期
+    if (!syncBwPackToFrame(file, static_cast<uint32_t>(frame_index_1based), frame_count, data_base,
+                           disp, w, h, &chain)) {
+        return false;
+    }
+    s_bw_bit_display_frame = frame_index_1based;
+    s_bw_bit_display_valid = true;
+    s_bw_bit_prefetch_valid = false;
+    s_bw_frame_valid = true;
+    *inout_bit_buffer_frame = frame_index_1based;
+    return true;
+}
+
+static bool bwPackBitPrefetchOntoBack(FIL* file, int current_frame_1based, uint32_t frame_count,
+                                      uint32_t data_base, uint16_t w, uint16_t h,
+                                      int* inout_bit_buffer_frame, BwPackPumpFn pump,
+                                      void* pump_user) {
+    if (!file || current_frame_1based <= 0 || frame_count == 0 || !inout_bit_buffer_frame) {
+        return false;
+    }
+    if (!bwPackBitEnsure(w, h) || !s_bw_bit_display_valid) {
+        return false;
+    }
+
+    int next_frame = current_frame_1based + 1;
+    if (static_cast<uint32_t>(next_frame) > frame_count) {
+        next_frame = 1;
+    }
+    if (s_bw_bit_prefetch_valid && s_bw_bit_prefetch_frame == next_frame) {
+        return true;
+    }
+
+    uint8_t* back = bwPackBitBackPlane();
+    const uint8_t* front = s_bw_bit_planes[s_bw_bit_display_slot];
+    std::memcpy(back, front, s_bw_bit_plane_bytes);
+    s_bw_frame_valid = true;  // loadBwFrameFromSd(差分) が参照する有効フラグ
+    if (pump) {
+        pump(pump_user);
+    }
+
+    int chain = current_frame_1based;
+    bool ok = false;
+    if (next_frame == current_frame_1based + 1 ||
+        (current_frame_1based == static_cast<int>(frame_count) && next_frame == 1)) {
+        ok = loadBwPackFrameFromSd(file, static_cast<uint32_t>(next_frame), frame_count, data_base,
+                                   back, w, h);
+        if (ok) {
+            chain = next_frame;
+        }
+    } else {
+        ok = syncBwPackToFrame(file, static_cast<uint32_t>(next_frame), frame_count, data_base, back,
+                               w, h, &chain);
+    }
+    if (pump) {
+        pump(pump_user);
+    }
+    if (!ok) {
+        return false;
+    }
+    s_bw_bit_prefetch_frame = next_frame;
+    s_bw_bit_prefetch_valid = true;
+    *inout_bit_buffer_frame = chain;
+    return true;
+}
+
+bool bwPackBitPrefetchNextFrame(FIL* file, int current_frame_1based, uint32_t frame_count,
+                                uint32_t data_base, uint16_t w, uint16_t h,
+                                int* inout_bit_buffer_frame) {
+    return bwPackBitPrefetchOntoBack(file, current_frame_1based, frame_count, data_base, w, h,
+                                     inout_bit_buffer_frame, nullptr, nullptr);
+}
+
+bool bwPackBitPrefetchNextFramePumped(FIL* file, int current_frame_1based, uint32_t frame_count,
+                                      uint32_t data_base, uint16_t w, uint16_t h,
+                                      int* inout_bit_buffer_frame, BwPackPumpFn pump,
+                                      void* pump_user) {
+    return bwPackBitPrefetchOntoBack(file, current_frame_1based, frame_count, data_base, w, h,
+                                     inout_bit_buffer_frame, pump, pump_user);
 }
 
 // --- BWPK RGB565 フルフレームバッファ（draw_bw_pack 専用・HeapBudget 優先）---
@@ -371,8 +603,10 @@ bool loadBwFrameFromSd(FIL* file, FSIZE_t file_size, uint8_t* frame, uint16_t w,
     const size_t frame_bytes = bwFrameByteSize(w, h);
     const int row_bytes = (static_cast<int>(w) + 7) / 8;
 
+    // SKIP: バッファ内容を維持（二重バッファ先読みでも frame 引数が前フレームを持つ）
     if (file_size == 0) {
-        return bwFrameIsValid();
+        s_bw_frame_valid = true;
+        return true;
     }
     if (file_size > frame_bytes) {
         return false;
@@ -406,9 +640,8 @@ bool loadBwFrameFromSd(FIL* file, FSIZE_t file_size, uint8_t* frame, uint16_t w,
     if (file_size != expected) {
         return false;
     }
-    if (!bwFrameIsValid()) {
-        return false;
-    }
+    // 差分: `frame` に前フレームが入っていることが呼び出し側の契約
+    // （旧実装の bwFrameIsValid()=s_bw_frame_buf 依存は dual bit 面で常に失敗していた）
 
     for (uint8_t i = 0; i < row_count; ++i) {
         uint8_t y = 0;
@@ -497,11 +730,13 @@ bool syncBwPackToFrame(FIL* file, uint32_t target_frame, uint32_t frame_count,
     }
 
     const int last = *inout_buffer_frame;
-    if (last == static_cast<int>(target_frame) && bwFrameIsValid()) {
+    // last>0 なら `frame` にそのフレーム内容がある（dual bit 面でも同じ契約）
+    if (last == static_cast<int>(target_frame) && last > 0) {
+        s_bw_frame_valid = true;
         return true;
     }
 
-    if (last <= 0 || !bwFrameIsValid()) {
+    if (last <= 0) {
         for (uint32_t f = 1; f <= target_frame; ++f) {
             if (!loadBwPackFrameFromSd(file, f, frame_count, data_base, frame, w, h)) {
                 return false;

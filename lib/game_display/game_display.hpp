@@ -69,6 +69,8 @@ public:
     void beginBand(int band);
     /** 現在バンドを LCD へ DMA 転送する。各バンドの game_draw 直後に呼ぶ */
     void endBand();
+    /** 進行中 DMA を 1 ステップ進める（SD 先読みと重ねるとき用） */
+    void pumpDma();
     /** 進行中 DMA の完了を待つ。1 フレーム末尾で呼ぶ */
     void waitForTransferComplete();
 
@@ -85,6 +87,11 @@ public:
     void clear(uint16_t color);
     /** クリップ付き矩形を塗りつぶす。game_draw 内の図形描画時に呼ぶ */
     void fillRect(int x, int y, int w, int h, uint16_t color);
+    /**
+     * クリップ付き半透明矩形。現在バンドの既存ピクセルに color を alpha 合成する。
+     * alpha: 0=透明 … 255=不透明（前景 color の重み）
+     */
+    void fillRectAlpha(int x, int y, int w, int h, uint16_t color, uint8_t alpha);
     /** 複数矩形をまとめて塗る。バッチ矩形描画時に呼ぶ */
     void fillRects(const FillRect* rects, size_t count);
     /** クリップ付き直線を描く。game_draw 内の線描画時に呼ぶ */
@@ -104,6 +111,19 @@ public:
     /** 透過色をスキップして部分矩形を転写する。キー付きスプライト描画時に呼ぶ */
     void drawImageSubKeyed(int dx, int dy, int img_w, int img_h, const uint16_t* pixels,
                            int sx, int sy, int sw, int sh, uint16_t key_color, bool key_enabled);
+    /**
+     * 整数倍ニアレスト拡大で画像を描画する（回転・せん断なし）。
+     * scale=1 は drawImage と同等。背景の 2 倍表示など command list 対応向け。
+     */
+    void drawImageScaled(int dx, int dy, int img_w, int img_h, const uint16_t* pixels, int scale);
+    /**
+     * アフィン変換付きで画像を描画する（ニアレストサンプリング）。
+     * ソース座標 (u,v) → 画面 (a*u + b*v + c, d*u + e*v + f)。
+     * (u,v) は画像ピクセル座標。スプライトの拡大・回転・反転時に使う。
+     */
+    void drawImageAffine(int img_w, int img_h, const uint16_t* pixels, int sx, int sy, int sw,
+                         int sh, float a, float b, float c, float d, float e, float f,
+                         uint16_t key_color, bool key_enabled);
     /** 透過色付きでタイル 1 枚を転写する。タイルレイヤー合成時に呼ぶ */
     void drawTileKeyed(int dx, int dy, int tile_w, int tile_h, int sheet_cols, const uint16_t* tileset,
                        int sheet_w, int sheet_h, int tile_index, uint16_t key_color, bool key_enabled);

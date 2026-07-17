@@ -5,6 +5,7 @@
 
 #include "lua_api_internal.hpp"
 
+#include <cmath>
 #include <cstring>
 
 #include "game_display.hpp"
@@ -18,6 +19,11 @@ extern "C" {
 
 /** Lua バインディング: machine.clear — 現在バンドを指定色でクリアする */
 int luaHostClear(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (interp && interp->drawCommands().isRecording()) {
+        interp->drawCommands().recClear(luaApiParseColor(L, 1));
+        return 0;
+    }
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
         return 0;
@@ -28,25 +34,56 @@ int luaHostClear(lua_State* L) {
 
 /** Lua バインディング: machine.fill_rect — 単一の塗りつぶし矩形を描画する */
 int luaHostFillRect(lua_State* L) {
-    GameDisplay* disp = luaApiActiveDisplay();
-    if (!disp) {
-        return 0;
-    }
     const int x = static_cast<int>(luaL_checknumber(L, 1));
     const int y = static_cast<int>(luaL_checknumber(L, 2));
     const int w = static_cast<int>(luaL_checknumber(L, 3));
     const int h = static_cast<int>(luaL_checknumber(L, 4));
     const uint16_t color = luaApiParseColor(L, 5);
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (interp && interp->drawCommands().isRecording()) {
+        interp->drawCommands().recFillRect(x, y, w, h, color);
+        return 0;
+    }
+    GameDisplay* disp = luaApiActiveDisplay();
+    if (!disp) {
+        return 0;
+    }
     disp->fillRect(x, y, w, h, color);
+    return 0;
+}
+
+/** Lua バインディング: machine.fill_rect_alpha — 半透明矩形をバンドバッファに合成する */
+int luaHostFillRectAlpha(lua_State* L) {
+    const int x = static_cast<int>(luaL_checknumber(L, 1));
+    const int y = static_cast<int>(luaL_checknumber(L, 2));
+    const int w = static_cast<int>(luaL_checknumber(L, 3));
+    const int h = static_cast<int>(luaL_checknumber(L, 4));
+    const uint16_t color = luaApiParseColor(L, 5);
+    int alpha = static_cast<int>(luaL_checknumber(L, 6));
+    if (alpha < 0) {
+        alpha = 0;
+    }
+    if (alpha > 255) {
+        alpha = 255;
+    }
+    const uint8_t a = static_cast<uint8_t>(alpha);
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (interp && interp->drawCommands().isRecording()) {
+        interp->drawCommands().recFillRectAlpha(x, y, w, h, color, a);
+        return 0;
+    }
+    GameDisplay* disp = luaApiActiveDisplay();
+    if (!disp) {
+        return 0;
+    }
+    disp->fillRectAlpha(x, y, w, h, color, a);
     return 0;
 }
 
 /** Lua バインディング: machine.fill_rects — 矩形テーブルをバッチ描画する */
 int luaHostFillRects(lua_State* L) {
     GameDisplay* disp = luaApiActiveDisplay();
-    if (!disp) {
-        return 0;
-    }
+    LuaInterpreter* interp = luaApiActiveInterpreter();
     luaL_checktype(L, 1, LUA_TTABLE);
     const int n = static_cast<int>(lua_rawlen(L, 1));
     if (n <= 0) {
@@ -55,6 +92,7 @@ int luaHostFillRects(lua_State* L) {
 
     static constexpr int kMaxBatch = 64;
     GameDisplay::FillRect rects[kMaxBatch];
+    int pack[kMaxBatch * 5];
 
     int processed = 0;
     while (processed < n) {
@@ -85,12 +123,23 @@ int luaHostFillRects(lua_State* L) {
             r.color = static_cast<uint16_t>(luaL_checkinteger(L, -1));
             lua_pop(L, 1);
 
+            if (interp && interp->drawCommands().isRecording()) {
+                pack[count * 5 + 0] = r.x;
+                pack[count * 5 + 1] = r.y;
+                pack[count * 5 + 2] = r.w;
+                pack[count * 5 + 3] = r.h;
+                pack[count * 5 + 4] = static_cast<int>(r.color);
+            }
             rects[count++] = r;
             lua_pop(L, 1);
         }
 
         if (count > 0) {
-            disp->fillRects(rects, static_cast<size_t>(count));
+            if (interp && interp->drawCommands().isRecording()) {
+                interp->drawCommands().recFillRects(pack, count);
+            } else if (disp) {
+                disp->fillRects(rects, static_cast<size_t>(count));
+            }
         }
         processed = chunk_end;
     }
@@ -99,6 +148,11 @@ int luaHostFillRects(lua_State* L) {
 
 /** Lua バインディング: machine.band_index — 現在描画中のバンド index を返す */
 int luaHostBandIndex(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (interp && interp->drawCommands().isRecording()) {
+        lua_pushinteger(L, interp->drawCommands().recordBandIndex());
+        return 1;
+    }
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
         return luaL_error(L, "no display");
@@ -119,6 +173,11 @@ int luaHostBandCount(lua_State* L) {
 
 /** Lua バインディング: machine.band_top — 現在バンドの上端 Y 座標を返す */
 int luaHostBandTop(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (interp && interp->drawCommands().isRecording()) {
+        lua_pushinteger(L, interp->drawCommands().recordBandTop());
+        return 1;
+    }
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
         return luaL_error(L, "no display");
@@ -129,6 +188,11 @@ int luaHostBandTop(lua_State* L) {
 
 /** Lua バインディング: machine.band_bottom — 現在バンドの下端 Y 座標を返す */
 int luaHostBandBottom(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (interp && interp->drawCommands().isRecording()) {
+        lua_pushinteger(L, interp->drawCommands().recordBandBottom());
+        return 1;
+    }
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
         return luaL_error(L, "no display");
@@ -139,6 +203,13 @@ int luaHostBandBottom(lua_State* L) {
 
 /** Lua バインディング: machine.band_height — 1 バンドの高さ（ピクセル）を返す */
 int luaHostBandHeight(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (interp && interp->drawCommands().isRecording()) {
+        // 録画中は「論理上の 1 バンド高さ」ではなく実バンド高を返す（互換）
+        GameDisplay* disp = luaApiActiveDisplay();
+        lua_pushinteger(L, disp ? disp->bufferHeight() : 20);
+        return 1;
+    }
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
         return luaL_error(L, "no display");
@@ -149,53 +220,76 @@ int luaHostBandHeight(lua_State* L) {
 
 /** Lua バインディング: machine.rect_in_band — 矩形が現在バンドと交差するか返す */
 int luaHostRectInBand(lua_State* L) {
+    const int y = static_cast<int>(luaL_checkinteger(L, 1));
+    const int h = static_cast<int>(luaL_checkinteger(L, 2));
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (interp && interp->drawCommands().isRecording()) {
+        lua_pushboolean(L, interp->drawCommands().recordRectInBand(y, h));
+        return 1;
+    }
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
         return luaL_error(L, "no display");
     }
-    const int y = static_cast<int>(luaL_checkinteger(L, 1));
-    const int h = static_cast<int>(luaL_checkinteger(L, 2));
     lua_pushboolean(L, disp->rectIntersectsBand(y, h));
     return 1;
 }
 
 /** Lua バインディング: machine.draw_line — 直線を描画する */
 int luaHostDrawLine(lua_State* L) {
-    GameDisplay* disp = luaApiActiveDisplay();
-    if (!disp) {
-        return 0;
-    }
     const int x0 = static_cast<int>(luaL_checkinteger(L, 1));
     const int y0 = static_cast<int>(luaL_checkinteger(L, 2));
     const int x1 = static_cast<int>(luaL_checkinteger(L, 3));
     const int y1 = static_cast<int>(luaL_checkinteger(L, 4));
-    disp->drawLine(x0, y0, x1, y1, luaApiParseColor(L, 5));
+    const uint16_t color = luaApiParseColor(L, 5);
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (interp && interp->drawCommands().isRecording()) {
+        interp->drawCommands().recDrawLine(x0, y0, x1, y1, color);
+        return 0;
+    }
+    GameDisplay* disp = luaApiActiveDisplay();
+    if (!disp) {
+        return 0;
+    }
+    disp->drawLine(x0, y0, x1, y1, color);
     return 0;
 }
 
 /** Lua バインディング: machine.draw_circle — 円の輪郭を描画する */
 int luaHostDrawCircle(lua_State* L) {
+    const int cx = static_cast<int>(luaL_checkinteger(L, 1));
+    const int cy = static_cast<int>(luaL_checkinteger(L, 2));
+    const int r = static_cast<int>(luaL_checkinteger(L, 3));
+    const uint16_t color = luaApiParseColor(L, 4);
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (interp && interp->drawCommands().isRecording()) {
+        interp->drawCommands().recDrawCircle(cx, cy, r, color);
+        return 0;
+    }
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
         return 0;
     }
-    const int cx = static_cast<int>(luaL_checkinteger(L, 1));
-    const int cy = static_cast<int>(luaL_checkinteger(L, 2));
-    const int r = static_cast<int>(luaL_checkinteger(L, 3));
-    disp->drawCircle(cx, cy, r, luaApiParseColor(L, 4));
+    disp->drawCircle(cx, cy, r, color);
     return 0;
 }
 
 /** Lua バインディング: machine.fill_circle — 円を塗りつぶす */
 int luaHostFillCircle(lua_State* L) {
+    const int cx = static_cast<int>(luaL_checkinteger(L, 1));
+    const int cy = static_cast<int>(luaL_checkinteger(L, 2));
+    const int r = static_cast<int>(luaL_checkinteger(L, 3));
+    const uint16_t color = luaApiParseColor(L, 4);
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (interp && interp->drawCommands().isRecording()) {
+        interp->drawCommands().recFillCircle(cx, cy, r, color);
+        return 0;
+    }
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {
         return 0;
     }
-    const int cx = static_cast<int>(luaL_checkinteger(L, 1));
-    const int cy = static_cast<int>(luaL_checkinteger(L, 2));
-    const int r = static_cast<int>(luaL_checkinteger(L, 3));
-    disp->fillCircle(cx, cy, r, luaApiParseColor(L, 4));
+    disp->fillCircle(cx, cy, r, color);
     return 0;
 }
 
@@ -228,10 +322,6 @@ int luaHostDrawImage(lua_State* L) {
     if (!interp) {
         return 0;
     }
-    GameDisplay* disp = luaApiActiveDisplay();
-    if (!disp) {
-        return 0;
-    }
 
     const int id = static_cast<int>(luaL_checkinteger(L, 1));
     const int dx = static_cast<int>(luaL_checkinteger(L, 2));
@@ -247,8 +337,24 @@ int luaHostDrawImage(lua_State* L) {
         const int sy = static_cast<int>(luaL_checkinteger(L, 5));
         const int sw = static_cast<int>(luaL_checkinteger(L, 6));
         const int sh = static_cast<int>(luaL_checkinteger(L, 7));
+        if (interp->drawCommands().isRecording()) {
+            interp->drawCommands().recImage(id, dx, dy, sx, sy, sw, sh, false, 0);
+            return 0;
+        }
+        GameDisplay* disp = luaApiActiveDisplay();
+        if (!disp) {
+            return 0;
+        }
         disp->drawImageSub(dx, dy, slot->width, slot->height, slot->pixels, sx, sy, sw, sh);
     } else {
+        if (interp->drawCommands().isRecording()) {
+            interp->drawCommands().recImage(id, dx, dy, 0, 0, slot->width, slot->height, false, 0);
+            return 0;
+        }
+        GameDisplay* disp = luaApiActiveDisplay();
+        if (!disp) {
+            return 0;
+        }
         disp->drawImage(dx, dy, slot->width, slot->height, slot->pixels);
     }
     return 0;
@@ -258,10 +364,6 @@ int luaHostDrawImage(lua_State* L) {
 int luaHostDrawImageKeyed(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
-        return 0;
-    }
-    GameDisplay* disp = luaApiActiveDisplay();
-    if (!disp) {
         return 0;
     }
 
@@ -283,15 +385,233 @@ int luaHostDrawImageKeyed(lua_State* L) {
         if (lua_gettop(L) >= 8) {
             key_color = static_cast<uint16_t>(luaL_checkinteger(L, 8));
         }
+        if (interp->drawCommands().isRecording()) {
+            interp->drawCommands().recImage(id, dx, dy, sx, sy, sw, sh, true, key_color);
+            return 0;
+        }
+        GameDisplay* disp = luaApiActiveDisplay();
+        if (!disp) {
+            return 0;
+        }
         disp->drawImageSubKeyed(dx, dy, slot->width, slot->height, slot->pixels, sx, sy, sw, sh,
                                 key_color, true);
     } else {
         if (lua_gettop(L) >= 4) {
             key_color = static_cast<uint16_t>(luaL_checkinteger(L, 4));
         }
+        if (interp->drawCommands().isRecording()) {
+            interp->drawCommands().recImage(id, dx, dy, 0, 0, slot->width, slot->height, true,
+                                           key_color);
+            return 0;
+        }
+        GameDisplay* disp = luaApiActiveDisplay();
+        if (!disp) {
+            return 0;
+        }
         disp->drawImageSubKeyed(dx, dy, slot->width, slot->height, slot->pixels, 0, 0,
                                 slot->width, slot->height, key_color, true);
     }
+    return 0;
+}
+
+namespace {
+
+bool luaTableGetNumber(lua_State* L, int table_index, const char* key, float* out) {
+    lua_getfield(L, table_index, key);
+    const bool ok = lua_isnumber(L, -1) != 0;
+    if (ok) {
+        *out = static_cast<float>(lua_tonumber(L, -1));
+    }
+    lua_pop(L, 1);
+    return ok;
+}
+
+bool luaTableGetBool(lua_State* L, int table_index, const char* key, bool default_value) {
+    lua_getfield(L, table_index, key);
+    bool value = default_value;
+    if (lua_isboolean(L, -1)) {
+        value = lua_toboolean(L, -1) != 0;
+    } else if (lua_isnil(L, -1) == 0 && lua_isnumber(L, -1)) {
+        value = lua_tointeger(L, -1) != 0;
+    }
+    lua_pop(L, 1);
+    return value;
+}
+
+}  // namespace
+
+/** Lua バインディング: machine.draw_image_affine(id, a,b,c,d,e,f [, key]) */
+int luaHostDrawImageAffine(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (!interp) {
+        return 0;
+    }
+
+    const int id = static_cast<int>(luaL_checkinteger(L, 1));
+    const float a = static_cast<float>(luaL_checknumber(L, 2));
+    const float b = static_cast<float>(luaL_checknumber(L, 3));
+    const float c = static_cast<float>(luaL_checknumber(L, 4));
+    const float d = static_cast<float>(luaL_checknumber(L, 5));
+    const float e = static_cast<float>(luaL_checknumber(L, 6));
+    const float f = static_cast<float>(luaL_checknumber(L, 7));
+
+    const ImageSlot* slot = interp->getImage(id);
+    if (!slot) {
+        return luaL_error(L, "draw_image_affine: invalid image id %d", id);
+    }
+
+    // 純整数倍スケール（回転・せん断なし）は command list 対応の高速パスへ
+    const bool no_shear = (b == 0.0f && d == 0.0f);
+    const bool uniform = (a == e);
+    const int scale_i = static_cast<int>(a + (a >= 0.0f ? 0.5f : -0.5f));
+    const bool int_scale = no_shear && uniform && scale_i >= 1 && scale_i <= 16 &&
+                           (a - static_cast<float>(scale_i) > -1e-3f) &&
+                           (a - static_cast<float>(scale_i) < 1e-3f) &&
+                           (c == static_cast<float>(static_cast<int>(c))) &&
+                           (f == static_cast<float>(static_cast<int>(f)));
+    const bool key_requested = (lua_gettop(L) >= 8 && !lua_isnil(L, 8));
+
+    if (int_scale && !key_requested) {
+        const int dx = static_cast<int>(c);
+        const int dy = static_cast<int>(f);
+        const int dest_h = static_cast<int>(slot->height) * scale_i;
+        if (interp->drawCommands().isRecording()) {
+            interp->drawCommands().recImageScaled(id, dx, dy, scale_i, dest_h);
+            return 0;
+        }
+        GameDisplay* disp = luaApiActiveDisplay();
+        if (!disp) {
+            return 0;
+        }
+        disp->drawImageScaled(dx, dy, slot->width, slot->height, slot->pixels, scale_i);
+        return 0;
+    }
+
+    if (interp->drawCommands().isRecording()) {
+        // 一般アフィンは command list 非対応 → 従来パスへフォールバック
+        interp->drawCommands().markFailed();
+        return 0;
+    }
+    GameDisplay* disp = luaApiActiveDisplay();
+    if (!disp) {
+        return 0;
+    }
+
+    bool key_enabled = false;
+    uint16_t key_color = 0xF81F;
+    if (key_requested) {
+        if (lua_isboolean(L, 8)) {
+            key_enabled = lua_toboolean(L, 8) != 0;
+        } else {
+            key_enabled = true;
+            key_color = static_cast<uint16_t>(luaL_checkinteger(L, 8));
+        }
+    }
+
+    disp->drawImageAffine(slot->width, slot->height, slot->pixels, 0, 0, slot->width, slot->height, a,
+                          b, c, d, e, f, key_color, key_enabled);
+    return 0;
+}
+
+/** Lua バインディング: machine.draw_image_xform(id, { x,y, angle, scale, ... }) */
+int luaHostDrawImageXform(lua_State* L) {
+    LuaInterpreter* interp = luaApiActiveInterpreter();
+    if (!interp) {
+        return 0;
+    }
+    if (interp->drawCommands().isRecording()) {
+        interp->drawCommands().markFailed();
+        return 0;
+    }
+    GameDisplay* disp = luaApiActiveDisplay();
+    if (!disp) {
+        return 0;
+    }
+
+    const int id = static_cast<int>(luaL_checkinteger(L, 1));
+    luaL_checktype(L, 2, LUA_TTABLE);
+
+    const ImageSlot* slot = interp->getImage(id);
+    if (!slot) {
+        return luaL_error(L, "draw_image_xform: invalid image id %d", id);
+    }
+
+    float x = 0.0f;
+    float y = 0.0f;
+    float ox = static_cast<float>(slot->width) * 0.5f;
+    float oy = static_cast<float>(slot->height) * 0.5f;
+    float scale_x = 1.0f;
+    float scale_y = 1.0f;
+    float angle_deg = 0.0f;
+    int sx = 0;
+    int sy = 0;
+    int sw = slot->width;
+    int sh = slot->height;
+
+    (void)luaTableGetNumber(L, 2, "x", &x);
+    (void)luaTableGetNumber(L, 2, "y", &y);
+
+    float scale = 1.0f;
+    if (luaTableGetNumber(L, 2, "scale", &scale)) {
+        scale_x = scale;
+        scale_y = scale;
+    }
+    (void)luaTableGetNumber(L, 2, "scale_x", &scale_x);
+    (void)luaTableGetNumber(L, 2, "scale_y", &scale_y);
+    (void)luaTableGetNumber(L, 2, "angle", &angle_deg);
+
+    float tmp = 0.0f;
+    if (luaTableGetNumber(L, 2, "ox", &tmp)) {
+        ox = tmp;
+    }
+    if (luaTableGetNumber(L, 2, "oy", &tmp)) {
+        oy = tmp;
+    }
+    if (luaTableGetNumber(L, 2, "sx", &tmp)) {
+        sx = static_cast<int>(tmp);
+    }
+    if (luaTableGetNumber(L, 2, "sy", &tmp)) {
+        sy = static_cast<int>(tmp);
+    }
+    if (luaTableGetNumber(L, 2, "sw", &tmp)) {
+        sw = static_cast<int>(tmp);
+    }
+    if (luaTableGetNumber(L, 2, "sh", &tmp)) {
+        sh = static_cast<int>(tmp);
+    }
+
+    if (luaTableGetBool(L, 2, "flip_x", false)) {
+        scale_x = -scale_x;
+    }
+    if (luaTableGetBool(L, 2, "flip_y", false)) {
+        scale_y = -scale_y;
+    }
+
+    bool keyed = luaTableGetBool(L, 2, "keyed", false);
+    uint16_t key_color = 0xF81F;
+    lua_getfield(L, 2, "key");
+    if (lua_isnumber(L, -1)) {
+        keyed = true;
+        key_color = static_cast<uint16_t>(lua_tointeger(L, -1));
+    } else if (lua_isboolean(L, -1)) {
+        keyed = lua_toboolean(L, -1) != 0;
+    }
+    lua_pop(L, 1);
+
+    const float rad = angle_deg * 0.017453292519943295f;  // deg -> rad
+    const float cos_a = cosf(rad);
+    const float sin_a = sinf(rad);
+
+    // T(x,y) * S * R * T(-ox,-oy)
+    const float a = scale_x * cos_a;
+    const float b = scale_x * (-sin_a);
+    const float d = scale_y * sin_a;
+    const float e = scale_y * cos_a;
+    const float c = x - a * ox - b * oy;
+    const float f = y - d * ox - e * oy;
+
+    disp->drawImageAffine(slot->width, slot->height, slot->pixels, sx, sy, sw, sh, a, b, c, d, e, f,
+                          key_color, keyed);
     return 0;
 }
 
@@ -416,6 +736,10 @@ int luaHostDrawTilemap(lua_State* L) {
     LuaInterpreter* interp = luaApiActiveInterpreter();
     if (!interp) {
         return luaL_error(L, "no active interpreter");
+    }
+    if (interp->drawCommands().isRecording()) {
+        interp->drawCommands().markFailed();
+        return 0;
     }
     GameDisplay* disp = luaApiActiveDisplay();
     if (!disp) {

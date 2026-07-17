@@ -69,6 +69,7 @@ add_executable(Suityouka_Game_Machine
     # SD上 Lua スクリプト実行
     lib/heap_budget/heap_budget.cpp
     lib/lua_interpreter/lua_interpreter.cpp
+    lib/lua_interpreter/draw_command_list.cpp
     lib/lua_interpreter/bg_stream_util.cpp
     lib/lua_interpreter/vn_stream_compose.cpp
     lib/lua_interpreter/lua_api_internal.cpp
