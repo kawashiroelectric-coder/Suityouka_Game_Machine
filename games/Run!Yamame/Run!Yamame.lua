@@ -700,6 +700,7 @@ local function draw_title()
     end
     draw_center_text(168, "UP/NEAR: JUMP", COL_DIM, bg)
     draw_center_text(184, "DOWN: SLIDE  FAR: SHOT", COL_DIM, bg)
+    draw_center_text(220, "2026 Kawashiro Electric", COL_DIM, bg)
 end
 
 local function draw_play_hud()

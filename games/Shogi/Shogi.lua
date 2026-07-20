@@ -1885,7 +1885,7 @@ function fn.draw_title()
         machine.text(
             28,
             TITLE_FOOTER_Y + 34,
-            font_ok and "本将棋 9x9" or "9x9 SHOGI",
+            font_ok and "本将棋 9x9   2026 Kawashiro Electric" or "9x9 SHOGI",
             COL_DIM
         )
     end
