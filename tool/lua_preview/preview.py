@@ -3,8 +3,8 @@
 Suityouka Game Machine — 対話型 Lua プレビューエミュレータ (320x240)
 
 使い方（プロジェクトルートから）:
-  python tool/lua_preview/preview.py Test_Lua/stg/stg.lua
-  python tool/lua_preview/preview.py Test_Lua/tile_test/tile_test.lua --scale 3
+  python tool/lua_preview/preview.py games/stg/stg.lua
+  python tool/lua_preview/preview.py games/Shogi/Shogi.lua --scale 3
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ except ImportError:
     print("lupa が必要です: pip install lupa", file=sys.stderr)
     sys.exit(1)
 
-from lua_compat import preprocess_lua54
+from lua_compat import prepare_lua_source
 from machine_api import MachineHost
 from framebuffer import SCREEN_WIDTH, SCREEN_HEIGHT
 
@@ -107,9 +107,7 @@ class PreviewWatchdog:
         # OS への応答（Not Responding 防止）
         pygame.event.pump()
 
-        if self.quit_requested:
-            raise RuntimeError("preview aborted (window close / Esc)")
-
+        # Esc / 閉じるはフラグのみ。例外にすると「予期しない終了」に見える。
         elapsed_ms = (now - self._slice_start) * 1000.0
         if elapsed_ms >= 1500 and not self._warned:
             self._warned = True
@@ -117,13 +115,13 @@ class PreviewWatchdog:
             print(f"[preview] {self.last_status}", file=sys.stderr)
 
         if self.abort_ms > 0 and elapsed_ms >= self.abort_ms:
-            raise RuntimeError(
-                f"preview watchdog: Lua が {self.abort_ms}ms を超えたため中断"
-            )
+            self.quit_requested = True
+            self.last_status = f"preview watchdog: Lua が {self.abort_ms}ms を超えたため中断"
+            print(f"[preview] {self.last_status}", file=sys.stderr)
 
 
 def load_lua_chunk(lua: LuaRuntime, source: str, chunk_name: str) -> None:
-    source = preprocess_lua54(source)
+    source = prepare_lua_source(source, lua)
     loader = lua.eval(
         """
         function(src, name)

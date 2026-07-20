@@ -1,25 +1,48 @@
-"""Lua 5.4 ソースを LuaJIT (lupa) 向けに前処理する。"""
+"""Lua ソースを lupa 実行環境向けに前処理する。
+
+lupa が Lua 5.4+（`//` あり）のときは変換不要。
+LuaJIT 等の古い環境向けにだけ `//` → `math.floor` へ置換する。
+"""
 
 from __future__ import annotations
 
 import re
+from typing import Any
 
-# 文字列リテラル外の a // b を math.floor(a/b) に置換（反復）
+
+def runtime_supports_idiv(lua_runtime: Any) -> bool:
+    """実行中の Lua が整数除算 `//` をネイティブに持てるか。"""
+    try:
+        fn = lua_runtime.eval(
+            """
+            function()
+                local ok, r = pcall(function() return 7 // 2 end)
+                return ok and r == 3
+            end
+            """
+        )
+        return bool(fn())
+    except Exception:
+        return False
+
+
+# 文字列リテラル外の a // b を math.floor(a/b) に置換
+# 左辺は関数呼び出し machine.time_ms() なども許可。空の () 単独は除外。
 _IDIV_PATTERN = re.compile(
     r"""
     (?P<left>
-        \([^()]*\)
+        (?:[\w\.]+(?:\([^()]*\))?)+
+        | \([^()]+\)
         | "[^"\\]*(?:\\.[^"\\]*)*"
         | '[^'\\]*(?:\\.[^'\\]*)*'
-        | [\w\.]+
         | \d+
     )
     \s*//\s*
     (?P<right>
-        \([^()]*\)
+        (?:[\w\.]+(?:\([^()]*\))?)+
+        | \([^()]+\)
         | "[^"\\]*(?:\\.[^"\\]*)*"
         | '[^'\\]*(?:\\.[^'\\]*)*'
-        | [\w\.]+
         | \d+
     )
     """,
@@ -59,10 +82,10 @@ def _strip_comments_and_strings(line: str) -> str:
 
 
 def preprocess_lua54(source: str) -> str:
-    """floor 除算 (//) を math.floor(a/b) に変換する。"""
+    """floor 除算 (//) を math.floor(a/b) に変換する（LuaJIT 向け）。"""
     lines = source.splitlines(keepends=True)
     changed = False
-    for pass_no in range(32):
+    for _pass_no in range(64):
         any_change = False
         new_lines: list[str] = []
         for line in lines:
@@ -70,10 +93,14 @@ def preprocess_lua54(source: str) -> str:
             if "//" not in masked:
                 new_lines.append(line)
                 continue
+
             def repl(m: re.Match[str]) -> str:
                 left = m.group("left")
                 right = m.group("right")
                 if left.startswith(('"', "'")) or right.startswith(('"', "'")):
+                    return m.group(0)
+                # 空の () だけを左辺にしない（誤変換防止）
+                if left.strip() == "()":
                     return m.group(0)
                 return f"math.floor({left}/{right})"
 
@@ -90,3 +117,10 @@ def preprocess_lua54(source: str) -> str:
         if not lines or not lines[0].startswith("local __preview_math"):
             lines.insert(0, header)
     return "".join(lines)
+
+
+def prepare_lua_source(source: str, lua_runtime: Any | None = None) -> str:
+    """実行環境に合わせて必要なら // を前処理する。"""
+    if lua_runtime is not None and runtime_supports_idiv(lua_runtime):
+        return source
+    return preprocess_lua54(source)

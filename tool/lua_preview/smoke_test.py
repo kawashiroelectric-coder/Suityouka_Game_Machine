@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lupa import LuaRuntime
 
-from lua_compat import preprocess_lua54
+from lua_compat import prepare_lua_source
 from machine_api import MachineHost
 
 
@@ -22,7 +22,7 @@ def run_game(script: Path) -> None:
     lua.globals().sleep_ms = lambda _ms: None
     lua.globals().machine = host.build_machine_table()
 
-    src = preprocess_lua54(script.read_text(encoding="utf-8"))
+    src = prepare_lua_source(script.read_text(encoding="utf-8"), lua)
     loader = lua.eval(
         """
         function(src, name)
@@ -48,12 +48,14 @@ def run_game(script: Path) -> None:
 
 def main() -> int:
     games = [
-        ROOT / "Test_Lua" / "stg" / "stg.lua",
-        ROOT / "Test_Lua" / "tile_test" / "tile_test.lua",
+        ROOT / "games" / "stg" / "stg.lua",
+        ROOT / "games" / "stg_fast" / "stg_fast.lua",
+        ROOT / "games" / "tile_test" / "tile_test.lua",
         ROOT / "games" / "Run!Yamame" / "Run!Yamame.lua",
-        ROOT / "Test_Lua" / "visual_novel" / "visual_novel.lua",
-        ROOT / "Test_Lua" / "bad_apple" / "bad_apple.lua",
-        ROOT / "Test_Lua" / "sokoban" / "sokoban.lua",
+        ROOT / "games" / "Shogi" / "Shogi.lua",
+        ROOT / "games" / "visual_novel" / "visual_novel.lua",
+        ROOT / "games" / "sokoban" / "sokoban.lua",
+        ROOT / "games" / "save_test" / "save_test.lua",
     ]
     for script in games:
         if not script.is_file():

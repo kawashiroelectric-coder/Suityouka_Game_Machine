@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import math
-import struct
-from array import array
-from typing import Iterable
 
 SCREEN_WIDTH = 320
 SCREEN_HEIGHT = 240
@@ -294,7 +291,7 @@ class Framebuffer:
 
     def blit_rgb565(
         self,
-        src: array | list[int],
+        src: list[int] | tuple[int, ...],
         src_w: int,
         src_h: int,
         dx: int,
@@ -343,7 +340,7 @@ class Framebuffer:
 
     def blit_rgb565_affine(
         self,
-        src: array | list[int] | tuple[int, ...],
+        src: list[int] | tuple[int, ...],
         src_w: int,
         src_h: int,
         a: float,
@@ -358,7 +355,7 @@ class Framebuffer:
         sh: int | None = None,
         key_color: int | None = None,
     ) -> None:
-        """プレビュー用アフィン。array の C バッファは触らず list[int] だけ読む。
+        """プレビュー用アフィン。list[int] だけ読む。
 
         対応:
           - 正の整数倍スケール（b=d=0, a=e>=1）… 背景 2x など
@@ -384,23 +381,12 @@ class Framebuffer:
 
         need = src_w * src_h
         try:
-            if isinstance(src, (list, tuple)):
-                if len(src) < need:
-                    return
+            if isinstance(src, list) and len(src) >= need:
                 pixels = src
-            elif isinstance(src, array) and src.typecode == "H":
-                # tobytes→手動展開で array.__getitem__ を避ける
-                raw = src.tobytes()
-                if len(raw) < need * 2:
-                    return
-                le = struct.pack("@H", 1) == struct.pack("<H", 1)
-                pixels = []
-                for i in range(0, need * 2, 2):
-                    if le:
-                        pixels.append(raw[i] | (raw[i + 1] << 8))
-                    else:
-                        pixels.append(raw[i + 1] | (raw[i] << 8))
+            elif isinstance(src, tuple) and len(src) >= need:
+                pixels = src
             else:
+                # array 等は 1 回だけ list 化（以後は list 経路）
                 pixels = [int(x) & 0xFFFF for x in src]
                 if len(pixels) < need:
                     return
@@ -483,7 +469,7 @@ class Framebuffer:
         tile_w: int,
         tile_h: int,
         sheet_cols: int,
-        sheet: array,
+        sheet: list[int] | tuple[int, ...],
         sheet_w: int,
         sheet_h: int,
         tile_index: int,
@@ -534,13 +520,14 @@ class Framebuffer:
         return bytes(rgb)
 
     @staticmethod
-    def load_bin_pixels(path: str, width: int, height: int) -> array:
+    def load_bin_pixels(path: str, width: int, height: int) -> list[int]:
+        """RGB565 .bin を list[int] で返す（array の C バッファは使わない）。"""
         data = open(path, "rb").read()
         expected = width * height * 2
         if len(data) != expected:
             raise ValueError(f"{path}: size {len(data)} != {expected} ({width}x{height})")
-        pixels = array("H")
-        pixels.frombytes(data)
-        if struct.pack("@H", 1) != struct.pack("<H", 1):
-            pixels.byteswap()
+        # ファイルはリトルエンディアン固定
+        pixels: list[int] = []
+        for i in range(0, expected, 2):
+            pixels.append(data[i] | (data[i + 1] << 8))
         return pixels

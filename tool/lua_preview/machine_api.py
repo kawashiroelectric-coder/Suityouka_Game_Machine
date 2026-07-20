@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import time
-from array import array
 from pathlib import Path
 from typing import Any
 
@@ -18,10 +17,10 @@ from bw_stream import BwFrameBuffer
 class ImageSlot:
     __slots__ = ("pixels", "width", "height")
 
-    def __init__(self, pixels: array | list[int], width: int, height: int) -> None:
-        # 描画は list[int] のみ使う（array の C バッファ AV 回避）
-        if isinstance(pixels, array):
-            self.pixels: list[int] = [int(p) & 0xFFFF for p in pixels]
+    def __init__(self, pixels: list[int] | tuple[int, ...], width: int, height: int) -> None:
+        # 描画は list[int] のみ使う
+        if isinstance(pixels, list):
+            self.pixels: list[int] = pixels
         else:
             self.pixels = [int(p) & 0xFFFF for p in pixels]
         self.width = width
