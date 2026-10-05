@@ -37,13 +37,9 @@ def run_game(script: Path) -> None:
     g = lua.globals()
     g.game_init()
     g.game_update(16)
-    for b in range(host.fb.band_count()):
-        host.fb.begin_band(b)
-        if host.draw_mode == "layers":
-            host.compose_layers_for_band()
-        g.game_draw()
-        host.fb.end_band()
-    print(f"OK: {script.name} bands={host.fb.band_count()}")
+    info = host.render_frame(g.game_draw)            # 実機と同じ録画 1 回
+    host.render_frame(g.game_draw, force_band=True)  # バンドごと 12 回
+    print(f"OK: {script.name} {info}")
 
 
 def main() -> int:
@@ -56,6 +52,9 @@ def main() -> int:
         ROOT / "games" / "visual_novel" / "visual_novel.lua",
         ROOT / "games" / "sokoban" / "sokoban.lua",
         ROOT / "games" / "save_test" / "save_test.lua",
+        ROOT / "games" / "ECHO" / "ECHO.lua",
+        ROOT / "games" / "Sonograph" / "Sonograph.lua",
+        ROOT / "games" / "TwinSwitch" / "TwinSwitch.lua",
     ]
     for script in games:
         if not script.is_file():

@@ -8,8 +8,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from font_misf import MisfFont
-from framebuffer import Framebuffer, rgb888_to_rgb565
+from framebuffer import Framebuffer, rgb888_to_rgb565, as_image_array
 from tile_layers import LAYER_COUNT, TileLayerSystem
 from bw_stream import BwFrameBuffer
 
@@ -17,14 +19,45 @@ from bw_stream import BwFrameBuffer
 class ImageSlot:
     __slots__ = ("pixels", "width", "height")
 
-    def __init__(self, pixels: list[int] | tuple[int, ...], width: int, height: int) -> None:
-        # 描画は list[int] のみ使う
-        if isinstance(pixels, list):
-            self.pixels: list[int] = pixels
-        else:
-            self.pixels = [int(p) & 0xFFFF for p in pixels]
+    def __init__(self, pixels, width: int, height: int) -> None:
+        # (height, width) の uint16 配列
+        self.pixels: np.ndarray = as_image_array(pixels, width, height)
         self.width = width
         self.height = height
+
+
+class DrawRecorder:
+    """実機 DrawCommandList の録画量を数える（描画そのものは全画面に直接行う）。
+
+    実機は game_draw を 1 回だけ「録画」し、C 側でバンドごとに再生する。
+    録画が 12KB を超えるか、録画非対応 API（回転アフィン・xform・tilemap など）を
+    使うと、そのフレームは game_draw をバンドごとに 12 回呼ぶ従来パスになる。
+    """
+
+    BUFFER_BYTES = 12 * 1024
+
+    def __init__(self) -> None:
+        self.used = 0
+        self.failed = False
+        self.reason = ""
+        self.cmds: list = []
+
+    def add(self, n: int) -> None:
+        if self.failed:
+            return
+        if self.used + n > self.BUFFER_BYTES:
+            self.fail("録画 12KB 超過")
+            return
+        self.used += n
+
+    def fail(self, reason: str) -> None:
+        if not self.failed:
+            self.failed = True
+            self.reason = reason
+
+
+def _utf8_len(s) -> int:
+    return len(s.encode("utf-8")) if isinstance(s, str) else len(bytes(s))
 
 
 class MachineHost:
@@ -48,6 +81,10 @@ class MachineHost:
         self._vn_layers: dict[str, dict] = {}
         self._heap_used = 64 * 1024
         self._bw_stream = BwFrameBuffer()
+        self.rec: DrawRecorder | None = None   # 録画中（game_draw の 1 回目）のとき有効
+        self._stream_cache: dict[tuple, np.ndarray] = {}
+        self.last_frame_info = ""
+        self._exists_cache: dict[str, tuple[bool, float]] = {}
 
     # --- 基本 ---
 
@@ -64,21 +101,29 @@ class MachineHost:
         return rgb888_to_rgb565(int(r), int(g), int(b))
 
     def band_index(self) -> int:
+        if self.rec is not None:
+            return 0
         return self.fb.band_index
 
     def band_count(self) -> int:
         return self.fb.band_count()
 
     def band_top(self) -> int:
+        if self.rec is not None:
+            return 0
         return self.fb.band_top()
 
     def band_bottom(self) -> int:
+        if self.rec is not None:
+            return self.fb.height
         return self.fb.band_bottom()
 
     def band_height(self) -> int:
         return self.fb.buffer_height
 
     def rect_in_band(self, y: int, h: int) -> bool:
+        if self.rec is not None:
+            return True   # 実機の録画中は常に true
         return self.fb.rect_in_band(int(y), int(h))
 
     def pressed(self, index: int) -> bool:
@@ -113,18 +158,27 @@ class MachineHost:
     def fill_rect_alpha(self, x: int, y: int, w: int, h: int, color: int, alpha: int) -> None:
         self.fb.fill_rect_alpha(int(x), int(y), int(w), int(h), int(color), int(alpha))
 
-    def fill_rects(self, rects) -> None:
+    @staticmethod
+    def _rects_from_lua(rects) -> list[tuple[int, int, int, int, int]]:
+        """実機と同じ {x, y, w, h, color}（位置指定）。旧プレビューの名前付きキーも受け付ける"""
+        out = []
         n = len(rects)
         for i in range(1, n + 1):
             r = rects[i]
-            if r is None:
+            if r is None or not hasattr(r, "__getitem__"):
                 continue
-            x = int(r["x"])
-            y = int(r["y"])
-            w = int(r["w"])
-            h = int(r["h"])
-            color = int(r["color"])
+            if r[1] is not None:
+                out.append((int(r[1]), int(r[2]), int(r[3]), int(r[4]), int(r[5]) & 0xFFFF))
+            else:
+                out.append((int(r["x"]), int(r["y"]), int(r["w"]), int(r["h"]), int(r["color"]) & 0xFFFF))
+        return out
+
+    def _fill_rect_list(self, rect_list) -> None:
+        for x, y, w, h, color in rect_list:
             self.fb.fill_rect(x, y, w, h, color)
+
+    def fill_rects(self, rects) -> None:
+        self._fill_rect_list(self._rects_from_lua(rects))
 
     def draw_line(self, x0: int, y0: int, x1: int, y1: int, color: int) -> None:
         self.fb.draw_line(int(x0), int(y0), int(x1), int(y1), int(color))
@@ -151,10 +205,7 @@ class MachineHost:
                 self.fb, int(x), int(y), str(text), fg_i, bg_i, use_bg
             )
             return
-        cx = int(x)
-        for ch in str(text):
-            self.fb.draw_char_8x8(cx, int(y), ch, fg_i, bg_i, use_bg)
-            cx += 8
+        self.fb.draw_text_8x8(int(x), int(y), str(text), fg_i, bg_i, use_bg)
 
     def _lua_text(self, x, y, text, *extra) -> None:
         """Lua からの可変引数: (x,y,str[,fg[,bg]]). bg 省略時は透明。"""
@@ -177,6 +228,16 @@ class MachineHost:
         return str(self._resolve(path)).replace("\\", "/")
 
     def file_exists(self, path: str) -> bool:
+        # ディスク確認は遅いので短時間キャッシュ（save_data で破棄）
+        now = time.monotonic()
+        hit = self._exists_cache.get(path)
+        if hit is not None and now - hit[1] < 0.5:
+            return hit[0]
+        result = self._file_exists_uncached(path)
+        self._exists_cache[path] = (result, now)
+        return result
+
+    def _file_exists_uncached(self, path: str) -> bool:
         p = Path(path)
         if p.is_absolute():
             return p.is_file()
@@ -194,7 +255,7 @@ class MachineHost:
         slot_id = self._next_image_id
         self._next_image_id += 1
         self.images[slot_id] = ImageSlot(pixels, int(w), int(h))
-        self._heap_used += len(pixels) * 2
+        self._heap_used += int(pixels.size) * 2
         return slot_id, None
 
     def _get_slot(self, image_id: int) -> ImageSlot | None:
@@ -407,7 +468,7 @@ class MachineHost:
     def free_image(self, image_id: int) -> None:
         slot = self.images.pop(int(image_id), None)
         if slot:
-            self._heap_used -= len(slot.pixels) * 2
+            self._heap_used -= int(slot.pixels.size) * 2
 
     def image_size(self, image_id: int) -> tuple[int, int]:
         slot = self._get_slot(image_id)
@@ -432,13 +493,14 @@ class MachineHost:
         image_id: int,
         map_x: int,
         map_y: int,
+        cols: int,
+        rows: int,
         tile_w: int,
         tile_h: int,
         sheet_cols: int,
-        cols: int,
-        rows: int,
         data,
     ) -> None:
+        """実機と同じ引数順 (id, map_x, map_y, cols, rows, tile_w, tile_h, sheet_cols, data)"""
         slot = self._get_slot(image_id)
         if not slot:
             return
@@ -478,12 +540,20 @@ class MachineHost:
         keyed: bool,
     ) -> bool:
         full = self._resolve(path)
-        if not full.is_file():
-            return False
         try:
-            pixels = Framebuffer.load_bin_pixels(str(full), w, h)
-        except (OSError, ValueError):
+            st = full.stat()
+        except OSError:
             return False
+        ck = (str(full), st.st_mtime_ns, st.st_size, w, h)
+        pixels = self._stream_cache.get(ck)
+        if pixels is None:
+            try:
+                pixels = Framebuffer.load_bin_pixels(str(full), w, h)
+            except (OSError, ValueError):
+                return False
+            if len(self._stream_cache) > 32:
+                self._stream_cache.clear()
+            self._stream_cache[ck] = pixels
         key_color = key if keyed else None
         self.fb.blit_rgb565(pixels, w, h, dx, dy, key_color=key_color)
         return True
@@ -780,6 +850,7 @@ class MachineHost:
         return "\n".join(lines)
 
     def save_data(self, path: str, table) -> tuple[bool | None, str | None]:
+        self._exists_cache.clear()
         body = self._lua_value_to_lua(table)
         text = f"-- game_machine save v1\nreturn {body}\n"
         dest = self._save_root / Path(path).name
@@ -828,12 +899,144 @@ class MachineHost:
     def set_volume(self, *_args: Any) -> None:
         pass
 
+    # ------------------------------------------------------------------
+    # 録画（実機 DrawCommandList 相当）とフレーム描画
+    # ------------------------------------------------------------------
+    def _rec_size(self, name: str, args: tuple):
+        """(録画バイト数, 再生用の引数) を返す。録画非対応なら (None, 理由)"""
+        if name == "clear":
+            return 3, args
+        if name == "fill_rect":
+            return 11, args
+        if name == "fill_rect_alpha":
+            return 12, args
+        if name == "fill_rects":
+            lst = self._rects_from_lua(args[0])
+            if not lst:
+                return 0, None
+            return ((len(lst) + 63) // 64) * 2 + len(lst) * 10, (lst,)
+        if name == "draw_line":
+            return 11, args
+        if name in ("draw_circle", "fill_circle"):
+            return 9, args
+        if name == "text":
+            n = _utf8_len(str(args[2])) if len(args) >= 3 else 0
+            if n > 255:
+                return None, "text が 255 バイト超"
+            return 11 + n, args
+        if name in ("draw_image", "draw_image_keyed", "draw_sprite", "draw_sprite_keyed"):
+            return 18, args
+        if name in ("draw_image_affine", "draw_sprite_affine"):
+            try:
+                fa, fb_, fc, fd, fe, ff = (float(v) for v in args[1:7])
+            except Exception:
+                return None, "draw_image_affine"
+            scale_i = int(fa + (0.5 if fa >= 0 else -0.5))
+            int_scale = (
+                fb_ == 0.0 and fd == 0.0 and fa == fe and 1 <= scale_i <= 16
+                and abs(fa - scale_i) < 1e-3 and fc == int(fc) and ff == int(ff)
+            )
+            if int_scale and (len(args) < 8 or args[7] is None):
+                return 10, args
+            return None, "draw_image_affine（回転・縮小・透過色つき）"
+        if name in ("draw_image_xform", "draw_sprite_xform"):
+            return None, "draw_image_xform"
+        if name == "draw_tilemap":
+            return None, "draw_tilemap"
+        if name == "draw_bg_stream":
+            return 10 + _utf8_len(str(args[0])), args
+        if name == "draw_bw_stream":
+            return 14 + _utf8_len(str(args[0])), args
+        if name == "draw_bw_pack":
+            return 18 + _utf8_len(str(args[0])), args
+        if name == "draw_vn_stream":
+            n = 3
+            try:
+                comp = args[0]
+                bgc = comp["bg"]
+                if bgc is not None:
+                    n += 9 + _utf8_len(str(bgc["path"]))
+                chs = comp["chars"]
+                if chs is not None:
+                    for i in range(1, len(chs) + 1):
+                        c = chs[i]
+                        n += 1 if c is None else 13 + _utf8_len(str(c["path"]))
+            except Exception:
+                pass
+            return n, args
+        return 0, args
+
+    _RECORDED = (
+        "clear", "fill_rect", "fill_rect_alpha", "fill_rects", "draw_line", "draw_circle",
+        "fill_circle", "text", "draw_image", "draw_image_keyed", "draw_image_affine",
+        "draw_image_xform", "draw_sprite", "draw_sprite_keyed", "draw_sprite_affine",
+        "draw_sprite_xform", "draw_tilemap", "draw_bg_stream", "draw_vn_stream",
+        "draw_bw_stream", "draw_bw_pack",
+    )
+    _RETURNS_BOOL = ("draw_bg_stream", "draw_vn_stream", "draw_bw_stream", "draw_bw_pack")
+
+    def _recording_wrapper(self, name: str, fn: Any) -> Any:
+        replay_fn = self._fill_rect_list if name == "fill_rects" else fn
+        returns_bool = name in self._RETURNS_BOOL
+
+        def wrapped(*args):
+            rec = self.rec
+            if rec is None:
+                return fn(*args)
+            if not rec.failed:
+                size, payload = self._rec_size(name, args)
+                if size is None:
+                    rec.fail(payload)
+                elif payload is not None:
+                    rec.add(size)
+                    if not rec.failed:
+                        rec.cmds.append((replay_fn, payload))
+            return True if returns_bool else None
+
+        return wrapped
+
+    def render_frame(self, game_draw: Any, force_band: bool = False) -> str:
+        """1 フレーム描画。実機と同じく、通常は game_draw を 1 回だけ録画して全画面に再生。
+
+        録画できないフレーム（12KB 超・非対応 API）と layers モードは
+        バンドごとに game_draw を呼ぶ。戻り値は状態表示用の文字列。
+        """
+        if self.draw_mode != "layers" and not force_band:
+            rec = DrawRecorder()
+            self.rec = rec
+            try:
+                game_draw()
+            finally:
+                self.rec = None
+            if not rec.failed:
+                self.fb.begin_full()
+                try:
+                    for fn, args in rec.cmds:
+                        fn(*args)
+                finally:
+                    self.fb.end_full()
+                self.last_frame_info = f"録画 {rec.used / 1024:.1f}KB/12KB"
+                return self.last_frame_info
+            info = f"バンド描画（{rec.reason}）"
+        else:
+            info = "バンド描画（layers）" if self.draw_mode == "layers" else "バンド描画"
+        for band in range(self.fb.band_count()):
+            self.fb.begin_band(band)
+            if self.draw_mode == "layers":
+                self.compose_layers_for_band()
+            game_draw()
+            self.fb.end_band()
+        self.last_frame_info = info
+        return info
+
     def build_machine_table(self) -> Any:
         """lupa 用 machine テーブルを構築。"""
         lua = self.lua
         m = lua.table()
 
         def bind(name: str, fn: Any) -> None:
+            if name in self._RECORDED:
+                fn = self._recording_wrapper(name, fn)
             m[name] = fn
 
         bind("width", self.width)

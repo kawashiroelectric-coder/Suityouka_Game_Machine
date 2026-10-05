@@ -1726,6 +1726,9 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
             }
             lua_pop(game_lua_, 1);
         }
+        // game_update が長い場合に備え、描画前にも BGM を補充する
+        audio_engine_.pumpStream();
+
         if (exit_requested) {
             printf("[MENU-DBG] runGameLoop: game_update returned true (exit request)\n");
             fflush(stdout);
@@ -1782,6 +1785,9 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
                             draw_cmds_.replayBand(this, hooks_.display, band);
                             hooks_.display->endBand();
                             prefetchBgStreamBand(band + 1);
+                            // BGM ストリームは 2 スロット（約 11.6ms）しか先読みしないので、
+                            // フレーム先頭だけでなく帯ごとにも補充して途切れを防ぐ
+                            audio_engine_.pumpStream();
                         }
                     }
                     draw_cmds_.commitBandHashes();
@@ -1819,15 +1825,16 @@ bool LuaInterpreter::runGameLoopFromSd(const char* path) {
 
                     hooks_.display->endBand();
                     prefetchBgStreamBand(band + 1);
+                    audio_engine_.pumpStream();   // 帯ごとに BGM を補充（上と同じ理由）
                 }
             }
         }
         if (failed) {
             break;
         }
-        if (!drew_frame) {
-            hooks_.display->waitForTransferComplete();
-        }
+        // 最後の帯の LCD 転送完了はここでは待たない（次フレームの game_update と重ねる）。
+        // バッファ再利用は GameDisplay::beginBand()/endBand() が、LCD への直接描画
+        // （エラー表示・デバッグ表示など）は ST7789_LCD 側のコマンド送信前チェックが保護する。
         // FIL は跨ぎ維持（prefetch 破棄・BW 先読みのみ）。完全 close はゲーム終了時。
         if (!bad_apple_skip_prefetch_) {
             closeBgStream();

@@ -189,14 +189,19 @@ def main() -> int:
     parser.add_argument(
         "--fps-limit",
         type=int,
-        default=60,
-        help="FPS 上限 (0 = 無制限)",
+        default=30,
+        help="FPS 上限（既定 30 = 実機相当。0 = 無制限）",
     )
     parser.add_argument(
         "--watchdog-ms",
         type=int,
         default=0,
         help="Lua 1 フレームの上限 ms（0=中断しない。Esc/閉じるは常に可）",
+    )
+    parser.add_argument(
+        "--band",
+        action="store_true",
+        help="毎フレーム game_draw をバンドごとに 12 回呼ぶ（実機の録画失敗時と同じ。既定は録画 1 回）",
     )
     args = parser.parse_args()
 
@@ -281,9 +286,12 @@ def main() -> int:
     consecutive_errors = 0
 
     help_lines = [
-        "Arrows: move  Z: OP_LEFT  X: OP_RIGHT  A: NEAR  S: FAR",
-        "Esc: quit (works during heavy AI too)",
+        "Arrows: move  Z: OP_LEFT  X: OP_RIGHT  A: NEAR  S: FAR   Esc: quit",
     ]
+    fps_frames = 0
+    fps_t0 = time.perf_counter()
+    fps_text = ""
+    frame_info = ""
 
     print(f"[preview] ready: {script_path}", flush=True)
 
@@ -345,32 +353,16 @@ def main() -> int:
             break
 
         if update_ok:
-            bands = host.fb.band_count()
-            draw_failed = False
             watchdog.suspend()
             try:
-                for band in range(bands):
-                    host.fb.begin_band(band)
-                    if host.draw_mode == "layers":
-                        host.compose_layers_for_band()
-                    try:
-                        g.game_draw()
-                    except Exception as exc:
-                        status = f"game_draw エラー: {exc}"
-                        print(status, file=sys.stderr, flush=True)
-                        traceback.print_exc()
-                        draw_failed = True
-                        consecutive_errors += 1
-                        break
-                    host.fb.end_band()
-                if not draw_failed:
-                    try:
-                        last_rgb = host.fb.to_rgb888_bytes()
-                        consecutive_errors = 0
-                    except Exception as exc:
-                        status = f"フレーム変換エラー: {exc}"
-                        print(status, file=sys.stderr, flush=True)
-                        consecutive_errors += 1
+                frame_info = host.render_frame(g.game_draw, force_band=args.band)
+                last_rgb = host.fb.to_rgb888_bytes()
+                consecutive_errors = 0
+            except Exception as exc:
+                status = f"game_draw エラー: {exc}"
+                print(status, file=sys.stderr, flush=True)
+                traceback.print_exc()
+                consecutive_errors += 1
             finally:
                 watchdog.resume()
             watchdog.pump()
@@ -389,8 +381,15 @@ def main() -> int:
             scaled = pygame.transform.scale(img, (window_w, window_h))
             screen.fill((20, 20, 30))
             screen.blit(scaled, (0, 0))
+            fps_frames += 1
+            now = time.perf_counter()
+            if now - fps_t0 >= 0.5:
+                fps_text = f"{fps_frames / (now - fps_t0):5.1f} FPS"
+                fps_frames = 0
+                fps_t0 = now
             y = window_h + 4
-            for line in help_lines + [status[:72]]:
+            info_line = f"{fps_text}  {frame_info}  {status}"
+            for line in help_lines + [info_line[:90]]:
                 try:
                     surf = font_ui.render(line, True, (200, 200, 210))
                 except Exception:

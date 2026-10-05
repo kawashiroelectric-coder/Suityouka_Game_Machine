@@ -119,6 +119,11 @@ private:
     bool writeString(const char* s);
 
     static uint32_t fnv1a(uint32_t h, const void* p, size_t n);
+    /** 全帯のハッシュを 1 回の走査で band_hash_ に計算する（endRecord から呼ぶ） */
+    void hashAllBands();
+    /** y..y+h が交差する帯のビットマスク（画面外は含めない） */
+    uint32_t bandMaskFor(int y, int h) const;
+    /** 旧実装（帯ごとに全コマンドを走査）。DRAW_CMD_HASH_SELFTEST=1 のときの照合用 */
     uint32_t hashBandCommands(int band_index) const;
     static bool cmdIntersectsBand(int y, int h, int band_y0, int band_y1);
 

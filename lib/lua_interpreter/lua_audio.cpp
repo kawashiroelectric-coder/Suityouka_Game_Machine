@@ -48,6 +48,25 @@ int16_t lerpSample16(int16_t a, int16_t b, double frac) {
     return static_cast<int16_t>(clampSample(static_cast<int32_t>(std::lround(v))));
 }
 
+/**
+ * BGM 用: 2 点間を整数で線形補間する（frac16 = 0..65535 が 0.0..1.0 に相当）。
+ * double 演算（RP2350 では FPU 非対応でソフトウェア処理）を避けるための版。
+ * 旧 lerpSample16 との差は最大でも ±1〜2 LSB。
+ */
+inline int16_t lerpSampleQ16(int16_t a, int16_t b, uint32_t frac16) {
+    if (frac16 == 0) {
+        return a;
+    }
+    const int32_t d = static_cast<int32_t>(b) - static_cast<int32_t>(a);
+    const int32_t v =
+        static_cast<int32_t>(a) +
+        static_cast<int32_t>((static_cast<int64_t>(d) * frac16 + 0x8000) >> 16);
+    return static_cast<int16_t>(clampSample(v));
+}
+
+/** 32.32 固定小数点の 1.0 */
+constexpr uint64_t kQ32One = 1ull << 32;
+
 /** リトルエンディアン 32bit 整数をバイト列から読み取る */
 uint32_t readLe32(const uint8_t* p) {
     return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
@@ -170,7 +189,7 @@ LuaAudio::LuaAudio()
       bgm_channels_(0),
       bgm_source_rate_(0),
       bgm_data_remaining_(0),
-      bgm_src_pos_(0.0),
+      bgm_src_pos_q32_(0),
       bgm_file_frame_next_(0),
       bgm_cur_l_(0),
       bgm_cur_r_(0),
@@ -246,13 +265,15 @@ void LuaAudio::resetStreamSlotsLocked() {
         slot.frames = 0;
         slot.state = kSlotEmpty;
     }
+    stream_write_idx_ = 0;
+    stream_read_idx_ = 0;
 }
 
 /** BGM ストリーミング状態を停止して内部変数を初期化する */
 void LuaAudio::stopBgmLocked() {
     bgm_active_ = false;
     bgm_eof_ = false;
-    bgm_src_pos_ = 0.0;
+    bgm_src_pos_q32_ = 0;
     bgm_file_frame_next_ = 0;
     bgm_cur_l_ = 0;
     bgm_cur_r_ = 0;
@@ -377,7 +398,7 @@ bool LuaAudio::openBgmForStream(const char* path, char* errbuf, size_t errbuf_le
     bgm_channels_ = channels;
     bgm_source_rate_ = rate;
     bgm_data_remaining_ = data_size;
-    bgm_src_pos_ = 0.0;
+    bgm_src_pos_q32_ = 0;
     bgm_file_frame_next_ = 0;
     bgm_cur_l_ = 0;
     bgm_cur_r_ = 0;
@@ -389,8 +410,12 @@ bool LuaAudio::openBgmForStream(const char* path, char* errbuf, size_t errbuf_le
     return true;
 }
 
-/** BGM ファイルまたは埋め込み PCM から次の1フレーム（L/R）を読み込む */
-bool LuaAudio::readNextBgmFrame(int16_t* out_l, int16_t* out_r) {
+/**
+ * BGM ファイルまたは埋め込み PCM から次の1フレーム（L/R）を out_l/out_r に読み込む。
+ * batch を渡すと、SD からは batch->limit の範囲でまとめて f_read する（結果は 1 フレームずつ
+ * 読む場合と同一）。batch が空・上限到達のときは従来どおり 1 フレームずつ読む。
+ */
+bool LuaAudio::readNextBgmFrame(int16_t* out_l, int16_t* out_r, BgmReadBatch* batch) {
     if (bgm_embed_active_) {
         if (!bgm_embed_pcm_ || bgm_embed_frames_remaining_ == 0) {
             return false;
@@ -406,8 +431,6 @@ bool LuaAudio::readNextBgmFrame(int16_t* out_l, int16_t* out_r) {
         }
         bgm_embed_frames_remaining_--;
         bgm_file_frame_next_++;
-        bgm_cur_l_ = *out_l;
-        bgm_cur_r_ = *out_r;
         return true;
     }
 
@@ -415,44 +438,84 @@ bool LuaAudio::readNextBgmFrame(int16_t* out_l, int16_t* out_r) {
         return false;
     }
 
-    const size_t frame_bytes = static_cast<size_t>(bgm_channels_) * sizeof(int16_t);
+    const size_t channels = bgm_channels_;
+    const size_t frame_bytes = channels * sizeof(int16_t);
+
+    // まとめ読み: バッファが空で、まだこのスロットで読んでよい範囲が残っていれば補充
+    if (batch && batch->pos >= batch->frames && batch->limit > 0) {
+        uint32_t want = static_cast<uint32_t>(sizeof(batch->buf) / frame_bytes);
+        const uint32_t remain_frames = static_cast<uint32_t>(bgm_data_remaining_ / frame_bytes);
+        if (want > remain_frames) {
+            want = remain_frames;
+        }
+        if (want > static_cast<uint32_t>(batch->limit)) {
+            want = static_cast<uint32_t>(batch->limit);
+        }
+        batch->frames = 0;
+        batch->pos = 0;
+        if (want > 0) {
+            UINT br = 0;
+            const FRESULT fr =
+                f_read(&s_bgm_file, batch->buf, static_cast<UINT>(want * frame_bytes), &br);
+            if (fr != FR_OK) {
+                bgm_data_remaining_ = 0;
+                return false;
+            }
+            batch->frames = static_cast<uint16_t>(br / frame_bytes);
+            batch->limit -= batch->frames;
+            if (batch->frames == 0) {
+                bgm_data_remaining_ = 0;
+                return false;
+            }
+        }
+    }
+
+    const int16_t* src = nullptr;
     int16_t raw[2];
-    UINT br = 0;
-    const FRESULT fr = f_read(&s_bgm_file, raw, static_cast<UINT>(frame_bytes), &br);
-    if (fr != FR_OK || br != frame_bytes) {
-        bgm_data_remaining_ = 0;
-        return false;
+    if (batch && batch->pos < batch->frames) {
+        src = &batch->buf[static_cast<size_t>(batch->pos) * channels];
+        batch->pos++;
+    } else {
+        // 従来経路（まとめ読み範囲外 / batch なし）
+        UINT br = 0;
+        const FRESULT fr = f_read(&s_bgm_file, raw, static_cast<UINT>(frame_bytes), &br);
+        if (fr != FR_OK || br != frame_bytes) {
+            bgm_data_remaining_ = 0;
+            return false;
+        }
+        src = raw;
     }
     bgm_data_remaining_ -= static_cast<uint32_t>(frame_bytes);
 
-    if (bgm_channels_ == 1) {
-        *out_l = raw[0];
-        *out_r = raw[0];
+    if (channels == 1) {
+        *out_l = src[0];
+        *out_r = src[0];
     } else {
-        *out_l = raw[0];
-        *out_r = raw[1];
+        *out_l = src[0];
+        *out_r = src[1];
     }
     bgm_file_frame_next_++;
-    bgm_cur_l_ = *out_l;
-    bgm_cur_r_ = *out_r;
+    // 注意: 以前はここで bgm_cur_l_/r_ も上書きしていたため、リサンプル時に
+    // 「次のフレーム」を読むと「現在のフレーム」まで書き換わり、補間が効かず
+    // 1 フレーム遅れていた。out_l/out_r 以外には書かない。
     return true;
 }
 
 /** ファイル BGM のリサンプル用: target_idx の L/R と次フレームを 2 点分用意する */
 bool LuaAudio::advanceFileResampleHold(size_t target_idx, int16_t* s0l, int16_t* s0r, int16_t* s1l,
-                                        int16_t* s1r) {
+                                        int16_t* s1r, BgmReadBatch* batch) {
     if (!bgm_file_open_) {
         return false;
     }
 
     if (!bgm_resample_primed_) {
-        if (!readNextBgmFrame(&bgm_cur_l_, &bgm_cur_r_)) {
+        if (!readNextBgmFrame(&bgm_cur_l_, &bgm_cur_r_, batch)) {
             return false;
         }
         bgm_resample_base_ = 0;
         bgm_resample_primed_ = true;
         if (bgm_data_remaining_ > 0) {
-            if (!readNextBgmFrame(&bgm_next_l_, &bgm_next_r_)) {
+            if (!readNextBgmFrame(&bgm_next_l_, &bgm_next_r_, batch)) {
                 bgm_next_l_ = bgm_cur_l_;
                 bgm_next_r_ = bgm_cur_r_;
             }
@@ -462,12 +525,18 @@ bool LuaAudio::advanceFileResampleHold(size_t target_idx, int16_t* s0l, int16_t*
         }
     }
 
+    // ファイル終端: 最後に読めたフレームより先は存在しないので終了を返す
+    // （以前は最後のサンプルを保持し続け、BGM が止まらなかった）
+    if (bgm_data_remaining_ == 0 && target_idx >= bgm_file_frame_next_) {
+        return false;
+    }
+
     while (bgm_resample_base_ < target_idx) {
         bgm_cur_l_ = bgm_next_l_;
         bgm_cur_r_ = bgm_next_r_;
         bgm_resample_base_++;
         if (bgm_data_remaining_ > 0) {
-            if (!readNextBgmFrame(&bgm_next_l_, &bgm_next_r_)) {
+            if (!readNextBgmFrame(&bgm_next_l_, &bgm_next_r_, batch)) {
                 bgm_next_l_ = bgm_cur_l_;
                 bgm_next_r_ = bgm_cur_r_;
             }
@@ -480,6 +549,10 @@ bool LuaAudio::advanceFileResampleHold(size_t target_idx, int16_t* s0l, int16_t*
     if (bgm_resample_base_ != target_idx) {
         return false;
     }
+    // ループ中に終端へ達した場合も、存在しないフレームは出力しない
+    if (bgm_data_remaining_ == 0 && target_idx >= bgm_file_frame_next_) {
+        return false;
+    }
 
     *s0l = bgm_cur_l_;
     *s0r = bgm_cur_r_;
@@ -488,58 +561,80 @@ bool LuaAudio::advanceFileResampleHold(size_t target_idx, int16_t* s0l, int16_t*
     return true;
 }
 
-/** BGM データをリサンプルしながら1ストリームスロット分を埋める */
+/**
+ * BGM データをリサンプルしながら1ストリームスロット分を埋める。
+ * - 再生位置は 32.32 固定小数点（double 演算なし）
+ * - SD 読み込みは BgmReadBatch で最大 64 サンプル単位にまとめる。
+ *   読む量はこのスロットで必要なフレーム数までに制限するので、先読みしすぎて巻き戻すことはない。
+ */
 bool LuaAudio::fillStreamSlot(StreamSlot& slot) {
     if (!bgm_file_open_ && !bgm_embed_active_) {
         return false;
     }
 
-    const double rate_step =
+    const uint64_t step =
         (bgm_source_rate_ > 0 && sample_rate_ > 0)
-            ? static_cast<double>(bgm_source_rate_) / static_cast<double>(sample_rate_)
-            : 1.0;
-    const bool resample = (rate_step != 1.0);
+            ? (((static_cast<uint64_t>(bgm_source_rate_) << 32) + sample_rate_ / 2) / sample_rate_)
+            : kQ32One;
+    const bool resample = (step != kQ32One);
+
+    // このスロットで読み込んでよいソースフレーム数（最後の出力サンプルが参照する位置まで。
+    // リサンプル時は補間用に 1 フレーム先まで）
+    BgmReadBatch batch;
+    batch.frames = 0;
+    batch.pos = 0;
+    batch.limit = 0;
+    BgmReadBatch* bp = nullptr;
+    if (!bgm_embed_active_ && bgm_file_open_) {
+        const uint64_t last_idx = (bgm_src_pos_q32_ + step * (kStreamFrames - 1)) >> 32;
+        const int64_t need_until = static_cast<int64_t>(last_idx) + (resample ? 1 : 0);
+        int64_t lim = need_until + 1 - static_cast<int64_t>(bgm_file_frame_next_);
+        if (lim < 0) {
+            lim = 0;
+        }
+        if (lim > 0x7FFFFFFF) {
+            lim = 0x7FFFFFFF;
+        }
+        batch.limit = static_cast<int32_t>(lim);
+        bp = &batch;
+    }
 
     size_t out = 0;
 
     while (out < kStreamFrames) {
-        const double src_pos = bgm_src_pos_;
+        const uint64_t src_pos = bgm_src_pos_q32_;
+        const size_t src_idx = static_cast<size_t>(src_pos >> 32);
+        const uint32_t frac16 = static_cast<uint32_t>(src_pos >> 16) & 0xFFFFu;
 
         if (bgm_embed_active_) {
-            const size_t idx = static_cast<size_t>(src_pos);
-            if (idx >= bgm_embed_frame_count_) {
+            if (src_idx >= bgm_embed_frame_count_) {
                 break;
             }
-            const double frac = src_pos - static_cast<double>(idx);
-            const size_t idx1 =
-                (idx + 1 < bgm_embed_frame_count_) ? idx + 1 : idx;
+            const size_t idx1 = (src_idx + 1 < bgm_embed_frame_count_) ? src_idx + 1 : src_idx;
             if (bgm_channels_ == 1) {
                 const int16_t s =
-                    lerpSample16(bgm_embed_pcm_[idx], bgm_embed_pcm_[idx1], frac);
+                    lerpSampleQ16(bgm_embed_pcm_[src_idx], bgm_embed_pcm_[idx1], frac16);
                 slot.left[out] = s;
                 slot.right[out] = s;
             } else {
-                slot.left[out] = lerpSample16(bgm_embed_pcm_[idx * 2], bgm_embed_pcm_[idx1 * 2],
-                                             frac);
-                slot.right[out] =
-                    lerpSample16(bgm_embed_pcm_[idx * 2 + 1], bgm_embed_pcm_[idx1 * 2 + 1], frac);
+                slot.left[out] = lerpSampleQ16(bgm_embed_pcm_[src_idx * 2],
+                                               bgm_embed_pcm_[idx1 * 2], frac16);
+                slot.right[out] = lerpSampleQ16(bgm_embed_pcm_[src_idx * 2 + 1],
+                                                bgm_embed_pcm_[idx1 * 2 + 1], frac16);
             }
         } else if (resample) {
-            const size_t src_idx = static_cast<size_t>(src_pos);
-            const double frac = src_pos - static_cast<double>(src_idx);
             int16_t s0l = 0;
             int16_t s0r = 0;
             int16_t s1l = 0;
             int16_t s1r = 0;
-            if (!advanceFileResampleHold(src_idx, &s0l, &s0r, &s1l, &s1r)) {
+            if (!advanceFileResampleHold(src_idx, &s0l, &s0r, &s1l, &s1r, bp)) {
                 break;
             }
-            slot.left[out] = lerpSample16(s0l, s1l, frac);
-            slot.right[out] = lerpSample16(s0r, s1r, frac);
+            slot.left[out] = lerpSampleQ16(s0l, s1l, frac16);
+            slot.right[out] = lerpSampleQ16(s0r, s1r, frac16);
         } else {
-            const size_t src_idx = static_cast<size_t>(src_pos);
             while (bgm_file_frame_next_ <= src_idx && bgm_data_remaining_ > 0) {
-                if (!readNextBgmFrame(&bgm_cur_l_, &bgm_cur_r_)) {
+                if (!readNextBgmFrame(&bgm_cur_l_, &bgm_cur_r_, bp)) {
                     break;
                 }
             }
@@ -556,12 +651,20 @@ bool LuaAudio::fillStreamSlot(StreamSlot& slot) {
         }
 
         out++;
-        bgm_src_pos_ += rate_step;
+        bgm_src_pos_q32_ += step;
+    }
+
+    // 安全策: まとめ読みしたのに使わなかったフレームがあればファイル位置を戻す
+    // （limit の計算上ここには来ないはずだが、来ても音が飛ばないようにする）
+    if (bp && batch.pos < batch.frames && bgm_file_open_) {
+        const FSIZE_t back = static_cast<FSIZE_t>(batch.frames - batch.pos) *
+                             static_cast<FSIZE_t>(bgm_channels_ * sizeof(int16_t));
+        f_lseek(&s_bgm_file, f_tell(&s_bgm_file) - back);
     }
 
     if (out == 0) {
         if (bgm_embed_active_) {
-            if (bgm_src_pos_ >= static_cast<double>(bgm_embed_frame_count_)) {
+            if ((bgm_src_pos_q32_ >> 32) >= bgm_embed_frame_count_) {
                 bgm_embed_frames_remaining_ = 0;
                 bgm_eof_ = true;
             }
@@ -577,16 +680,14 @@ bool LuaAudio::fillStreamSlot(StreamSlot& slot) {
     }
 
     if (bgm_embed_active_) {
-        if (bgm_src_pos_ >= static_cast<double>(bgm_embed_frame_count_)) {
+        const uint64_t pos_idx = bgm_src_pos_q32_ >> 32;
+        if (pos_idx >= bgm_embed_frame_count_) {
             bgm_embed_frames_remaining_ = 0;
             bgm_eof_ = true;
         } else {
-            const size_t remaining =
-                bgm_embed_frame_count_ - static_cast<size_t>(bgm_src_pos_);
-            bgm_embed_frames_remaining_ = remaining;
+            bgm_embed_frames_remaining_ = bgm_embed_frame_count_ - static_cast<size_t>(pos_idx);
         }
-    } else if (bgm_data_remaining_ == 0 &&
-               bgm_src_pos_ >= static_cast<double>(bgm_file_frame_next_)) {
+    } else if (bgm_data_remaining_ == 0 && (bgm_src_pos_q32_ >> 32) >= bgm_file_frame_next_) {
         bgm_eof_ = true;
     }
 
@@ -653,15 +754,20 @@ void LuaAudio::pumpStream() {
         return;
     }
 
-    for (StreamSlot& slot : stream_slots_) {
+    // 書き込み位置から順に埋める（読み出し側と同じ順序＝FIFO を保つ）。
+    // 以前は「空いている最初のスロット」を埋め、「READY の最初のスロット」を読んでいたため、
+    // Core1 が片方だけ消費した直後に補充すると、新しいデータが古いデータより先に再生されていた。
+    for (int n = 0; n < 2; ++n) {
+        StreamSlot& slot = stream_slots_[stream_write_idx_];
         if (slot.state != kSlotEmpty) {
-            continue;
+            break;
         }
         if (!fillStreamSlot(slot)) {
             break;
         }
         __dmb();
         slot.state = kSlotReady;
+        stream_write_idx_ = static_cast<uint8_t>(stream_write_idx_ ^ 1u);
     }
 
     if (bgm_eof_ && countReadySlots() == 0) {
@@ -925,7 +1031,7 @@ bool LuaAudio::playBgmFromEmbedded(const int16_t* pcm, size_t frame_count, uint1
     bgm_embed_frames_remaining_ = frame_count;
     bgm_channels_ = channels;
     bgm_source_rate_ = sample_rate;
-    bgm_src_pos_ = 0.0;
+    bgm_src_pos_q32_ = 0;
     bgm_file_frame_next_ = 0;
     bgm_cur_l_ = 0;
     bgm_cur_r_ = 0;
@@ -954,24 +1060,29 @@ bool LuaAudio::playBgmFromEmbedded(const int16_t* pcm, size_t frame_count, uint1
 
 /** READY なストリームスロットを1つ取り出し、出力バッファへコピーする */
 bool LuaAudio::consumeStreamSlot(int16_t* left, int16_t* right, size_t frames) {
-    for (StreamSlot& slot : stream_slots_) {
-        if (slot.state != kSlotReady) {
-            continue;
+    // 読み出し位置のスロットを見る（FIFO）。
+    // 停止・再生開始と同時に消費した場合など位置がずれたら、準備済みの側へ合わせ直す。
+    uint8_t r = stream_read_idx_;
+    if (stream_slots_[r].state != kSlotReady) {
+        if (stream_slots_[r ^ 1u].state != kSlotReady) {
+            return false;  // アンダーラン
         }
-
-        const size_t n = (slot.frames < frames) ? slot.frames : frames;
-        memcpy(left, slot.left, n * sizeof(int16_t));
-        memcpy(right, slot.right, n * sizeof(int16_t));
-        if (n < frames) {
-            memset(left + n, 0, (frames - n) * sizeof(int16_t));
-            memset(right + n, 0, (frames - n) * sizeof(int16_t));
-        }
-
-        __dmb();
-        slot.state = kSlotEmpty;
-        return true;
+        r = static_cast<uint8_t>(r ^ 1u);
     }
-    return false;
+    StreamSlot& slot = stream_slots_[r];
+
+    const size_t n = (slot.frames < frames) ? slot.frames : frames;
+    memcpy(left, slot.left, n * sizeof(int16_t));
+    memcpy(right, slot.right, n * sizeof(int16_t));
+    if (n < frames) {
+        memset(left + n, 0, (frames - n) * sizeof(int16_t));
+        memset(right + n, 0, (frames - n) * sizeof(int16_t));
+    }
+
+    __dmb();
+    slot.state = kSlotEmpty;
+    stream_read_idx_ = static_cast<uint8_t>(r ^ 1u);
+    return true;
 }
 
 /** 全アクティブ SE チャンネルを出力バッファへ加算ミックスする */

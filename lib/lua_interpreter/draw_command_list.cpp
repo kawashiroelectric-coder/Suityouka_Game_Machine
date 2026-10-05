@@ -12,6 +12,17 @@
 #include "lua_interpreter.hpp"
 #include "vn_stream_compose.hpp"
 
+// 1 にすると endRecord ごとに旧実装（帯ごと走査）と照合し、不一致と処理時間を
+// USB シリアルに出力する（検証用。通常は 0）
+#ifndef DRAW_CMD_HASH_SELFTEST
+#define DRAW_CMD_HASH_SELFTEST 0
+#endif
+
+#if DRAW_CMD_HASH_SELFTEST
+#include <cstdio>
+#include "pico/time.h"
+#endif
+
 namespace {
 
 inline int16_t clampI16(int v) {
@@ -50,9 +61,35 @@ bool DrawCommandList::endRecord() {
         return false;
     }
     ready_ = true;
+#if DRAW_CMD_HASH_SELFTEST
+    static uint32_t s_frames = 0;
+    static uint32_t s_mismatch = 0;
+    static uint64_t s_us_new = 0;
+    static uint64_t s_us_old = 0;
+    const uint64_t t0 = time_us_64();
+    hashAllBands();
+    const uint64_t t1 = time_us_64();
     for (int b = 0; b < band_count_; ++b) {
-        band_hash_[b] = hashBandCommands(b);
+        if (hashBandCommands(b) != band_hash_[b]) {
+            ++s_mismatch;
+            printf("[HASH-SELFTEST] mismatch band=%d used=%u\n", b, static_cast<unsigned>(used_));
+        }
     }
+    const uint64_t t2 = time_us_64();
+    s_us_new += t1 - t0;
+    s_us_old += t2 - t1;
+    if (++s_frames >= 300) {
+        printf("[HASH-SELFTEST] 300 frames: mismatch=%lu  new=%lu us/f  old=%lu us/f\n",
+               static_cast<unsigned long>(s_mismatch),
+               static_cast<unsigned long>(s_us_new / s_frames),
+               static_cast<unsigned long>(s_us_old / s_frames));
+        s_frames = 0;
+        s_us_new = 0;
+        s_us_old = 0;
+    }
+#else
+    hashAllBands();
+#endif
     return true;
 }
 
@@ -365,6 +402,242 @@ bool DrawCommandList::cmdIntersectsBand(int y, int h, int band_y0, int band_y1) 
     }
     const int y1 = y + h;
     return y < band_y1 && y1 > band_y0;
+}
+
+uint32_t DrawCommandList::bandMaskFor(int y, int h) const {
+    if (h <= 0) {
+        return 0;
+    }
+    int y0 = y;
+    int y1 = y + h;  // 排他
+    if (y0 < 0) {
+        y0 = 0;
+    }
+    if (y1 > static_cast<int>(screen_h_)) {
+        y1 = static_cast<int>(screen_h_);
+    }
+    if (y0 >= y1) {
+        return 0;
+    }
+    const int bh = static_cast<int>(band_h_);
+    int first = y0 / bh;
+    int last = (y1 - 1) / bh;
+    if (last >= band_count_) {
+        last = band_count_ - 1;
+    }
+    if (first > last) {
+        return 0;
+    }
+    const uint32_t upto = (last >= 31) ? 0xFFFFFFFFu : ((1u << (last + 1)) - 1u);
+    const uint32_t below = (1u << first) - 1u;
+    return upto & ~below;
+}
+
+/**
+ * 全帯のハッシュを 1 パスで計算する（旧: 帯ごとに全コマンドを 12 回走査）。
+ * 各コマンドを 1 回だけ解析し、交差する帯のハッシュにだけコマンドのバイト列を加える。
+ * コマンドの解析規則・交差判定・ハッシュ対象バイトは hashBandCommands() と同一なので、
+ * 結果（band_hash_）は旧実装とビット単位で一致する。
+ */
+void DrawCommandList::hashAllBands() {
+    const uint32_t all_bands =
+        (band_count_ >= 32) ? 0xFFFFFFFFu : ((1u << band_count_) - 1u);
+    for (int b = 0; b < band_count_; ++b) {
+        band_hash_[b] = 2166136261u;
+    }
+
+    const uint8_t* p = buf_;
+    const uint8_t* end = buf_ + used_;
+
+    auto rdU8 = [&]() -> uint8_t {
+        return (p < end) ? *p++ : 0;
+    };
+    auto rdU16 = [&]() -> uint16_t {
+        const uint16_t lo = rdU8();
+        const uint16_t hi = rdU8();
+        return static_cast<uint16_t>(lo | (hi << 8));
+    };
+    auto rdI16 = [&]() -> int {
+        return static_cast<int>(static_cast<int16_t>(rdU16()));
+    };
+    auto rdI32 = [&]() -> int {
+        const uint32_t b0 = rdU8();
+        const uint32_t b1 = rdU8();
+        const uint32_t b2 = rdU8();
+        const uint32_t b3 = rdU8();
+        return static_cast<int>(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24));
+    };
+    auto skipStr = [&]() {
+        const uint8_t n = rdU8();
+        p += n;
+        if (p > end) {
+            p = end;
+        }
+    };
+
+    while (p < end) {
+        const uint8_t* op_start = p;
+        const Op op = static_cast<Op>(rdU8());
+        uint32_t mask = 0;
+        switch (op) {
+            case Op::Clear:
+                rdU16();
+                mask = all_bands;
+                break;
+            case Op::FillRect: {
+                rdI16();
+                const int y = rdI16();
+                rdI16();
+                const int hh = rdI16();
+                rdU16();
+                mask = bandMaskFor(y, hh);
+                break;
+            }
+            case Op::FillRectAlpha: {
+                rdI16();
+                const int y = rdI16();
+                rdI16();
+                const int hh = rdI16();
+                rdU16();
+                rdU8();
+                mask = bandMaskFor(y, hh);
+                break;
+            }
+            case Op::FillRects: {
+                const int n = rdU8();
+                for (int i = 0; i < n; ++i) {
+                    rdI16();
+                    const int y = rdI16();
+                    rdI16();
+                    const int hh = rdI16();
+                    rdU16();
+                    mask |= bandMaskFor(y, hh);
+                }
+                break;
+            }
+            case Op::DrawLine: {
+                rdI16();
+                const int y0 = rdI16();
+                rdI16();
+                const int y1 = rdI16();
+                rdU16();
+                const int ymin = y0 < y1 ? y0 : y1;
+                const int ymax = y0 > y1 ? y0 : y1;
+                mask = bandMaskFor(ymin, ymax - ymin + 1);
+                break;
+            }
+            case Op::DrawCircle:
+            case Op::FillCircle: {
+                rdI16();
+                const int cy = rdI16();
+                const int r = rdI16();
+                rdU16();
+                mask = bandMaskFor(cy - r, 2 * r + 1);
+                break;
+            }
+            case Op::Text: {
+                rdI16();
+                const int y = rdI16();
+                rdU16();
+                rdU16();
+                rdU8();
+                const uint8_t n = rdU8();
+                // テキスト高はざっくり 24px まで見ておく（旧実装と同じ）
+                mask = bandMaskFor(y, 24);
+                p += n;
+                if (p > end) {
+                    p = end;
+                }
+                break;
+            }
+            case Op::Image: {
+                rdI16();
+                rdI16();
+                const int dy = rdI16();
+                rdI16();
+                rdI16();
+                rdI16();
+                const int sh = rdI16();
+                rdU8();
+                rdU16();
+                mask = bandMaskFor(dy, sh > 0 ? sh : 1);
+                break;
+            }
+            case Op::ImageScaled: {
+                rdI16();
+                rdI16();
+                const int dy = rdI16();
+                rdU8();
+                const int dh = rdI16();
+                mask = bandMaskFor(dy, dh > 0 ? dh : 1);
+                break;
+            }
+            case Op::BgStream:
+            case Op::BwStream: {
+                skipStr();
+                rdI16();
+                const int dy = rdI16();
+                rdU16();
+                const int hh = rdU16();
+                if (op == Op::BwStream) {
+                    rdU16();
+                    rdU16();
+                }
+                mask = bandMaskFor(dy, hh);
+                break;
+            }
+            case Op::BwPack: {
+                skipStr();
+                rdI32();
+                rdI16();
+                const int dy = rdI16();
+                rdU16();
+                const int hh = rdU16();
+                rdU16();
+                rdU16();
+                mask = bandMaskFor(dy, hh);
+                break;
+            }
+            case Op::VnStream: {
+                const uint8_t bg_on = rdU8();
+                if (bg_on) {
+                    skipStr();
+                    rdI16();
+                    rdI16();
+                    rdU16();
+                    rdU16();
+                }
+                const int n = rdU8();
+                for (int i = 0; i < n; ++i) {
+                    const uint8_t on = rdU8();
+                    if (!on) {
+                        continue;
+                    }
+                    skipStr();
+                    rdI16();
+                    rdI16();
+                    rdU16();
+                    rdU16();
+                    rdU16();
+                    rdU8();
+                }
+                // VN コマンドは指紋全体を全帯に含める（旧実装と同じ）
+                mask = all_bands;
+                break;
+            }
+            default:
+                // 不明なコマンド以降は旧実装同様ハッシュ対象外
+                return;
+        }
+        if (mask) {
+            const size_t len = static_cast<size_t>(p - op_start);
+            for (int b = 0; b < band_count_; ++b) {
+                if (mask & (1u << b)) {
+                    band_hash_[b] = fnv1a(band_hash_[b], op_start, len);
+                }
+            }
+        }
+    }
 }
 
 uint32_t DrawCommandList::hashBandCommands(int band_index) const {

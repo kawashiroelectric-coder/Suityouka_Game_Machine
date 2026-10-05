@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 
 class BwFrameBuffer:
     """実機 bg_stream_util.cpp と同様のフレームバッファ。"""
@@ -168,20 +170,10 @@ class BwFrameBuffer:
             return True
 
         row_bytes = (width + 7) // 8
-        src_y0 = top - dy
         fg &= 0xFFFF
         bg &= 0xFFFF
-
-        for row in range(bottom - top):
-            screen_y = top + row
-            src_y = src_y0 + row
-            line = self.frame[src_y * row_bytes : src_y * row_bytes + row_bytes]
-            dst_off = (screen_y - fb.band_y0) * fb.width
-            for x in range(width):
-                screen_x = dx + x
-                if screen_x < 0 or screen_x >= fb.width:
-                    continue
-                bit = 7 - (x % 8)
-                on = (line[x // 8] >> bit) & 1
-                fb._band_buf[dst_off + screen_x] = fg if on else bg
+        # 1 ビット（MSB が左）を numpy で展開して一括描画
+        rows = np.frombuffer(bytes(self.frame), dtype=np.uint8).reshape(-1, row_bytes)
+        bits = np.unpackbits(rows[top - dy : bottom - dy], axis=1)[:, :width].astype(bool)
+        fb.draw_mask(bits, dx, top, fg, bg, True)
         return True

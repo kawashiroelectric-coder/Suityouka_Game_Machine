@@ -5,3 +5,25 @@ build
 /image/
 /images/
 /assets/ignore/
+/assets/*.PNG
+
+# ---- 作成中ゲーム（非公開） ----
+# games/_private/<ゲーム名>/ に置いたものは GitHub に上げない。
+# フォルダの使い方を書いた README だけは公開する。
+games/_private/*
+!games/_private/README.md
+
+# ---- games/ 内の PNG（非公開） ----
+# 本体は .bin しか読まないので、ゲームの動作には不要（元絵・確認用の画像）。
+# Sushi/generate_images.py や JadeLantern/tools/import_portraits.py など PNG から .bin を作るスクリプトは手元でのみ使える。
+games/**/*.png
+games/**/*.PNG
+
+# ---- PC プレビュー・ツールが作るファイル ----
+_preview_save/
+__pycache__/
+*.pyc
+BinPngConverter.last_dir.txt
+
+# ---- Claude の作業用出力 ----
+/Claude outputs/

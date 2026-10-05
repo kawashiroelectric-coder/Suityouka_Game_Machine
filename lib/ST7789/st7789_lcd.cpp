@@ -122,6 +122,7 @@ using uint16_t = unsigned short;
 
 /** DC=0 で 1 バイトコマンド送信 */
 void ST7789_LCD::writeCommand(uint8_t cmd) {
+    waitAsyncDmaBeforeCommand();
     gpio_put(LCDConfig::PIN_DC, 0);
     gpio_put(LCDConfig::PIN_CS, 0);
     spi_write_blocking(spi_port, &cmd, 1);
@@ -130,6 +131,7 @@ void ST7789_LCD::writeCommand(uint8_t cmd) {
 
 /** DC=1 で 1 バイトデータ送信 */
 void ST7789_LCD::writeData(uint8_t data) {
+    waitAsyncDmaBeforeCommand();
     gpio_put(LCDConfig::PIN_DC, 1);
     gpio_put(LCDConfig::PIN_CS, 0);
     spi_write_blocking(spi_port, &data, 1);
@@ -139,6 +141,7 @@ void ST7789_LCD::writeData(uint8_t data) {
 
 /** DC=1 でバッファを一括送信 */
 void ST7789_LCD::writeDataBuffer(const uint8_t* buf, size_t len) {
+    waitAsyncDmaBeforeCommand();
     gpio_put(LCDConfig::PIN_DC, 1);
     gpio_put(LCDConfig::PIN_CS, 0);
     spi_write_blocking(spi_port, buf, len);
@@ -713,6 +716,26 @@ void ST7789_LCD::dmaAsyncFinish() {
     dma_async_.prep_valid = false;
     dma_async_.dma_started = false;
     dma_async_.prep_pixels = 0;
+    dma_async_.direct16 = false;
+}
+
+// 直接 16bit DMA の完了処理: シフト完了を待ち、RX を捨てて 8bit 形式へ戻す
+void ST7789_LCD::dmaDirect16Finish() {
+    spiWaitIdle(spi_port);
+    while (spi_is_readable(spi_port)) {
+        (void)spi_get_hw(spi_port)->dr;
+    }
+    spi_get_hw(spi_port)->icr = SPI_SSPICR_RORIC_BITS;
+    spi_set_format(spi_port, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
+    dmaAsyncFinish();
+}
+
+// 非同期 DMA 転送中にコマンド／データを送ろうとした場合は先に完了させる
+// （フレーム末の完了待ちを省いても、直接描画する処理が安全に動くようにするため）
+void ST7789_LCD::waitAsyncDmaBeforeCommand() {
+    if (dma_async_.active) {
+        finishDrawRawImageDMA();
+    }
 }
 
 namespace {
@@ -832,7 +855,42 @@ bool ST7789_LCD::beginDrawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16
     if (y + h > _height) h = _height - y;
     if (w == 0 || h == 0) return false;
 
+    // setWindow（8bit のコマンド送信）は状態を active にする前に行う
+    setWindow(x, y, x + w - 1, y + h - 1);
+    gpio_put(LCDConfig::PIN_DC, 1);
+    gpio_put(LCDConfig::PIN_CS, 0);
+
+    const uint32_t stride = src_stride ? src_stride : w;
+    if (stride == w) {
+        // 【直接 16bit DMA】元データが連続しているときは、SPI を 16bit フレームにして
+        // 元バッファから 1 回の DMA で送る。PL022 は 16bit を MSB から送るので
+        // バイトスワップ不要。CPU がポンプしなくても最後まで転送が進む。
+        dma_async_.active = true;
+        dma_async_.direct16 = true;
+        dma_async_.dma_started = true;
+        dma_async_.x = x;
+        dma_async_.y = y;
+        dma_async_.w = w;
+        dma_async_.h = h;
+        dma_async_.data = data;
+        dma_async_.src_stride = stride;
+        dma_async_.dma_channel = dma_channel;
+        dma_async_.dma_buffer = dma_buffer;
+        dma_async_.dma_buffer_size = buffer_size;
+        spi_set_format(spi_port, 16, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
+        dma_channel_config c = dma_channel_get_default_config(dma_channel);
+        channel_config_set_transfer_data_size(&c, DMA_SIZE_16);
+        channel_config_set_dreq(&c, spi_get_dreq(spi_port, true));
+        channel_config_set_read_increment(&c, true);
+        channel_config_set_write_increment(&c, false);
+        dma_channel_configure(dma_channel, &c, &spi_get_hw(spi_port)->dr, data,
+                              static_cast<uint32_t>(w) * h, true);
+        return true;
+    }
+
+    // 【従来経路】行の途中で折り返すデータは中継バッファでバイトスワップしながら送る
     dma_async_.active = true;
+    dma_async_.direct16 = false;
     dma_async_.x = x;
     dma_async_.y = y;
     dma_async_.w = w;
@@ -850,9 +908,6 @@ bool ST7789_LCD::beginDrawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16
     dma_async_.prep_valid = false;
     dma_async_.dma_started = false;
 
-    setWindow(x, y, x + w - 1, y + h - 1);
-    gpio_put(LCDConfig::PIN_DC, 1);
-    gpio_put(LCDConfig::PIN_CS, 0);
     dmaAsyncStartChunk();
     return dma_async_.active;
 }
@@ -861,6 +916,10 @@ bool ST7789_LCD::beginDrawRawImageDMA(uint16_t x, uint16_t y, uint16_t w, uint16
 void ST7789_LCD::pumpDrawRawImageDMA() {
     if (!dma_async_.active) return;
     if (dma_channel_is_busy(dma_async_.dma_channel)) return;
+    if (dma_async_.direct16) {
+        dmaDirect16Finish();
+        return;
+    }
     dmaAsyncStartChunk();
 }
 

@@ -112,6 +112,8 @@ private:
         uint32_t prep_pixels = 0;
         bool prep_valid = false;
         bool dma_started = false;
+        /** true: SPI を 16bit にして元バッファを 1 回の DMA で直接送る（中継バッファ不使用） */
+        bool direct16 = false;
     };
     AsyncDmaState dma_async_;
 
@@ -127,6 +129,10 @@ private:
     void dmaAsyncStartChunk();
     /** 非同期 DMA 転送を完了し状態をリセットする */
     void dmaAsyncFinish();
+    /** 直接 16bit DMA の完了処理（SPI を 8bit に戻して CS を解放） */
+    void dmaDirect16Finish();
+    /** 非同期 DMA 転送中なら完了まで待つ（コマンド送信前の保護） */
+    void waitAsyncDmaBeforeCommand();
 
     /** DC=0: コマンド 1 バイト */
     void writeCommand(uint8_t cmd);

@@ -147,6 +147,7 @@ FatFs はファームウェア内で SD カード上の FAT ファイルシス�
 | PixelMplus12-Regular | サンプル VN 等のフォント元 | M+ FONT LICENSE（`Game/visual_novel/fonts/`） |
 | 美咲ゴシック第 2（misaki） | フォント生成の代替元 | 各配布元のライセンスに従う |
 | サンプル画像・BGM | 各 `Game/` サンプル | プロジェクト内 README を参照 |
+| Devour Sphere（着想・仕様） | `games/DevourSphere/` Lua 再実装の元 | MIT（[shapoco/devour-sphere](https://github.com/shapoco/devour-sphere)）。本機向けは C++ コアの直移植ではなく簡略再実装 |
 
 ---
 
@@ -174,5 +175,6 @@ constexpr const char* kAboutLines[] = {
 
 | 日付 | 内容 |
 |------|------|
+| 2026-09-26 | games/DevourSphere（devour-sphere MIT 着想の Lua 再実装）を追記 |
 | 2026-07-04 | 初版（MIT + サードパーティ一覧） |
 | 2026-07-04 | no-OS-FatFS 改変一覧を追記（MODIFICATIONS.md） |

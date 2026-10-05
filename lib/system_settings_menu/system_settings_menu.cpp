@@ -12,6 +12,7 @@
 #include "device_settings.hpp"
 #include "encoder_volume.hpp"
 #include "battery_monitor.hpp"
+#include "github_qr.hpp"
 #include "menu_cursor_se.hpp"
 #include "menu_backgrounds.hpp"
 #include "pico/stdlib.h"
@@ -30,7 +31,7 @@ constexpr int kSettingsRowPitch = 18;
 constexpr int kSettingsRowBgH = 8;
 constexpr int kSettingsRowFirstY = kSettingsPanelY + kSettingsPanelPadTop;
 
-constexpr int kSettingsRowCount = 7;
+constexpr int kSettingsRowCount = 8;
 constexpr int kSettingsPanelH =
     kSettingsPanelPadTop + kSettingsRowCount * kSettingsRowPitch + kSettingsPanelPadBottom;
 
@@ -40,7 +41,7 @@ constexpr int kSettingsPanelH =
 // サードパーティの正式なライセンス表記は THIRD_PARTY_NOTICES.md を参照してください。
 // ---------------------------------------------------------------------------
 constexpr const char* kAboutLines[] = {
-    "Code Ver 1.1.0",
+    "Code Ver 1.2.0",
     "SD: Apache2.0 carlk3",
 };
 constexpr int kAboutLineCount = static_cast<int>(sizeof(kAboutLines) / sizeof(kAboutLines[0]));
@@ -56,7 +57,8 @@ constexpr int kBatteryLedRowIndex = 2;
 constexpr int kBgGalleryRowIndex = 3;
 constexpr int kInputTestRowIndex = 4;
 constexpr int kAboutRowIndex = 5;
-constexpr int kBackRowIndex = 6;
+constexpr int kGithubQrRowIndex = 6;
+constexpr int kBackRowIndex = 7;
 constexpr int kBacklightStepPercent = 10;
 constexpr int kSettingsFooterTextY = 222;
 constexpr int kSettingsFooterClearY = 216;
@@ -67,7 +69,23 @@ enum class SettingsFooterMode : uint8_t {
     BrightnessEdit,
     BgGallery,
     About,
+    GithubQr,
 };
+
+// ---------------------------------------------------------------------------
+// GitHub QR 画面 — NEAR で入場、FAR で設定メニューへ戻る
+// QR の中身は github_qr.hpp（tool/make_qr_header.py で生成）。URL を変えるときはそちらを再生成。
+// ---------------------------------------------------------------------------
+constexpr int kQrQuietModules = 4;   // 周囲の白枠（規格の推奨値）
+constexpr int kQrModulePx = 4;       // 1 モジュールのピクセル数
+constexpr int kQrTotalPx = (GithubQr::kSize + kQrQuietModules * 2) * kQrModulePx;
+constexpr int kQrX = (GameConfig::SCREEN_WIDTH - kQrTotalPx) / 2;
+constexpr int kQrTitleY = 4;
+constexpr int kQrY = 14;
+constexpr int kQrUrlLine1Y = kQrY + kQrTotalPx + 3;
+constexpr int kQrUrlLinePitch = 9;
+static_assert(kQrTotalPx <= GameConfig::SCREEN_WIDTH, "QR too wide");
+static_assert(kQrUrlLine1Y + kQrUrlLinePitch + 8 <= 216, "QR page overlaps footer");
 
 struct SettingsState {
     int volume_step = EncoderVolumeControl::kVolumeStepMax;
@@ -76,6 +94,7 @@ struct SettingsState {
     bool editing_brightness = false;
     bool viewing_bg = false;
     bool viewing_about = false;
+    bool viewing_qr = false;
     int bg_index = 0;
     char row_labels[kSettingsRowCount][48] = {};
 };
@@ -199,7 +218,8 @@ void refreshSettingsRowLabels(SettingsState& state) {
     std::snprintf(state.row_labels[3], sizeof(state.row_labels[3]), "BG Gallery");
     std::snprintf(state.row_labels[4], sizeof(state.row_labels[4]), "Input Test Mode");
     std::snprintf(state.row_labels[5], sizeof(state.row_labels[5]), "About / Code Ver");
-    std::snprintf(state.row_labels[6], sizeof(state.row_labels[6]), "Back");
+    std::snprintf(state.row_labels[6], sizeof(state.row_labels[6]), "GitHub QR Code");
+    std::snprintf(state.row_labels[7], sizeof(state.row_labels[7]), "Back");
 }
 
 /** 指定行の表示ラベル文字列を返す。行描画時に使う */
@@ -277,7 +297,7 @@ void drawSettingsFooterHint(ST7789_LCD* lcd, SettingsFooterMode mode) {
         hint = "[L/R] Brightness  [FAR] Back";
     } else if (mode == SettingsFooterMode::BgGallery) {
         hint = "[L/R] BG Change  [FAR] Back";
-    } else if (mode == SettingsFooterMode::About) {
+    } else if (mode == SettingsFooterMode::About || mode == SettingsFooterMode::GithubQr) {
         hint = "[FAR] Back";
     }
     drawTextCenteredBg(lcd, kSettingsFooterTextY, hint, Color::GREEN, kSettingsBg);
@@ -316,6 +336,42 @@ void drawAboutScreen(ST7789_LCD* lcd) {
     drawSettingsFooterHint(lcd, SettingsFooterMode::About);
 }
 
+/** GitHub リポジトリへの QR コード画面を描く。NEAR 入場時に呼ぶ */
+void drawGithubQrScreen(ST7789_LCD* lcd) {
+    if (!lcd) {
+        return;
+    }
+    lcd->fill(kSettingsBg);
+    drawTextCenteredBg(lcd, kQrTitleY, "== GitHub ==", Color::CYAN, kSettingsBg);
+    // 白地（クワイエットゾーン込み）→ 黒モジュールを行ごとに横へつなげて描く
+    lcd->fillRect(kQrX, kQrY, kQrTotalPx, kQrTotalPx, Color::WHITE);
+    const int origin_x = kQrX + kQrQuietModules * kQrModulePx;
+    const int origin_y = kQrY + kQrQuietModules * kQrModulePx;
+    for (int y = 0; y < GithubQr::kSize; y++) {
+        int x = 0;
+        while (x < GithubQr::kSize) {
+            if (!GithubQr::isDark(x, y)) {
+                x++;
+                continue;
+            }
+            const int start = x;
+            while (x < GithubQr::kSize && GithubQr::isDark(x, y)) {
+                x++;
+            }
+            lcd->fillRect(static_cast<uint16_t>(origin_x + start * kQrModulePx),
+                          static_cast<uint16_t>(origin_y + y * kQrModulePx),
+                          static_cast<uint16_t>((x - start) * kQrModulePx),
+                          static_cast<uint16_t>(kQrModulePx), Color::BLACK);
+        }
+    }
+    // URL（8x8 フォントで 1 行に収まらないので "https://" を省いて 2 行に分ける）
+    const uint16_t url_fg = Color::rgb(200, 220, 240);
+    drawTextCenteredBg(lcd, kQrUrlLine1Y, "github.com/kawashiroelectric-coder/", url_fg, kSettingsBg);
+    drawTextCenteredBg(lcd, kQrUrlLine1Y + kQrUrlLinePitch, "Suityouka_Game_Machine", url_fg,
+                       kSettingsBg);
+    drawSettingsFooterHint(lcd, SettingsFooterMode::GithubQr);
+}
+
 /** 設定画面の固定枠（パネル・タイトル・フッター）を描く。初期化や全面再描画時に呼ぶ */
 void drawSettingsStaticChrome(ST7789_LCD* lcd) {
     if (!lcd) {
@@ -351,6 +407,7 @@ void initSettingsScreen(ST7789_LCD* lcd, SettingsUiCache& cache, SettingsState& 
     state.editing_brightness = false;
     state.viewing_bg = false;
     state.viewing_about = false;
+    state.viewing_qr = false;
     syncVolumeFromEncoder(state);
     syncBrightnessFromLcd(lcd, state);
     syncBatteryLedFromSettings(state);
@@ -412,6 +469,12 @@ void SystemSettingsMenu::run(const Config& config) {
         if (state.viewing_about) {
             if (config.buttons->wasPressed(Button::FAR)) {
                 state.viewing_about = false;
+                initSettingsScreen(config.lcd, cache, state, cursor);
+                ui_changed = true;
+            }
+        } else if (state.viewing_qr) {
+            if (config.buttons->wasPressed(Button::FAR)) {
+                state.viewing_qr = false;
                 initSettingsScreen(config.lcd, cache, state, cursor);
                 ui_changed = true;
             }
@@ -478,6 +541,11 @@ void SystemSettingsMenu::run(const Config& config) {
                     drawAboutScreen(config.lcd);
                     waitForButtonRelease(config.buttons);
                     ui_changed = true;
+                } else if (cursor == kGithubQrRowIndex) {
+                    state.viewing_qr = true;
+                    drawGithubQrScreen(config.lcd);
+                    waitForButtonRelease(config.buttons);
+                    ui_changed = true;
                 } else if (cursor == kBackRowIndex) {
                     break;
                 }
@@ -487,8 +555,8 @@ void SystemSettingsMenu::run(const Config& config) {
         if (bg_changed) {
             playMenuCursorSe(config.audio);
             drawBgGalleryScreen(config.lcd, state.bg_index);
-        } else if (state.viewing_about) {
-            // About 画面は入場時に全面描画済み。FAR で戻るまで部分更新しない。
+        } else if (state.viewing_about || state.viewing_qr) {
+            // About / QR 画面は入場時に全面描画済み。FAR で戻るまで部分更新しない。
         } else if (!state.viewing_bg && (brightness_changed || ui_changed)) {
             drawSettingsRow(config.lcd, state, kBrightnessRowIndex, cursor);
         } else if (!state.viewing_bg && battery_led_changed) {

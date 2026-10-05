@@ -122,13 +122,25 @@ private:
     /** 埋め込み PCM パラメータの妥当性を検証する */
     static bool validateEmbeddedPcm(const int16_t* pcm, size_t frame_count, uint16_t channels,
                                   uint32_t sample_rate, size_t max_bytes);
+    /**
+     * BGM ファイルのまとめ読みバッファ（fillStreamSlot 内のスタックに一時確保、128 バイト）。
+     * 1 フレームごとの f_read 呼び出しをまとめて SD 読み込みのオーバーヘッドを減らす。
+     * limit … このスロットで読んでよい残りフレーム数（先読みしすぎて巻き戻さないため）
+     */
+    struct BgmReadBatch {
+        int16_t buf[64];
+        uint16_t frames;   // buf 内の有効フレーム数
+        uint16_t pos;      // 次に取り出すフレーム
+        int32_t limit;     // このスロットで追加で読み込んでよいフレーム数
+    };
+
     /** 1 ストリームスロット分の BGM PCM を SD から読み込む */
     bool fillStreamSlot(StreamSlot& slot);
-    /** BGM ファイルから次の1オーディオフレームを読み込む */
-    bool readNextBgmFrame(int16_t* out_l, int16_t* out_r);
+    /** BGM ファイルから次の1オーディオフレームを読み込む（batch 指定時はまとめ読み） */
+    bool readNextBgmFrame(int16_t* out_l, int16_t* out_r, BgmReadBatch* batch = nullptr);
     /** ファイル BGM のリサンプル用: target_idx 位置の L/R と次フレームを用意する */
     bool advanceFileResampleHold(size_t target_idx, int16_t* s0l, int16_t* s0r, int16_t* s1l,
-                                 int16_t* s1r);
+                                 int16_t* s1r, BgmReadBatch* batch = nullptr);
     /** 再生開始前にストリームバッファをプリロードする */
     void primeStreamBuffers();
     /** READY 状態のストリームスロット数を返す */
@@ -151,6 +163,9 @@ private:
     volatile uint32_t tone_samples_left_;
 
     StreamSlot stream_slots_[2];
+    /** スロットの受け渡し順（FIFO）。write は Core0 のみ、read は Core1 のみが更新する */
+    volatile uint8_t stream_write_idx_;
+    volatile uint8_t stream_read_idx_;
     volatile bool bgm_active_;
     volatile bool bgm_eof_;
 
@@ -162,7 +177,8 @@ private:
     uint16_t bgm_channels_;
     uint32_t bgm_source_rate_;
     uint32_t bgm_data_remaining_;
-    double bgm_src_pos_;
+    /** 再生位置（ソースフレーム単位の 32.32 固定小数点。旧 double と同じ 8 バイト） */
+    uint64_t bgm_src_pos_q32_;
     size_t bgm_file_frame_next_;
     int16_t bgm_cur_l_;
     int16_t bgm_cur_r_;
