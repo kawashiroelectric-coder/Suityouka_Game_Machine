@@ -13,10 +13,6 @@ SD カードではリポジトリの `games/` を **`/games/`** として配置�
 | [visual_novel/](visual_novel/) | ビジュアルノベル（`draw_vn_stream` で背景・立ち絵を SD ストリーム描画） | [visual_novel/README.md](visual_novel/README.md) |
 | [tile_test/](tile_test/) | タイル横スクロール「Star Hop」（星集めプラットフォーム） | [tile_test/README.md](tile_test/README.md) |
 | [sokoban/](sokoban/) | 倉庫番（ランダム生成・得点制） | [sokoban/README.md](sokoban/README.md) |
-| [DevourSphere/](DevourSphere/) | Devour Sphere（スフィア成長 STG・Lua 移植） | [DevourSphere/README.md](DevourSphere/README.md) |
-| [ECHO/](ECHO/) | ECHO（残像デスマッチ・サバイバル） | [ECHO/README.md](ECHO/README.md) |
-| [Sonograph/](Sonograph/) | Sonograph（闇迷路・ターンベース） | [Sonograph/README.md](Sonograph/README.md) |
-| [TwinSwitch/](TwinSwitch/) | Twin Switch（鏡リレーパズル） | [TwinSwitch/README.md](TwinSwitch/README.md) |
 | [save_test/](save_test/) | セーブ／ロード API テスト（`save_data` / `load_data`） | [save_test/README.md](save_test/README.md) |
 
 > `reversi/` は将棋へ置き換え済みです → [Shogi/](Shogi/)
@@ -33,10 +29,6 @@ SD カードではリポジトリの `games/` を **`/games/`** として配置�
 | visual_novel | `/games/visual_novel/visual_novel.lua` + `scenario.lua` + `fonts/` + `images/` |
 | tile_test | `/games/tile_test/tile_test.lua` + `tiles/*.bin` |
 | sokoban | `/games/sokoban/sokoban.lua` |
-| DevourSphere | `/games/DevourSphere/DevourSphere.lua` + `tuning.txt`（セーブ時 `hi_score.dat`） |
-| ECHO | `/games/ECHO/ECHO.lua`（セーブ時 `hi_score.dat`） |
-| Sonograph | `/games/Sonograph/Sonograph.lua` |
-| TwinSwitch | `/games/TwinSwitch/TwinSwitch.lua` |
 | save_test | `/games/save_test/save_test.lua`（セーブ時 `save_a.dat` / `save_b.dat`） |
 
 ## 共通ツール

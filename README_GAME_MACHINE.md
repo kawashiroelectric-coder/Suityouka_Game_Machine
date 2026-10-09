@@ -12,26 +12,30 @@ SD カード上の **Lua スクリプト**をゲーム選択メニューから�
 - **ロータリーエンコーダ**: クアッドエンコーダ入力 + **15 段階マスター音量**（回転で調整、左上に一時表示）
 - **音声出力**: PCM5102 **I2S**（Core 1 + DMA）、BGM ストリーミング + SE 最大 8 系統
 - **SD カード**: SPI 経由 FatFS、Lua スクリプト・画像（`.bin`）・WAV の読み込み
-- **ファイルエクスプローラ**: 3×2 グリッド GUI（フォルダ / `.lua` / その他をアイコン表示）
+- **ゲーム選択メニュー**: SD の `/games` を一覧表示（プレビュー画像付き、最大 32 件）、SD ホットプラグ対応
+- **システム設定**: 輝度・音量・Input Test・About（設定はフラッシュに保存）
 - **Lua 5.4**: `game_init` / `game_update` / `game_draw` ループ、タイルレイヤー、UTF-8 フォント等
 - **バッテリー監視**: ADC + IO エキスパンダ経由 LED 表示（Core 1）
 
 ## 起動フロー
 
 1. ハードウェア初期化（I2C / SD / LCD / 音声 / エンコーダ）
-2. SD 未マウント時 → **入力テスト画面**（ボタン・エンコーダ確認、SD 挿入待ち）
-3. SD マウント後 → **ファイルエクスプローラ**
-4. `.lua` を選択 → Lua ゲーム実行（終了後エクスプローラへ戻る）
-5. SD 抜去検知 → 再び入力テスト画面へ
+2. **起動スプラッシュ**（ロゴ + 起動チャイム、ボタンでスキップ可）
+3. **ゲーム選択メニュー**（SD 未挿入でも表示。挿入されると自動でマウントし `/games` を読み込む）
+4. ゲームを選択 → Lua ゲーム実行（終了後はゲーム選択メニューへ戻る）
+5. メニューで **LEFT** → システム設定（輝度・音量・Input Test・About）
 
-## ファイルエクスプローラ操作
+## ゲーム選択メニュー操作
 
 | 操作 | ボタン |
 |------|--------|
-| カーソル移動 | UP / DOWN / LEFT / RIGHT（長押しリピートあり） |
-| 決定（フォルダ进入 / `.lua` 実行） | OP_RIGHT または NEAR |
-| 親フォルダへ戻る | OP_LEFT |
+| カーソル移動 | UP / DOWN |
+| ゲーム起動 | NEAR または OP_RIGHT |
+| システム設定 | LEFT |
+| 一覧の再読み込み | ゲーム 0 件時に NEAR |
 | 音量調整 | エンコーダ回転（全画面共通） |
+
+一覧に載る条件・起動スクリプトの決め方は [LUA_API.md](LUA_API.md#sd-配置とゲーム選択メニュー) を参照してください。
 
 ### ボタンインデックス対応（Lua `machine.pressed(index)`）
 
@@ -194,11 +198,10 @@ cmake ..
 cmake --build .
 ```
 
-デバッグオーバーレイ（FPS / RAM）を有効にする場合:
+デバッグオーバーレイ（FPS / RAM）を有効にする場合: `CMakeLists.txt` の次の行を `ON` に書き換えてから、`cmake ..` → `cmake --build .` で再構成してください（`FORCE` 指定のため、コマンドラインの `-DGAME_MACHINE_DEBUG=ON` は上書きされて効きません）。
 
-```bash
-cmake -DGAME_MACHINE_DEBUG=ON ..
-cmake --build .
+```cmake
+set(GAME_MACHINE_DEBUG ON CACHE BOOL "Enable FPS/RAM debug overlay during Lua games" FORCE)
 ```
 
 3. 生成された `build/Suityouka_Game_Machine.uf2` を BOOTSEL モードの Pico に書き込み
@@ -219,7 +222,7 @@ cd build
 1. SD カードを **FAT32 または exFAT** でフォーマット（2TB まで）
 2. Lua ゲームとアセットをコピー（[`games/`](games/) 内のサンプルを SD の `/games/` に配置）
 3. ファームウェアを Pico 2W に書き込み、USB シリアルでログ確認（任意）
-4. SD 挿入後、ファイルエクスプローラで `.lua` を選択して起動
+4. SD 挿入後、ゲーム選択メニューでゲームを選んで起動
 
 ## ソフトウェア構成
 
@@ -231,8 +234,13 @@ cd build
 | `lib/button_input/` | I2C ボタン入力 |
 | `lib/encoder_input/` | ロータリーエンコーダ |
 | `lib/encoder_volume/` | エンコーダ音量（15 段階） |
-| `lib/input_test_mode/` | SD 未挿時の入力テスト画面 |
-| `lib/file_explorer/` | GUI ファイルエクスプローラ |
+| `lib/input_test_mode/` | 入力テスト画面（システム設定から起動） |
+| `lib/boot_splash/` | 起動ロゴ + チャイム |
+| `lib/game_catalog/` | `/games` のゲーム検出・プレビュー |
+| `lib/game_select_menu/` | ゲーム選択メニュー |
+| `lib/menu_backgrounds/` | メニュー背景画像テーブル |
+| `lib/system_settings_menu/` | システム設定・About 画面 |
+| `lib/device_settings/` | 音量・輝度のフラッシュ保存 |
 | `lib/sd_card_hw/` | SD ピン定義・`hw_config`・デバッグ |
 | `lib/sd_service/` | FatFS マウント / アンマウント |
 | `lib/sd_path_util/` | SD パス正規化（ヘッダのみ） |
@@ -244,6 +252,8 @@ cd build
 | `lib/lua_interpreter/bg_stream_util.cpp` | バンド単位 SD 行読み込み |
 | `lib/lua_interpreter/debug_overlay.cpp` | FPS / RAM デバッグオーバーレイ |
 | `lib/lua_interpreter/lua_audio.cpp` | BGM / SE ミキシング |
+| `lib/lua_interpreter/draw_command_list.cpp` | `game_draw` の描画コマンド録画・再生 |
+| `lib/lua_interpreter/lua_save_data.cpp` | セーブ / ロード API |
 | `lib/game_display/` | RGB565 フレームバッファ・描画 |
 | `lib/font_renderer/` | UTF-8 サブセットフォント（MISF） |
 | `lib/tile_layers/` | GBA 風タイル背景レイヤー |

@@ -95,7 +95,7 @@ add_executable(Suityouka_Game_Machine
 
 # プロジェクト情報
 pico_set_program_name(Suityouka_Game_Machine "Suityouka_Game_Machine")
-pico_set_program_version(Suityouka_Game_Machine "0.1")
+pico_set_program_version(Suityouka_Game_Machine "1.2.0")
 
 # PIOヘッダー生成
 if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/blink.pio)

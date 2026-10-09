@@ -438,7 +438,7 @@ machine.draw_tilemap(sheet_id, 0, 0, 2, 2, 16, 16, 4, tiles)
 スクリプト読み込みサイズ上限: **96KB**（`LuaInterpreter::kDefaultMaxScriptBytes`）。`load_return` も同じ上限。  
 メニュー右下に表示される **Size** は起動スクリプトのファイルサイズです。
 
-ビルド時に `cmake -DGAME_MACHINE_DEBUG=ON`（CMakeLists の既定 **ON**）と、ゲーム中に画面右上へ FPS / 動的 RAM 使用率が表示されます（`lib/lua_interpreter/debug_overlay.cpp`）。
+`CMakeLists.txt` の `GAME_MACHINE_DEBUG` を `ON` にしてビルドすると（既定は **OFF**。`FORCE` 指定のためコマンドラインの `-D` では変わりません）、ゲーム中に画面右上へ FPS / 動的 RAM 使用率が表示されます（`lib/lua_interpreter/debug_overlay.cpp`）。
 
 ---
 
