@@ -10,11 +10,11 @@ Pico 2W ゲーム機ファームウェアの **`lib/` 配下**（自前コード
 ```
 game_machine_main.cpp          … 起動・初期化・メインループ
         │
-        ├── input_test_mode    … SD 未マウント時の入力テスト
+        ├── boot_splash        … 起動ロゴ + チャイム
         ├── game_catalog       … /games ゲーム検出
         ├── game_select_menu   … ゲーム選択 GUI
-        ├── system_settings_menu … システム設定 GUI
-        ├── file_explorer      … SD 上 .lua 選択 GUI（レガシー）
+        │         ├── system_settings_menu … システム設定 GUI
+        │         │         └── input_test_mode … 入力テスト
         │         └── lua_interpreter … Lua ゲーム実行 (machine.*)
         │                   ├── game_display … バンド描画 → ST7789
         │                   ├── tile_layers  … layers モード背景
@@ -66,11 +66,10 @@ flowchart TD
 | [`button_input/`](button_input/) | PCA9539 ボタン + バッテリー LED | `ButtonInput` | I2C |
 | [`encoder_input/`](encoder_input/) | クアッドエンコーダ | `EncoderInput` | GPIO IRQ |
 | [`encoder_volume/`](encoder_volume/) | 15 段階マスター音量 UI | `EncoderVolumeControl` | encoder_input, AudioOutput, LuaAudio |
-| [`input_test_mode/`](input_test_mode/) | SD 待ち入力テスト画面 | `InputTestMode::run` | ST7789, ButtonInput |
+| [`input_test_mode/`](input_test_mode/) | 入力テスト画面（システム設定から起動） | `InputTestMode::run` | ST7789, ButtonInput |
 | [`game_catalog/`](game_catalog/) | `/games` エントリ検出・プレビュー | `GameCatalog::*` | FatFS, config |
 | [`game_select_menu/`](game_select_menu/) | ゲーム選択メニュー | `GameSelectMenu::run` | game_catalog, system_settings_menu, ST7789 |
 | [`system_settings_menu/`](system_settings_menu/) | システム設定画面 | `SystemSettingsMenu::run` | ST7789, ButtonInput |
-| [`file_explorer/`](file_explorer/) | SD ファイル一覧・`.lua` 実行 | `FileExplorer::run` | ST7789, ButtonInput |
 | [`sd_service/`](sd_service/) | FatFS マウント管理 | `SdService` | sd_card_hw, FatFS |
 | [`sd_card_hw/`](sd_card_hw/) | SPI ピン・`hw_config`・SD 診断 | `hw_config.c`, `sd_debug.*` | Pico SDK |
 | [`sd_path_util/`](sd_path_util/) | SD パス正規化（ヘッダのみ） | `resolveSdPath` 等 inline | なし |
@@ -96,7 +95,7 @@ flowchart TD
 ### `ST7789/`
 
 - **SPI0** で LCD と通信。`GameDisplay::endBand` から DMA 転送をキック。
-- ファイルエクスプローラ・入力テストは **`ST7789_LCD` を直接**使う（バンド FB なし）。
+- メニュー・入力テストは **`ST7789_LCD` を直接**使う（バンド FB なし）。
 
 ### `game_display/`
 
@@ -148,10 +147,10 @@ flowchart TD
 - **Core1**: `AudioOutput` が I2S DMA とコールバック（ミキシング）を実行。
 - **C++ 埋め込み SE/BGM**: `playSeFromEmbedded` / `playBgmFromEmbedded`（`tool/wav_to_pcm_header.py` で生成した `assets/*.h`）
 
-### `file_explorer/` + `input_test_mode/`
+### `game_select_menu/` + `input_test_mode/`
 
-- コールバック駆動の **50ms 周期ループ**。
-- `on_run_lua` → `LuaInterpreter::runGameLoopFromSd`（ゲーム終了までブロック）。
+- 選択したゲームは `runGameFromMenuAndTeardown` → `LuaInterpreter::runGameLoopFromSd` で実行（ゲーム終了までブロック）。
+- 入力テストはシステム設定の Input Test から `InputTestMode::run` で起動。
 
 ---
 

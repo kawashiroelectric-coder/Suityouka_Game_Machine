@@ -6,6 +6,8 @@
 SD カード上の **Lua 5.4** ゲームを起動し、320×240 LCD・8 ボタン・I2S 音声で遊べます。  
 電源は単三電池2本となります。
 
+現行バージョン: **v1.2.0**
+
 MIT License · Copyright (c) 2026 [Kawashiro Electric](https://github.com/kawashiroelectric-coder)
 
 ---
@@ -61,7 +63,7 @@ GitHub 上の本リポジトリから、次の手順で **ZIP をダウンロー
 同梱のビルド済み `.uf2` を書き込めば、**ビルドなしですぐ遊べます**。  
 Pico 2W は **BOOTSEL モード**（USB マスストレージとして PC に見える状態）にすると、`.uf2` をドラッグ＆ドロップするだけで書き込めます。
 
-> **使うファイル（推奨）**: 解凍したフォルダ内の [`VerUpFile/Suityouka_Game_Machine.uf2`](VerUpFile/Suityouka_Game_Machine.uf2)  
+> **使うファイル（推奨）**: 解凍したフォルダ内の [`VerUpFile/Suityouka_Game_Machine_v1.2.uf2`](VerUpFile/Suityouka_Game_Machine_v1.2.uf2)（v1.2.0）  
 > 自分でビルドしたファームを使う場合のみ、後述の「ビルド（必要な人だけ）」で生成した `build/Suityouka_Game_Machine.uf2` を代わりに使ってください。
 
 #### 手順
@@ -75,11 +77,11 @@ Pico 2W は **BOOTSEL モード**（USB マスストレージとして PC に見
 4. ボタンを押し続けたまま接続が完了したら、**ボタンを離します**。
 5. PC に **`RP2350`（または `RPI-RP2`）** という名前のリムーバブルドライブが表示されます。これが BOOTSEL モードの目印です。
    - 表示されない場合は、いったんケーブルを抜き、手順 3 からやり直してください（ボタンを最後まで押し続けるのがコツです）。
-6. [`VerUpFile/Suityouka_Game_Machine.uf2`](VerUpFile/Suityouka_Game_Machine.uf2) を、その **ドライブへドラッグ＆ドロップ**（コピー）します。
+6. [`VerUpFile/Suityouka_Game_Machine_v1.2.uf2`](VerUpFile/Suityouka_Game_Machine_v1.2.uf2) を、その **ドライブへドラッグ＆ドロップ**（コピー）します。
 7. コピーが終わると Pico が**自動的に再起動**し、ドライブは自動で消えます。これで書き込み完了です。
 8. 起動画面が表示されれば成功です。表示されない場合は USB ケーブル（給電のみのケーブルではなくデータ通信対応のもの）を確認してください。
 
-> **更新（バージョンアップ）のとき**も手順は同じです。BOOTSEL モードにして新しい `VerUpFile/Suityouka_Game_Machine.uf2` を上書きコピーするだけで、SD カードの内容やセーブデータはそのまま保持されます。
+> **更新（バージョンアップ）のとき**も手順は同じです。BOOTSEL モードにして `VerUpFile/` 内の新しい `Suityouka_Game_Machine_v*.uf2` をコピーするだけで、SD カードの内容やセーブデータはそのまま保持されます。
 
 ### 3. SD カード
 
@@ -115,11 +117,10 @@ cmake --build .
 
 生成物は `build/Suityouka_Game_Machine.uf2` です。書き込み方は手順 2 と同じで、コピーするファイルをこちらに差し替えてください。
 
-デバッグ用 FPS / RAM オーバーレイ:
+デバッグ用 FPS / RAM オーバーレイ: `CMakeLists.txt` の次の行を `ON` に書き換えてから、`cmake ..` → `cmake --build .` で再構成してください（`FORCE` 指定のため、コマンドラインの `-DGAME_MACHINE_DEBUG=ON` は上書きされて効きません）。
 
-```bash
-cmake -DGAME_MACHINE_DEBUG=ON ..
-cmake --build .
+```cmake
+set(GAME_MACHINE_DEBUG ON CACHE BOOL "Enable FPS/RAM debug overlay during Lua games" FORCE)
 ```
 
 ---
@@ -134,10 +135,11 @@ cmake --build .
 |----------|----------|
 | [stg](games/stg/) | 縦スクロール STG「翠晶撃線」 |
 | [stg_fast](games/stg_fast/) | STG（描画最適化版） |
+| [JadeLantern](games/JadeLantern/) | 弾幕 STG「翠灯夜行」（全 6 面・会話・セーブ対応） |
 | [Shogi](games/Shogi/) | 将棋 vs もみじ（難易度 3 段階・セーブ対応） |
 | [Run!Yamame](games/Run!Yamame/) | 洞窟ランナー（ジャンプ／スライド／白い球・HI SCORE） |
 | [visual_novel](games/visual_novel/) | ビジュアルノベル |
-| [tile_test](games/tile_test/) | タイル横スクロール |
+| [tile_test](games/tile_test/) | タイル横スクロール「Star Hop」 |
 | [sokoban](games/sokoban/) | 倉庫番（ランダム生成） |
 | [save_test](games/save_test/) | セーブ API テスト |
 
