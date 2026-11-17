@@ -1,5 +1,8 @@
 # Suityouka Game Machine
 
+> 🎮 **自作のLuaゲームは [kawasiroelectric.com/games](https://kawasiroelectric.com/games/) で公開しています！**  
+> このゲーム機向けのゲームは誰でも投稿できます。みんなも自作ゲームを作って公開しよう！
+
 ![本体ボタン類の説明](docs/images/Game_machine.png)
 
 **Raspberry Pi Pico 2W** 向けの携帯ゲーム機ファームウェアです。  
